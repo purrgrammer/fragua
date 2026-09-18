@@ -48,6 +48,8 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/componen
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
 import { HitlDecisionBanner } from "@/components/run-conversation/HitlDecisionBanner";
 import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
+import { JudgeNodeRow } from "@/components/run-conversation/JudgeNodeRow";
+import { type JudgeToolParams, JudgeToolResult } from "@/components/run-conversation/JudgeToolResult";
 import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
@@ -961,6 +963,7 @@ function MessageRow({ row, toolResultsById }: MessageRowProps): JSX.Element | nu
   const testid = `message-${row.ordinal}`;
   if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
   if (msg.role === "tool_node") return <ToolNodeRow message={msg} nodeId={row.nodeId ?? undefined} testid={testid} />;
+  if (msg.role === "judge_node") return <JudgeNodeRow message={msg} nodeId={row.nodeId ?? undefined} testid={testid} />;
   if (msg.role === "user") return <UserMessageRow message={msg} testid={testid} />;
   if (msg.role === "assistant") {
     return (
@@ -1145,8 +1148,9 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
       // Exception: `abort` is the terminal self-halt signal — its
       // reason text is the primary diagnostic — and `emit_output` carries
       // the node's structured output: both open by default so the operator
-      // sees the payload without an extra click.
-      const defaultOpen = chunk.name === "abort" || chunk.name === "emit_output";
+      // sees the payload without an extra click. `judge` is a decision the
+      // rest of the turn builds on, so its verdicts open too.
+      const defaultOpen = chunk.name === "abort" || chunk.name === "emit_output" || chunk.name === "judge";
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0" defaultOpen={defaultOpen}>
           <ToolHeader
@@ -1155,7 +1159,7 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
             title={chunk.name}
           />
           <ToolContent>
-            <ToolInput input={chunk.arguments} />
+            {chunk.name !== "judge" ? <ToolInput input={chunk.arguments} /> : null}
             <RichToolResult
               toolName={chunk.name}
               result={result}
@@ -1309,6 +1313,12 @@ function RichToolResult({
   // route: built-in routing signal. The chosen branch lands on params.name
   // and is echoed on result.details.data.route — surface it as a named card
   // rather than the generic "route: <name>" text dump.
+  // judge: the card owns the whole body — the assembled state and the
+  // questions are the parameters, the answers are the result; a JSON dump
+  // of either would hide the probabilities the agent acted on.
+  if (toolName === "judge") {
+    return <JudgeToolResult params={params as JudgeToolParams | undefined} result={result} />;
+  }
   if (toolName === "route") {
     return <RouteToolResult params={params as { name?: string } | undefined} result={result} />;
   }

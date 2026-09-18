@@ -357,6 +357,9 @@ export interface StepSnapshot {
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd: number;
+    /** `judge` tool calls made inside this llm step — inside `cost_usd`,
+     * outside the token buckets. Present only when a call was made. */
+    judge?: { cost_usd: number; input_tokens: number; calls: number };
   };
   /** Set client-side by CostInspector.mergeStepsByNode when this row
    * collapses multiple `llm.start` windows for the same node

@@ -381,6 +381,9 @@ function collapseTurns(rows: readonly StepSnapshot[]): StepSnapshot {
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
   let billedTokens = 0;
+  let judgeCostUsd = 0;
+  let judgeInputTokens = 0;
+  let judgeCalls = 0;
   let latestEnd: number | undefined;
   for (const r of rows) {
     costUsd += r.cost?.cost_usd ?? 0;
@@ -389,6 +392,9 @@ function collapseTurns(rows: readonly StepSnapshot[]): StepSnapshot {
     cacheReadTokens += r.cost?.cache_read_tokens ?? 0;
     cacheWriteTokens += r.cost?.cache_write_tokens ?? 0;
     billedTokens += r.cost?.billed_tokens ?? 0;
+    judgeCostUsd += r.cost?.judge?.cost_usd ?? 0;
+    judgeInputTokens += r.cost?.judge?.input_tokens ?? 0;
+    judgeCalls += r.cost?.judge?.calls ?? 0;
     if (r.durationMs != null) {
       const startMs = Date.parse(r.startedAt);
       const end = startMs + r.durationMs;
@@ -407,6 +413,7 @@ function collapseTurns(rows: readonly StepSnapshot[]): StepSnapshot {
     cache_read_tokens: cacheReadTokens,
     cache_write_tokens: cacheWriteTokens,
     billed_tokens: billedTokens,
+    ...(judgeCalls > 0 ? { judge: { cost_usd: judgeCostUsd, input_tokens: judgeInputTokens, calls: judgeCalls } } : {}),
   };
   merged.turns = rows.length;
   return merged;
@@ -480,6 +487,7 @@ function StepCostRow({
   const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
   const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
   const displayedCostUsd = step.cost?.cost_usd;
+  const judge = step.cost?.judge;
   const displayedDurationMs = liveElapsedMs;
   // Fresh tokens — new content this step contributed: input + cache_write
   // (Anthropic puts the system prompt in cache_write on the first turn) +
@@ -504,8 +512,20 @@ function StepCostRow({
   // input ($0.12) and cache_read ($0.0003) pick different fraction-digit
   // counts and read as ragged in the stack. Cache read often forces 4
   // digits → all four rows render at 4 digits within this step.
-  const sharedUsdOptions = pickSharedUsdOptions([inputCostUsd, cacheWriteCostUsd, cacheReadCostUsd, outputCostUsd]);
-  const sharedTokensOptions = pickSharedTokensOptions([inputTokens, cacheWriteTokens, cacheReadTokens, outputTokens]);
+  const sharedUsdOptions = pickSharedUsdOptions([
+    inputCostUsd,
+    cacheWriteCostUsd,
+    cacheReadCostUsd,
+    outputCostUsd,
+    judge?.cost_usd,
+  ]);
+  const sharedTokensOptions = pickSharedTokensOptions([
+    inputTokens,
+    cacheWriteTokens,
+    cacheReadTokens,
+    outputTokens,
+    judge?.input_tokens,
+  ]);
 
   // All trailing chips share the same `text-xs text-sw-muted
   // tabular-nums` and a small leading icon so each metric is identifiable
@@ -646,6 +666,19 @@ function StepCostRow({
                       tokensOptions={sharedTokensOptions}
                     />
                   </ContextOutputUsage>
+                  {judge !== undefined && (
+                    /* System One calls the agent made through the `judge` tool: priced by
+                       their own provider, so the cost is the recorded figure, not a rate
+                       × tokens — and their tokens are not in the context gauge above. */
+                    <UsageGridRow
+                      label={judge.calls === 1 ? "Judge · 1 call" : `Judge · ${judge.calls} calls`}
+                      tokens={judge.input_tokens}
+                      costUsd={judge.cost_usd}
+                      usdOptions={sharedUsdOptions}
+                      tokensOptions={sharedTokensOptions}
+                      subtle
+                    />
+                  )}
                 </div>
               </ContextContentBody>
               <ContextContentFooter>

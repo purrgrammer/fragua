@@ -99,6 +99,10 @@ export interface StepSnapshot {
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd: number;
+    /** `judge` tool calls made inside this llm step: their spend is inside
+     * `cost_usd` but outside the token buckets, which are priced at the step's
+     * own model rate. Present only when at least one call was made. */
+    judge?: { cost_usd: number; input_tokens: number; calls: number };
   };
 }
 
@@ -293,9 +297,19 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
-    if (ev.type === "llm.start") {
-      // This node opened an LLM call — it's a llm, not a tool
-      // node. Clear any pending tool-step entry so we don't emit a
+    if (ev.type === "judge.answered") {
+      // The request carries the alias the author wrote (`jev-latest`); the
+      // answer carries the resolved id. Show the resolved one on the step.
+      const idx = nodeId !== "" ? lastStepIdxForNode.get(nodeId) : undefined;
+      const resolved = data["model"];
+      if (idx !== undefined && typeof resolved === "string" && steps[idx] !== undefined) steps[idx].model = resolved;
+      continue;
+    }
+
+    if (ev.type === "llm.start" || ev.type === "judge.requested") {
+      // This node opened an LLM call (or a judge call — same step shape,
+      // one row in the Cost breakdown with its own `cost.recorded`). Not a
+      // tool node: clear any pending tool-step entry so we don't emit a
       // duplicate row at fact.node_completed time.
       if (nodeId !== "") pendingToolNode.delete(nodeId);
       // Resume-fold: a paused node has just re-emitted `fact.node_started`
@@ -365,6 +379,9 @@ export interface StepCostAggregate {
   cacheWriteTokens: number;
   billedTokens: number;
   costEventCount: number;
+  judgeCostUsd: number;
+  judgeInputTokens: number;
+  judgeCalls: number;
 }
 
 /**
@@ -428,6 +445,9 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
     let cacheWriteTokens = 0;
     let billedTokens = 0;
     let costEventCount = 0;
+    let judgeCostUsd = 0;
+    let judgeInputTokens = 0;
+    let judgeCalls = 0;
     for (const seq of seqs) {
       const agg = byStartSeq.get(seq);
       if (!agg) continue;
@@ -438,6 +458,9 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
       cacheWriteTokens += agg.cacheWriteTokens;
       billedTokens += agg.billedTokens;
       costEventCount += agg.costEventCount;
+      judgeCostUsd += agg.judgeCostUsd;
+      judgeInputTokens += agg.judgeInputTokens;
+      judgeCalls += agg.judgeCalls;
     }
     if (costEventCount === 0) return s;
     return {
@@ -449,6 +472,9 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
         cache_read_tokens: cacheReadTokens,
         cache_write_tokens: cacheWriteTokens,
         cost_usd: costUsd,
+        ...(judgeCalls > 0
+          ? { judge: { cost_usd: judgeCostUsd, input_tokens: judgeInputTokens, calls: judgeCalls } }
+          : {}),
       },
     };
   });

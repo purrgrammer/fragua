@@ -358,6 +358,11 @@ export class PiLlmBackend implements LlmBackend {
       finalTools = finalTools.filter((t) => t.name !== "skill");
     }
 
+    // The `judge` tool is only real when the run carries a System One client;
+    // without one it would answer every call with "not available". Strip it
+    // rather than advertise a dead tool.
+    if (input.judge === undefined) finalTools = finalTools.filter((t) => t.name !== "judge");
+
     // Materialise MCP-server tools for this node. Declaring a server in
     // `mcp-servers` exposes ALL of its tools. `allowed_tools` narrows the MCP set
     // ONLY when it names specific `mcp__*` tools — then only those materialise;
@@ -436,6 +441,7 @@ export class PiLlmBackend implements LlmBackend {
             void fraguaEmit(type as EventType, payload);
           }
         : () => {},
+      ...(input.judge !== undefined ? { judge: input.judge } : {}),
     };
     const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 

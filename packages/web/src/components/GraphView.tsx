@@ -151,21 +151,18 @@ export function GraphView(props: GraphViewProps): JSX.Element {
   const isLoading = !detailProp && !graphProp && !!runId && query.isPending;
   const fetchError = !detailProp && !graphProp && !!runId && query.error;
 
-  const graph: Graph | null = useMemo(() => {
-    if (graphProp) return graphProp;
-    if (!readyDetail?.workflowSource) return null;
+  const parsed = useMemo((): { graph: Graph | null; parseError: string | null } => {
+    if (graphProp) return { graph: graphProp, parseError: null };
+    if (!readyDetail?.workflowSource) return { graph: null, parseError: null };
     try {
-      return parseWorkflow(readyDetail.workflowSource);
+      return { graph: parseWorkflow(readyDetail.workflowSource), parseError: null };
     } catch (err) {
-      console.warn(
-        "[GraphView] failed to parse workflow source for",
-        readyDetail.runId,
-        "—",
-        err instanceof Error ? err.message : String(err),
-      );
-      return null;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn("[GraphView] failed to parse workflow source for", readyDetail.runId, "—", message);
+      return { graph: null, parseError: message };
     }
   }, [graphProp, readyDetail?.workflowSource, readyDetail?.runId]);
+  const graph = parsed.graph;
 
   // Transient click feedback: the clicked node compresses briefly
   // (press-scale) so the click visibly registered even when selection
@@ -231,6 +228,18 @@ export function GraphView(props: GraphViewProps): JSX.Element {
         data-testid="graphview-empty"
         title="Graph unavailable"
         description="This run doesn't have a renderable graph yet — the server couldn't return its detail. Check the console for specifics."
+      />
+    );
+  }
+
+  if (!graph && parsed.parseError !== null) {
+    // The source is on record but this UI build's parser refuses it — a
+    // workflow authored for a newer engine than the bundle being served.
+    return (
+      <EmptyState
+        data-testid="graphview-parse-error"
+        title="This UI build cannot parse the run's workflow"
+        description={`The daemon ran it, but the web bundle is older than the workflow syntax it uses. Rebuild the web bundle (restart the harness). Parser said: ${parsed.parseError}`}
       />
     );
   }

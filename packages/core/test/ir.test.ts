@@ -82,8 +82,8 @@ describe("IR codec — round-trip modulo loc", () => {
     expect(JSON.stringify(parsed)).toBe(before);
   });
 
-  test("CURRENT_IR_VERSION is 3 (run-level outputs bump)", () => {
-    expect(CURRENT_IR_VERSION).toBe(3);
+  test("CURRENT_IR_VERSION is 4 (judge node type bump)", () => {
+    expect(CURRENT_IR_VERSION).toBe(4);
   });
 });
 
@@ -127,15 +127,22 @@ describe("ir_version v2 → v3 (run-level outputs)", () => {
   test("convertIr lifts a v2 IR (no run-level outputs) to v3 unchanged", () => {
     const v2 = JSON.parse(serializeGraph(parseWorkflow(FIXTURES["single llm step"]!)));
     const { json, version } = convertIr(v2, 2);
-    expect(version).toBe(3);
-    expect(json).toEqual(v2); // additive: the v2→v3 converter is identity
+    expect(version).toBe(4);
+    expect(json).toEqual(v2); // additive: every converter from v2 up is identity
   });
 
-  test("convertIr walks the whole chain v1 → v3", () => {
+  test("convertIr walks the whole chain v1 → v4", () => {
     const v1 = JSON.parse(serializeGraph(parseWorkflow(FIXTURES["single llm step"]!)));
     const { json, version } = convertIr(v1, 1);
-    expect(version).toBe(3);
+    expect(version).toBe(4);
     expect(json).toEqual(v1);
+  });
+
+  test("ir_version v3 → v4: a v3 IR without judge nodes lifts unchanged", () => {
+    const v3 = JSON.parse(serializeGraph(parseWorkflow(FIXTURES["single llm step"]!)));
+    const { json, version } = convertIr(v3, 3);
+    expect(version).toBe(4);
+    expect(json).toEqual(v3);
   });
 
   test("a v3 IR round-trips graph.attrs.outputs through serialize/deserialize", () => {

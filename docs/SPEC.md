@@ -82,6 +82,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 | `llm` | LLM call (the implicit default when `type:` is omitted) |
 | `human` | operator-gated routing |
 | `tool` | graph-level shell step (`run:`) |
+| `judge` | turn-less typed judgment: `state:` + `questions:` (`choice` / `score` / `noul`) asked of a System One model in one call; outputs derived from the questions; optional `decide:` binds a `choice` to route-case edge selection or a `noul` to `success` / `fail`; `for-each:` asks every question once per item of an array output in one call and `keep:` splits the list into typed `kept` / `dropped` (see [`proposals/judge-step.md`](proposals/judge-step.md)) |
 | `parallel` | fork-all into ≥2 concurrent branch sub-pipelines, joined by `wait_all` (§3.1.1) |
 | `exit` | reserved graceful-halt sink |
 
@@ -191,7 +192,7 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`).
 
-**Route case** — when the source node declares `routes:`, it is a *routing node*. The llm backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
+**Route case** — when the source node declares `routes:`, it is a *routing node*. For an `llm` node the backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. For a `judge` node the route is the `choice` answer named by `decide.route` (or its `below:` landing under the confidence floor) — no tool, no turn. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 

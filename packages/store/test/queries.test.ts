@@ -663,3 +663,94 @@ describe("selectEventsTail (store.getEventsTail)", () => {
     store.close();
   });
 });
+
+describe("getStepAggregates — judge steps", () => {
+  function judgeReq(nodeId: string): ObservabilityEvent {
+    return { type: "judge.requested", payload: { nodeId, iteration: 0, provider: "typesafe", model: "jev-latest" } };
+  }
+  function judgeAns(nodeId: string): ObservabilityEvent {
+    return { type: "judge.answered", payload: { nodeId, iteration: 0, provider: "typesafe", model: "jev-1.13.0" } };
+  }
+
+  test("judge.requested opens a step; its cost.recorded and judge.answered land on it", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      judgeReq("triage"),
+      judgeAns("triage"),
+      costEv("triage", { input_tokens: 509, output_tokens: 74, total_tokens: 583, cost_usd: 0.0000214 }),
+    ]);
+    const aggs = store.getStepAggregates(runId);
+    expect(aggs).toHaveLength(1);
+    const [a] = aggs;
+    expect(a!.nodeId).toBe("triage");
+    expect(a!.inputTokens).toBe(509);
+    expect(a!.billedTokens).toBe(583);
+    expect(a!.costUsd).toBeCloseTo(0.0000214, 9);
+    expect(a!.costEventCount).toBe(1);
+    expect(a!.endedAtMs).not.toBeNull();
+    expect(a!.stopReason).toBeNull();
+    store.close();
+  });
+
+  test("a judge TOOL call inside an llm window is split out of the step's token buckets, inside its total", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      startEv("calibrate"),
+      costEv("calibrate", { input_tokens: 30, output_tokens: 2000, total_tokens: 2030, cost_usd: 0.05 }),
+      costEv("calibrate", {
+        kind: "judge",
+        provider: "typesafe",
+        input_tokens: 1200,
+        output_tokens: 40,
+        total_tokens: 1240,
+        cost_usd: 0.0000504,
+      }),
+      costEv("calibrate", { input_tokens: 10, output_tokens: 3000, total_tokens: 3010, cost_usd: 0.08 }),
+      doneEv("calibrate", { stop_reason: "end_turn" }),
+      // a judge STEP's own call is never a split
+      judgeReq("triage"),
+      costEv("triage", {
+        kind: "judge",
+        provider: "typesafe",
+        input_tokens: 500,
+        output_tokens: 70,
+        total_tokens: 570,
+        cost_usd: 0.00002,
+      }),
+    ]);
+    const [llm, judge] = store.getStepAggregates(runId);
+    expect(llm!.nodeId).toBe("calibrate");
+    expect(llm!.inputTokens).toBe(40);
+    expect(llm!.outputTokens).toBe(5000);
+    expect(llm!.billedTokens).toBe(5040);
+    expect(llm!.costUsd).toBeCloseTo(0.1300504, 9);
+    expect(llm!.costEventCount).toBe(3);
+    expect(llm!.judgeCalls).toBe(1);
+    expect(llm!.judgeInputTokens).toBe(1200);
+    expect(llm!.judgeCostUsd).toBeCloseTo(0.0000504, 9);
+    expect(judge!.nodeId).toBe("triage");
+    expect(judge!.inputTokens).toBe(500);
+    expect(judge!.judgeCalls).toBe(0);
+    store.close();
+  });
+
+  test("a judge step and an llm step on different nodes stay separate rows", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      judgeReq("triage"),
+      costEv("triage", { input_tokens: 500, output_tokens: 70, total_tokens: 570, cost_usd: 0.00002 }),
+      startEv("review"),
+      doneEv("review", { stop_reason: "end_turn" }),
+      costEv("review", { input_tokens: 1000, output_tokens: 200, total_tokens: 1200, cost_usd: 0.03 }),
+    ]);
+    const aggs = store.getStepAggregates(runId);
+    expect(aggs.map((a) => [a.nodeId, a.inputTokens])).toEqual([
+      ["triage", 500],
+      ["review", 1000],
+    ]);
+    store.close();
+  });
+});

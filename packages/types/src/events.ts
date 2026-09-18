@@ -59,6 +59,9 @@ export type EventType =
   // Steering (legacy — replay only)
   | "steering.requested"
   | "steering.injected"
+  // Intent fold — an intent the executor could not apply (wrong state,
+  // superseded by a cancel in the same batch); executor-emitted
+  | "intent.dropped"
   // Control channel (steer / pause / resume / cancel)
   | "control.requested"
   | "control.applied"
@@ -73,6 +76,9 @@ export type EventType =
   | "budget.stop"
   // Cost
   | "cost.recorded"
+  // Judge steps (System One calls)
+  | "judge.requested"
+  | "judge.answered"
   // Worktree tree snapshot at a step / HITL boundary (observability).
   // The Diff scrubber's feed. Terminal snapshots are the
   // `fact.snapshot_recorded` fact, not this.
@@ -121,6 +127,7 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "tool.execution_end",
   "steering.requested",
   "steering.injected",
+  "intent.dropped",
   "control.requested",
   "control.applied",
   "control.rejected",
@@ -131,6 +138,8 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "budget.warn",
   "budget.stop",
   "cost.recorded",
+  "judge.requested",
+  "judge.answered",
   "snapshot.captured",
 ];
 

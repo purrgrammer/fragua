@@ -219,6 +219,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       dispatcher: deps.dispatcher,
       tools: deps.tools,
       llmCall: deps.llmCall,
+      judgeClient: deps.judgeClient,
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
       provisioner,

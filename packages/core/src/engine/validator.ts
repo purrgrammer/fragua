@@ -2,7 +2,8 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
-import { isOutputRecord, type OutputProfile } from "../types/outputs.ts";
+import { isJudgeFileLeaf, type JudgeState } from "../types/judge.ts";
+import { isOutputRecord, type OutputProfile, resolveOutputProfile } from "../types/outputs.ts";
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
@@ -73,6 +74,13 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "retry_backoff_factor",
   "retry_max_delay_ms",
   "retry_jitter",
+  "judge_state",
+  "judge_questions",
+  "judge_decide",
+  "judge_state_max_bytes",
+  "judge_for_each",
+  "judge_keep",
+  "judge_for_each_max_items",
   "outputs",
   "branches",
   "concurrency",
@@ -490,7 +498,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // Human steps are covered by E009 (no outgoing edges); start/exit are
   // the synthesized source/sink.
   for (const n of nodes) {
-    if (n.type !== "llm" && n.type !== "tool") continue;
+    if (n.type !== "llm" && n.type !== "tool" && n.type !== "judge") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     // A step has a success path if it has any outgoing edge that can fire on
     // success: an explicit `outcome: success`, a `route`, or a bare
@@ -576,7 +584,13 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     };
     for (const n of nodes) {
       if (n.type === "start" || n.type === "exit") continue;
-      const fields = [n.attrs.prompt, n.attrs.text, n.attrs.tool_command];
+      const fields = [
+        n.attrs.prompt,
+        n.attrs.text,
+        n.attrs.tool_command,
+        n.attrs.judge_for_each,
+        ...judgeStateStrings(n.attrs.judge_state),
+      ];
       for (const f of fields) {
         if (typeof f !== "string") continue;
         for (const ref of outputReferences(f)) {
@@ -703,6 +717,182 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E006",
         message: `cycle ${sccNodes.join(" → ")} has no reachable exit node`,
+      });
+    }
+  }
+
+  // ---- judge steps: `decide:` ↔ `questions:` ↔ `routes:` consistency ----
+  // Shape is the parser's; these are the cross-attr rules a graph can still
+  // get wrong. See docs/proposals/judge-step.md §3.3 / §3.4.
+  for (const n of nodes) {
+    if (n.type !== "judge") continue;
+    const questions = n.attrs.judge_questions ?? {};
+    const decide = n.attrs.judge_decide;
+    const routes = Array.isArray(n.attrs.routes) ? n.attrs.routes : [];
+    const nodeLoc = n.loc !== undefined ? { loc: n.loc } : {};
+    const err = (code: string, message: string): void => {
+      diags.push({ severity: "error", code, message, nodeId: n.id, ...nodeLoc });
+    };
+
+    if (decide !== undefined && "route" in decide) {
+      const r = decide.route;
+      const q = questions[r.question];
+      if (q === undefined) {
+        err(
+          "E047",
+          `judge "${n.id}" \`decide.route\` names question "${r.question}", which is not declared in \`questions:\``,
+        );
+      } else if (q.type !== "choice") {
+        err(
+          "E047",
+          `judge "${n.id}" \`decide.route\` question "${r.question}" is a \`${q.type}\` — only a \`choice\` can drive routing`,
+        );
+      }
+      // With no usable choice the option ⇄ route cross-checks would flag every
+      // route and bury the diagnostic above; the one error is the whole story.
+      if (q === undefined || q.type !== "choice") continue;
+      if (routes.length === 0) {
+        err(
+          "E047",
+          `judge "${n.id}" has \`decide.route\` but no \`routes:\` — declare one route per option (plus the \`below:\` landing)`,
+        );
+      } else {
+        const options = q !== undefined && q.type === "choice" ? Object.keys(q.criteria) : [];
+        for (const o of options) {
+          if (!routes.includes(o)) {
+            err("E047", `judge "${n.id}" question "${r.question}" option "${o}" has no matching entry in \`routes:\``);
+          }
+        }
+        for (const rn of routes) {
+          if (!options.includes(rn) && rn !== r.below) {
+            err(
+              "E047",
+              `judge "${n.id}" route "${rn}" is neither an option of question "${r.question}" nor its \`below:\` landing`,
+            );
+          }
+        }
+        if (r.below !== undefined && !routes.includes(r.below)) {
+          err("E047", `judge "${n.id}" \`decide.route.below\` "${r.below}" is not declared in \`routes:\``);
+        }
+        if (r.min_confidence === undefined && options.length >= 3) {
+          diags.push({
+            severity: "warning",
+            code: "W020",
+            message: `judge "${n.id}" routes on a ${options.length}-way choice with no \`min-confidence\` — a spread distribution routes silently; add \`min-confidence\` + \`below:\` to escalate uncertain cases`,
+            nodeId: n.id,
+            ...nodeLoc,
+          });
+        }
+      }
+    } else if (decide !== undefined && "outcome" in decide) {
+      const o = decide.outcome;
+      for (const { question: qid } of o.rules) {
+        const q = questions[qid];
+        if (q === undefined) {
+          err(
+            "E048",
+            `judge "${n.id}" \`decide.outcome\` names question "${qid}", which is not declared in \`questions:\``,
+          );
+        } else if (q.type !== "noul") {
+          err(
+            "E048",
+            `judge "${n.id}" \`decide.outcome\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds into success / fail`,
+          );
+        }
+      }
+      if (routes.length > 0) {
+        err(
+          "E048",
+          `judge "${n.id}" has \`decide.outcome\` and \`routes:\` — an outcome judge branches on \`on: {success, fail}\`, not routes`,
+        );
+      }
+    } else if (routes.length > 0) {
+      err("E047", `judge "${n.id}" declares \`routes:\` but no \`decide.route\` — nothing would pick a route`);
+    }
+
+    // E049: a `for-each` judge must point at an array-typed output, and its
+    // `keep:` at one of its own nouls. The parser typed `kept` / `dropped`
+    // from the same lookup; when it could not, this is the diagnostic.
+    const forEach = n.attrs.judge_for_each;
+    if (forEach !== undefined) {
+      const ref = outputReferences(forEach)[0];
+      const producer = ref === undefined ? undefined : graph.nodes[ref.producer];
+      const profile =
+        ref === undefined || producer?.attrs.outputs === undefined
+          ? undefined
+          : resolveOutputProfile(producer.attrs.outputs, ref.path);
+      if (ref === undefined || producer === undefined) {
+        err("E049", `judge "${n.id}" \`for-each\` references \`${forEach}\` but that step does not exist`);
+      } else if (profile === undefined) {
+        err(
+          "E049",
+          `judge "${n.id}" \`for-each\` references \`${forEach}\` but "${ref.producer}" declares no such output`,
+        );
+      } else if (profile.kind !== "array") {
+        err(
+          "E049",
+          `judge "${n.id}" \`for-each\` references \`${forEach}\`, a \`${profile.kind}\` — for-each needs an array-typed output`,
+        );
+      }
+      const keep = n.attrs.judge_keep;
+      if (keep !== undefined) {
+        for (const { question: qid } of keep.rules) {
+          const q = questions[qid];
+          if (q === undefined) {
+            err("E049", `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\``);
+          } else if (q.type !== "noul") {
+            err(
+              "E049",
+              `judge "${n.id}" \`keep\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds an item in or out`,
+            );
+          }
+        }
+      }
+
+      // E050 / W022 / E051: the three ways a for-each question or its producer
+      // can be silently wrong — a path into a field the item does not have, an
+      // `item.` outside backticks the engine never re-aims, and an item field
+      // named `judge` that the answers would overwrite on kept / dropped.
+      const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
+      for (const [qid, q] of Object.entries(questions)) {
+        const text = JSON.stringify([q.instructions, q.criteria ?? null]);
+        if (itemProfile !== undefined && itemProfile.kind === "record") {
+          for (const path of itemPaths(text)) {
+            const missing = firstMissingSegment(itemProfile, path);
+            if (missing !== undefined) {
+              err(
+                "E050",
+                `judge "${n.id}" question "${qid}" references \`item.${path.join(".")}\` but the items of \`${forEach}\` have no field "${missing}" (fields: ${Object.keys(itemProfile.fields).join(", ")})`,
+              );
+            }
+          }
+        }
+        if (hasBareItemPath(text)) {
+          diags.push({
+            severity: "warning",
+            code: "W022",
+            message: `judge "${n.id}" question "${qid}" mentions \`item.…\` outside backticks — only a backticked \`item.<field>\` path is re-aimed at the current item; the model sees the words as written`,
+            nodeId: n.id,
+            ...nodeLoc,
+          });
+        }
+      }
+      if (itemProfile !== undefined && itemProfile.kind === "record" && "judge" in itemProfile.fields) {
+        err(
+          "E051",
+          `judge "${n.id}" items of \`${forEach}\` carry a field named "judge" — the kept / dropped items put the answers under \`judge\` and would overwrite it; rename the producer's field`,
+        );
+      }
+    }
+
+    const literalBytes = judgeLiteralStateBytes(n.attrs.judge_state);
+    if (literalBytes > JUDGE_LITERAL_STATE_WARN_BYTES) {
+      diags.push({
+        severity: "warning",
+        code: "W021",
+        message: `judge "${n.id}" carries ${literalBytes} bytes of literal \`state:\` text (> ${JUDGE_LITERAL_STATE_WARN_BYTES}) — extra context degrades judgment; trim it or raise \`state-max-bytes\` deliberately`,
+        nodeId: n.id,
+        ...nodeLoc,
       });
     }
   }
@@ -1098,18 +1288,19 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
             nodeId,
             ...loc,
           });
-        } else if (cn.type !== "llm") {
-          // E041: deliberation-only — branch nodes must be llm.
+        } else if (cn.type !== "llm" && cn.type !== "judge") {
+          // E041: deliberation-only — branch nodes must be llm or judge (a
+          // judge is read-class by construction: no tools, `{file}` reads only).
           diags.push({
             severity: "error",
             code: "E041",
-            message: `branch node "${nodeId}" of parallel "${p.id}" is \`type: ${cn.type}\` — v1 branch nodes must be \`type: llm\``,
+            message: `branch node "${nodeId}" of parallel "${p.id}" is \`type: ${cn.type}\` — branch nodes must be \`type: llm\` or \`type: judge\``,
             nodeId,
             ...loc,
           });
-        } else {
-          // `llm` is the only valid branch kind; the tool / thread constraints
-          // apply to it alone. Running them on a node that already failed E040/
+        } else if (cn.type === "llm") {
+          // The tool / thread constraints apply to llm branch nodes alone; a
+          // judge carries neither (the parser rejects them). Running them on a node that already failed E040/
           // E041 double-fires — e.g. a nested `parallel` has no `allowed_tools`,
           // so `writeReachableTools` returns EVERY write-class tool and E042
           // piles on top of E040.
@@ -1264,6 +1455,66 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 }
 
 /** Throw if any `error`-severity diagnostics exist. */
+const JUDGE_LITERAL_STATE_WARN_BYTES = 16 * 1024;
+
+/** Bytes of literal text in a judge `state:` — substitution tokens and `{file}`
+ * leaves are excluded (their size is only known at dispatch). */
+/** Backticked `item.<path>` references in a question's serialised text, as
+ * segment lists (`item.a.b[0].c` → ["a", "b", "c"]); a bare `` `item` `` is the
+ * whole item and contributes nothing. */
+function itemPaths(text: string): string[][] {
+  const out: string[][] = [];
+  for (const m of text.matchAll(/`item((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)`/g)) {
+    const segs = (m[1] ?? "").split(/\.|\[\d+\]/).filter((seg) => seg.length > 0);
+    if (segs.length > 0) out.push(segs);
+  }
+  return out;
+}
+
+/** The first path segment that does not resolve through the item profile;
+ * arrays are stepped into (an index in the path or none), scalars end the
+ * walk — anything after a scalar is a bad path. */
+function firstMissingSegment(item: OutputProfile, path: readonly string[]): string | undefined {
+  let cur: OutputProfile = item;
+  for (const seg of path) {
+    while (cur.kind === "array") cur = cur.items;
+    if (cur.kind !== "record") return seg;
+    const next: OutputProfile | undefined = cur.fields[seg];
+    if (next === undefined) return seg;
+    cur = next;
+  }
+  return undefined;
+}
+
+/** An `item.<word>` that is not inside backticks — the engine's rewrite only
+ * fires on backticked paths, so this one reaches the model verbatim. */
+function hasBareItemPath(text: string): boolean {
+  const stripped = text.replace(/`[^`]*`/g, "");
+  return /(^|[^A-Za-z0-9_`])item\.[A-Za-z_]/.test(stripped);
+}
+
+/** Every string leaf of a judge `state:` — the substitution surfaces E035 checks. */
+function judgeStateStrings(state: JudgeState | undefined): string[] {
+  if (state === undefined) return [];
+  if (typeof state === "string") return [state];
+  if (isJudgeFileLeaf(state)) return [];
+  const out: string[] = [];
+  for (const v of Object.values(state)) out.push(...judgeStateStrings(v as JudgeState));
+  return out;
+}
+
+function judgeLiteralStateBytes(state: JudgeState | undefined): number {
+  if (state === undefined) return 0;
+  if (typeof state === "string") {
+    // Count only the literal spans; a `${{ … }}` token's size is unknown until dispatch.
+    return new TextEncoder().encode(state.replace(/\$\{\{[^}]*\}\}/g, "")).byteLength;
+  }
+  if (isJudgeFileLeaf(state)) return 0;
+  let n = 0;
+  for (const v of Object.values(state)) n += judgeLiteralStateBytes(v as JudgeState);
+  return n;
+}
+
 export function validateOrThrow(graph: Graph, opts: ValidateOptions = {}): void {
   const diags = validate(graph, opts);
   const errors = diags.filter((d) => d.severity === "error");

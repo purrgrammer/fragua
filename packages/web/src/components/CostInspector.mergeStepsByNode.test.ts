@@ -82,3 +82,22 @@ describe("mergeStepsByNode", () => {
     expect(auditRows.every((r) => r.turns === undefined)).toBe(true);
   });
 });
+
+describe("mergeStepsByNode — judge tool split", () => {
+  test("judge calls sum across turns and stay beside the step's own buckets", () => {
+    const a = withCost(step({ startSeq: 1, nodeId: "verify" }), 0.05, 100);
+    const b = withCost(step({ startSeq: 2, nodeId: "verify" }), 0.07, 100);
+    a.cost!.judge = { cost_usd: 0.0001, input_tokens: 900, calls: 1 };
+    b.cost!.judge = { cost_usd: 0.0002, input_tokens: 1100, calls: 2 };
+    const out = mergeStepsByNode([a, b]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.cost?.judge).toEqual({ cost_usd: 0.00030000000000000003, input_tokens: 2000, calls: 3 });
+    expect(out[0]?.cost?.input_tokens).toBe(200);
+  });
+
+  test("no judge calls → no judge field on the merged row", () => {
+    const a = withCost(step({ startSeq: 1, nodeId: "verify" }), 0.05, 100);
+    const b = withCost(step({ startSeq: 2, nodeId: "verify" }), 0.07, 100);
+    expect(mergeStepsByNode([a, b])[0]?.cost?.judge).toBeUndefined();
+  });
+});

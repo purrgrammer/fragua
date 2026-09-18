@@ -63,6 +63,7 @@ const Timeouts = Type.Object(
   {
     llm: Type.Optional(TimeoutValue),
     tool: Type.Optional(TimeoutValue),
+    judge: Type.Optional(TimeoutValue),
     bootstrap: Type.Optional(TimeoutValue),
     shell: Type.Optional(TimeoutValue),
     http: Type.Optional(TimeoutValue),
@@ -163,6 +164,7 @@ export type FraguaConfig = Static<typeof FraguaConfigSchema>;
 export interface ResolvedTimeouts {
   llm?: number;
   tool?: number;
+  judge?: number;
   bootstrap?: number;
   shell?: number;
   http?: number;
@@ -178,7 +180,7 @@ export function resolveTimeouts(cfg: FraguaConfig): ResolvedTimeouts {
   if (cfg.timeouts == null) return out;
   // Single-word keys map to themselves in ResolvedTimeouts; hyphenated
   // source keys map to their camelCase output counterparts.
-  const single = ["llm", "tool", "bootstrap", "shell", "http"] as const;
+  const single = ["llm", "tool", "judge", "bootstrap", "shell", "http"] as const;
   for (const key of single) {
     const raw = cfg.timeouts[key];
     if (raw == null) continue;

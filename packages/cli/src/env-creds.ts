@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai";
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
+import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 
 // pi-ai's github-copilot env fallback includes the generic GH_TOKEN /
@@ -188,7 +189,17 @@ const NO_ALLOW: ReadonlySet<string> = new Set();
  * a tool subprocess. (`_API_KEY` covers the shape virtually every provider key
  * follows; the explicit names cover non-`_API_KEY` creds like the OAuth token.)
  */
-const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]);
+const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "TYPESAFE_API_KEY",
+]);
+
+/** Judge (System One) provider — not in pi-ai's registry, so its env var is
+ * seeded explicitly alongside the pi-ai providers. */
+const JUDGE_ENV: ReadonlyArray<readonly [provider: string, envVar: string]> = [
+  [JUDGE_DEFAULT_PROVIDER, "TYPESAFE_API_KEY"],
+];
 
 export function unsafeAllowEnvNames(allow: Iterable<string>): string[] {
   const providerVars = knownProviderVarNames();
@@ -224,6 +235,12 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
       const sources = findEnvKeys(provider) ?? [];
       if (sources.every((s) => COPILOT_AMBIENT_ENV.has(s))) continue;
     }
+    auth.set(provider, { type: "api_key", key });
+    seeded.push(provider);
+  }
+  for (const [provider, envVar] of JUDGE_ENV) {
+    const key = process.env[envVar];
+    if (!key) continue;
     auth.set(provider, { type: "api_key", key });
     seeded.push(provider);
   }

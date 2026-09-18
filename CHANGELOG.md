@@ -8,7 +8,75 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`type: judge` steps.** A turn-less decision step: `state:` (literal text,
+  `${{ inputs }}` / `${{ outputs }}`, or `{file: <path>}` leaves read from the
+  worktree) plus `questions:` of `choice` / `score` / `noul`, asked of a System
+  One model (TypeSafe Jev) in one call. Every question becomes a typed output
+  (`${{ outputs.<judge>.<q>.choice }}`, `.confidence`, `.probabilities.<opt>`,
+  `.noul`, `.score` / `.level`). An optional `decide:` binds a `choice` to
+  routing (`decide.route` with `min-confidence` + a `below:` landing) or a `noul`
+  to success / fail (`decide.outcome`), so `routes:`, `on:`, `retry:` and
+  `goal-gate` compose unchanged. Judges may run as `parallel` branches.
+  Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add
+  typesafe` (or `TYPESAFE_API_KEY` for `fragua ci`); `fragua providers test
+  typesafe` makes one call. Experimental — see `docs/proposals/judge-step.md`.
+- **`for-each:` on judge steps.** Point a judge at an array-typed output and every
+  question is asked once per item in one call; `` `item.field` `` in a question
+  addresses the current item. Outputs: `answers` aligned with the input, and with
+  `keep: {<noul>: <min> | {min, max}, …}` the input split into `kept` / `dropped`, each
+  item carrying its fields plus the answers under `judge`. Empty list ⇒ no call.
+  Lists over the provider's request budget are sent in chunks and merged.
+  `for-each-max-items` caps the list (default 200). Validator E049.
+- **Per-question thresholds.** `decide.outcome` and `keep` take a mapping of noul
+  id → `<min>` or `{min, max}`; every rule must hold. A hazard gates with `max`.
+- **`judge` agent tool.** The same primitives inside any `llm` step:
+  `judge({ state, questions })` asks a batch of typed questions over evidence
+  the agent has gathered and returns the answers with probabilities; cost lands
+  on the calling step. Present in the default toolset only when a judge
+  provider is credentialed. The conversation view renders each call as a card:
+  the state as a tree, every question with its answer as probability bars, the
+  model and cost.
+- **Judge card shows its thresholds.** The decision line names the confidence and
+  the floor it was held to, or each outcome rule with its value and bound; a
+  gated noul's bar carries a tick at the bound; for-each groups are titled by
+  the item's location or claim.
+- A judge `{file}` leaf over `state-max-bytes` is refused by size before it is
+  read; the Cost tab's billed total for a step no longer counts judge tool
+  tokens twice.
+- **Cost tab: judge tool spend per step.** An llm step's cost popover shows the
+  `judge` tool calls it made as their own row (calls, input tokens, recorded
+  cost) instead of folding their tokens into the step's model buckets at the
+  wrong rate; the step total still includes them.
+
+### Fixed
+- `review` on a merged PR now diffs the PR's own change (its head over the point
+  it forked from the base) instead of `origin/main..HEAD`, which ran backwards
+  once the PR had merged; the worktree lands on the merge commit.
+- `intent.dropped` is in the typed event list, so SSE consumers that register
+  per event type now see it.
+
+- A step named `done` or `end` now executes. Both names were silent terminal
+  aliases in the executor, so a workflow that validated clean skipped such a step
+  and ended the run. Only `exit` (and the internal `__end__`) end a run.
+- Per-step cost breakdown now includes judge steps (their spend already counted
+  in run totals but had no step row).
+
 ### Changed
+- **`dependencies`: the pin, scope, and manifests-only rules run in code**
+  (`check-manifests.ts`) as a tool step; the judge keeps the breaking-risk score.
+- **`review` / `pr_review` lenses judge per finding.** On the full tier each lens
+  is now scan → read → judge: the read step opens the cited code and records the
+  evidence without a verdict, a `for-each` judge asks whether the finding holds
+  and how severe it is (pr_review also: is it concrete, is it in changed code),
+  and `keep` drops what falls under 0.6; every gate noul carries true / false
+  criteria, an injection-guard noul marks evidence that addresses the reviewer
+  (the synthesiser escalates it, it is never dropped), `pr_review`'s read step
+  looks up whether a finding sits in the diff, and
+  the routers' options carry what / not-for / examples. `synthesize` receives the kept findings
+  with the judge's probabilities and applies stated thresholds for weak evidence
+  and contested severity.
 
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and

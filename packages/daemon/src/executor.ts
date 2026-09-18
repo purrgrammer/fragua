@@ -103,6 +103,18 @@ const FANOUT_COMMIT_ATTEMPTS = 8;
 
 type FanoutAppendOpts = { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number };
 
+/** The optional per-run context fields, applied identically at the linear
+ * and the fan-out-branch dispatch sites so a field added to one can't be
+ * silently missing inside a `parallel` branch. */
+function applyOptionalCtxFields(
+  ctxOpts: core.BuildContextOpts,
+  runEnv: ExecutionEnvironment | undefined,
+  judgeClient: core.JudgeClient | undefined,
+): void {
+  if (runEnv !== undefined) ctxOpts.env = runEnv;
+  if (judgeClient !== undefined) ctxOpts.judge = judgeClient;
+}
+
 /** Outcome of a serialized fan-out commit. A tagged `false`: `occ` is genuine
  * OCC exhaustion (feed the conflict controller), `status` is the run leaving
  * `running` under us (don't — it's already parked). */
@@ -192,6 +204,9 @@ export interface ExecutorOpts {
   registry: AbortRegistry;
   tools: core.ToolRegistry;
   llmCall: LlmCallFn;
+  /** System One client for `type: judge` steps; absent ⇒ judge nodes halt
+   * with a "not configured" error. */
+  judgeClient?: core.JudgeClient;
   maxConcurrentRuns: number;
   /** Upper bound on node-less poll waits in ms. Tests inject a smaller value. */
   pollIntervalMs?: number;
@@ -950,7 +965,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
     // cross-referencing the graph attrs. Only populated when at least one
@@ -1307,7 +1322,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     };
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({
@@ -1421,6 +1436,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
+    // This turn's operator fold (budget raise / resume) — applied on the FIRST
+    // commit so the override lands AND `last_applied_seq` advances past the
+    // queued intents (else wake-pending re-resumes forever).
+    const foldOpts: FanoutAppendOpts = {};
+    if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
+    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+    let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
+    const takeFold = (): FanoutAppendOpts => {
+      if (!foldPending) return {};
+      foldPending = false;
+      return foldOpts;
+    };
+
     // A park/terminal fact must actually LAND before the turn reports
     // terminal — a silently failed commit would strand the run `running`
     // with no executor (a zombie until daemon restart). status-stop ⇒ the
@@ -1429,7 +1457,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // (they are NOT re-derivable from durable state once the branch outcomes
     // that produced them are gone).
     const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
-      const res = await commitFanoutFact(facts, {});
+      // A park (budget pause / halt) may be this turn's FIRST commit — it must
+      // carry the operator fold too, or the raised cap never lands and the
+      // resume intent never advances the watermark: wake-pending re-resumes,
+      // the stale cap re-pauses, and the run livelocks (observed at 1,600+
+      // pause/resume cycles).
+      const res = await commitFanoutFact(facts, takeFold());
       if (!res.ok && res.reason === "occ") {
         const { halted } = await onOccConflict(
           facts[0]?.type ?? "fact.unknown",
@@ -1451,19 +1484,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Land last turn's lost disposition before seeding/dispatching anything.
     if (pendingFanoutDisposition !== undefined) return commitParkOrTerminal(pendingFanoutDisposition);
 
-    // This turn's operator fold (budget raise / resume) — applied on the FIRST
-    // commit so the override lands AND `last_applied_seq` advances past the
-    // queued intents (else wake-pending re-resumes forever).
-    const foldOpts: FanoutAppendOpts = {};
-    if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
-    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
-    let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
-    const takeFold = (): FanoutAppendOpts => {
-      if (!foldPending) return {};
-      foldPending = false;
-      return foldOpts;
-    };
-
     // The parallel node's per-node cost/token cap sums over its fan-out closure
     // (branches + their non-fanout descendants up to the join — the shared
     // `fanoutClosureUnion` walk, so the cap scope can't drift from the set the
@@ -1483,7 +1503,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Hot per-commit gate reuses the just-committed projection; the cold once-per-fan-out
       // barrier forces a fresh read so its budget check never trusts a possibly-stale snapshot.
       const folded = (gate.fresh ? opts.store.getState(runId) : lastFanoutState) ?? opts.store.getState(runId) ?? state;
-      const overrides = readBudgetOverrides(folded.routing);
+      // Overlay this turn's operator fold: a `budget_adjusted` queued before the
+      // resume lives in `decision.routingDelta` until the first commit lands it,
+      // and the gate must see the raised cap on that very first check — the
+      // fan-out analog of the linear path's `effectiveRouting`.
+      const overrides = readBudgetOverrides(
+        Object.keys(decision.routingDelta).length > 0
+          ? { ...folded.routing, ...decision.routingDelta }
+          : folded.routing,
+      );
       let nodeCumulativeCostUsd = 0;
       let nodeCumulativeTokens = 0;
       for (const id of closureNodes) {

@@ -247,7 +247,7 @@ The agent-callable tool surface is deliberately minimal:
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
 
-Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. The tools are deliberately powerful — streaming output,
+Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. `judge` (`packages/workspace/src/judge-tool.ts`) exposes the System One primitives — `choice` / `score` / `noul` over agent-gathered evidence, answers with probabilities — and is present in the default set only when the run carries a judge client (`ctx.judge`); the backend strips it otherwise. Its cost lands as `cost.recorded` on the calling node like any llm spend. The tools are deliberately powerful — streaming output,
 image content, rich diffs, fuzzy edits, atomic writes, native walks —
 so an agent never has to pick between a dozen tools that all do
 variants of the same thing.

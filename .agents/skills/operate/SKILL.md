@@ -46,7 +46,7 @@ Common failures:
 
 - **`fragua runs ls` errors** — no store at this path. `fragua harness` creates `~/.fragua/fragua.db` on first start; or check `--db`.
 - **Runs stuck `queued`** — no harness running (or its daemon died / heartbeat stale): nothing is executing the queue. Start/restart `fragua harness` — but the user should run it themselves (don't start it on their behalf without asking; it attaches to the current shell).
-- **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`.
+- **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`. A workflow with `type: judge` steps additionally needs `fragua providers add typesafe` (CI: `TYPESAFE_API_KEY`); missing, the run halts at its first judge with "provider typesafe not credentialed".
 - **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
 
 ---
