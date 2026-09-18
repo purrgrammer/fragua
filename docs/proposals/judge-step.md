@@ -891,6 +891,21 @@ routing, second requests only on a real dependency. Changed:
   plus questions and 32k for state plus the longest question, not a byte cap
   on state alone.
 
+**Evidence, same PR #94, after the pass.** `review`: 15 scan findings, 10
+kept, 5 dropped; kept `present` 0.62–0.92, the clear drops 0.20–0.31 — the
+criteria pulled the boundary apart (before: kept 0.60–0.94, drops 0.47–0.59,
+a 0.01 gap). `refuted` did the work `holds` had folded in: one quality item
+at `present` 0.87 fell on `refuted` 0.46. `injected` sat at 0.09–0.27 on all
+33 items across both runs — no false positives on real code. `classify`
+went `full` at 0.94 (0.85 with one-line options). Gate first time, $4.76,
+16m 41s. `pr_review`: 6 scan findings, 1 kept (a Medium the earlier runs had
+not surfaced), `refuted` 0.87 dropped a correctness item whose evidence named
+the guard, `touched` 0.31 / 0.46 dropped two adjacent-code items; `scope`
+`full` at 0.97; verdict `comment`, $3.83. Its `bar_held` gate needed three
+syntheses (0.59, 0.41, 0.90) over one borderline Medium — the same review
+text judged three ways is the remaining noise, and it is on the review-level
+gate, not the per-item ones.
+
 **Not changed, on purpose.** The canonical workflows keep `model: jev-latest`.
 The docs' condition for pinning a versioned id is thresholds tuned against
 that version; ours are still first-cut defaults, and every fact records the
