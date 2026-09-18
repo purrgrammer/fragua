@@ -565,6 +565,9 @@ below are the cross-attribute rules a well-shaped graph can still break:
 | E047 | `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:` |
 | E048 | `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:` |
 | E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); `keep.question` is not one of the judge's own `noul`s. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
+| E050 | a `for-each` question references `` `item.<path>` `` into a field the producer's item type does not declare |
+| E051 | the iterated items carry a field named `judge`, which the kept / dropped answers would overwrite |
+| W022 | `item.<field>` outside backticks in a `for-each` question — never re-aimed, the model reads the words |
 | W020 | a routed `choice` with ≥ 3 options and no `min-confidence` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |
 

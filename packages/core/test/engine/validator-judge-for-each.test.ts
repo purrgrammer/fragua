@@ -71,6 +71,57 @@ describe("judge for-each — validator (E049)", () => {
     expect(errors(WF("${{ outputs.read.findings }}", ""))).toContain("E035");
   });
 
+  test("E050: a backticked item path into a field the producer's items do not declare", () => {
+    const src = WF(
+      "${{ outputs.read.findings }}",
+      "    keep: {holds: 0.6}\n",
+      "      holds: {type: noul, instructions: Does `item.cod` hold?}\n",
+    );
+    expect(messages(src, "E050").join("\n")).toMatch(
+      /references `item.cod` but the items .* have no field "cod" \(fields: claim\)/,
+    );
+    // a valid path, a bare `item`, and an index into a nested array are all fine
+    const ok = WF(
+      "${{ outputs.read.findings }}",
+      "    keep: {holds: 0.6}\n",
+      "      holds: {type: noul, instructions: Is `item` about `item.claim`?}\n",
+    );
+    expect(messages(ok, "E050")).toEqual([]);
+  });
+
+  test("W022: item.<field> outside backticks is never re-aimed", () => {
+    const src = WF(
+      "${{ outputs.read.findings }}",
+      "    keep: {holds: 0.6}\n",
+      "      holds: {type: noul, instructions: Does item.claim hold given `item.claim`?}\n",
+    );
+    expect(messages(src, "W022").join("\n")).toMatch(/mentions `item.…` outside backticks/);
+    const fine = WF("${{ outputs.read.findings }}", "    keep: {holds: 0.6}\n");
+    expect(messages(fine, "W022")).toEqual([]);
+  });
+
+  test("E051: a producer item field named judge would be overwritten on kept / dropped", () => {
+    const src = `
+name: wf
+steps:
+  read:
+    prompt: p
+    outputs:
+      findings:
+        type: array
+        items: {type: object, fields: {claim: {type: string}, judge: {type: string}}}
+    next: j
+  j:
+    type: judge
+    for-each: \${{ outputs.read.findings }}
+    questions:
+      holds: {type: noul, instructions: Does \`item.claim\` hold?}
+    keep: {holds: 0.6}
+    next: exit
+`;
+    expect(messages(src, "E051").join("\n")).toMatch(/carry a field named "judge"/);
+  });
+
   test("string state leaves are E035-checked like a prompt", () => {
     const src = `
 name: wf

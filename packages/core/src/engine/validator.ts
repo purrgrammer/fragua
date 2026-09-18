@@ -848,6 +848,41 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           }
         }
       }
+
+      // E050 / W022 / E051: the three ways a for-each question or its producer
+      // can be silently wrong — a path into a field the item does not have, an
+      // `item.` outside backticks the engine never re-aims, and an item field
+      // named `judge` that the answers would overwrite on kept / dropped.
+      const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
+      for (const [qid, q] of Object.entries(questions)) {
+        const text = JSON.stringify([q.instructions, q.criteria ?? null]);
+        if (itemProfile !== undefined && itemProfile.kind === "record") {
+          for (const path of itemPaths(text)) {
+            const missing = firstMissingSegment(itemProfile, path);
+            if (missing !== undefined) {
+              err(
+                "E050",
+                `judge "${n.id}" question "${qid}" references \`item.${path.join(".")}\` but the items of \`${forEach}\` have no field "${missing}" (fields: ${Object.keys(itemProfile.fields).join(", ")})`,
+              );
+            }
+          }
+        }
+        if (hasBareItemPath(text)) {
+          diags.push({
+            severity: "warning",
+            code: "W022",
+            message: `judge "${n.id}" question "${qid}" mentions \`item.…\` outside backticks — only a backticked \`item.<field>\` path is re-aimed at the current item; the model sees the words as written`,
+            nodeId: n.id,
+            ...nodeLoc,
+          });
+        }
+      }
+      if (itemProfile !== undefined && itemProfile.kind === "record" && "judge" in itemProfile.fields) {
+        err(
+          "E051",
+          `judge "${n.id}" items of \`${forEach}\` carry a field named "judge" — the kept / dropped items put the answers under \`judge\` and would overwrite it; rename the producer's field`,
+        );
+      }
     }
 
     const literalBytes = judgeLiteralStateBytes(n.attrs.judge_state);
@@ -1424,6 +1459,40 @@ const JUDGE_LITERAL_STATE_WARN_BYTES = 16 * 1024;
 
 /** Bytes of literal text in a judge `state:` — substitution tokens and `{file}`
  * leaves are excluded (their size is only known at dispatch). */
+/** Backticked `item.<path>` references in a question's serialised text, as
+ * segment lists (`item.a.b[0].c` → ["a", "b", "c"]); a bare `` `item` `` is the
+ * whole item and contributes nothing. */
+function itemPaths(text: string): string[][] {
+  const out: string[][] = [];
+  for (const m of text.matchAll(/`item((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)`/g)) {
+    const segs = (m[1] ?? "").split(/\.|\[\d+\]/).filter((seg) => seg.length > 0);
+    if (segs.length > 0) out.push(segs);
+  }
+  return out;
+}
+
+/** The first path segment that does not resolve through the item profile;
+ * arrays are stepped into (an index in the path or none), scalars end the
+ * walk — anything after a scalar is a bad path. */
+function firstMissingSegment(item: OutputProfile, path: readonly string[]): string | undefined {
+  let cur: OutputProfile = item;
+  for (const seg of path) {
+    while (cur.kind === "array") cur = cur.items;
+    if (cur.kind !== "record") return seg;
+    const next: OutputProfile | undefined = cur.fields[seg];
+    if (next === undefined) return seg;
+    cur = next;
+  }
+  return undefined;
+}
+
+/** An `item.<word>` that is not inside backticks — the engine's rewrite only
+ * fires on backticked paths, so this one reaches the model verbatim. */
+function hasBareItemPath(text: string): boolean {
+  const stripped = text.replace(/`[^`]*`/g, "");
+  return /(^|[^A-Za-z0-9_`])item\.[A-Za-z_]/.test(stripped);
+}
+
 /** Every string leaf of a judge `state:` — the substitution surfaces E035 checks. */
 function judgeStateStrings(state: JudgeState | undefined): string[] {
   if (state === undefined) return [];
