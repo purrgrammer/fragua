@@ -3,7 +3,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isBlockedCommand } from "./blocklist.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
@@ -154,6 +154,10 @@ export class LocalEnvironment implements ExecutionEnvironment {
       throw new PathEscapeError(path, real, cwdReal);
     }
     return normalized;
+  }
+
+  async fileSize(path: string): Promise<number> {
+    return (await stat(this.resolvePath(path))).size;
   }
 
   async readFile(path: string): Promise<string> {

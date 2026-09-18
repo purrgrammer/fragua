@@ -792,7 +792,7 @@ const STEP_AGGREGATES_SQL = `
     COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER) END), 0) AS outputTokens,
     COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER) END), 0) AS cacheReadTokens,
     COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER) END), 0) AS cacheWriteTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS billedTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER) END), 0) AS billedTokens,
     COUNT(c.payload)                                                              AS costEventCount,
     COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.cost_usd')     AS REAL)    ELSE 0 END), 0) AS judgeCostUsd,
     COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS judgeInputTokens,

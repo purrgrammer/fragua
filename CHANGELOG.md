@@ -42,6 +42,9 @@ guarantee.
   the floor it was held to, or each outcome rule with its value and bound; a
   gated noul's bar carries a tick at the bound; for-each groups are titled by
   the item's location or claim.
+- A judge `{file}` leaf over `state-max-bytes` is refused by size before it is
+  read; the Cost tab's billed total for a step no longer counts judge tool
+  tokens twice.
 - **Cost tab: judge tool spend per step.** An llm step's cost popover shows the
   `judge` tool calls it made as their own row (calls, input tokens, recorded
   cost) instead of folding their tokens into the step's model buckets at the

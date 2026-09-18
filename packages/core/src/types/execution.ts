@@ -28,6 +28,10 @@ export interface ExecutionEnvironment {
   writeFile(path: string, contents: string): Promise<void>;
   /** Check if a file exists. */
   exists(path: string): Promise<boolean>;
+  /** Size of a file in bytes without reading it — lets a bounded reader
+   * refuse an oversized file before it is in memory. Optional: an
+   * environment that cannot stat falls back to read-then-measure. */
+  fileSize?(path: string): Promise<number>;
   /** Execute a shell command. Returns stdout/stderr/exit code. The
    * optional `onData` callback streams chunks as they arrive — tools
    * use it to surface partial output to the UI during long commands.

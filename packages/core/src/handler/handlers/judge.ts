@@ -98,7 +98,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       }
       let shared: { [k: string]: JudgeJson } = {};
       if (cfg.state !== undefined) {
-        const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
+        const resolved = await resolveState(cfg.state, ctx, cfg.nodeId, stateMaxBytes);
         if ("fail" in resolved) return fail(resolved.fail);
         if ("halt" in resolved) return halt(resolved.halt);
         shared =
@@ -131,7 +131,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       }
     } else {
       if (cfg.state === undefined) return halt(`judge step "${cfg.nodeId}": neither state nor for-each configured`);
-      const resolved = await resolveState(cfg.state, ctx, cfg.nodeId);
+      const resolved = await resolveState(cfg.state, ctx, cfg.nodeId, stateMaxBytes);
       if ("fail" in resolved) return fail(resolved.fail);
       if ("halt" in resolved) return halt(resolved.halt);
       plan.push({ state: resolved.state, questions: cfg.questions });
@@ -304,7 +304,12 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
 
 type ResolvedState = { state: JudgeJson } | { fail: string } | { halt: string };
 
-async function resolveState(state: JudgeState, ctx: HandlerContext, nodeId: string): Promise<ResolvedState> {
+async function resolveState(
+  state: JudgeState,
+  ctx: HandlerContext,
+  nodeId: string,
+  stateMaxBytes: number,
+): Promise<ResolvedState> {
   const walk = async (s: JudgeState, path: string): Promise<ResolvedState> => {
     if (typeof s === "string") {
       try {
@@ -321,6 +326,16 @@ async function resolveState(state: JudgeState, ctx: HandlerContext, nodeId: stri
         };
       }
       try {
+        // Refuse an oversized file before it is in memory: the byte cap is
+        // checked again on the serialised state, but only after the read.
+        if (ctx.env.fileSize !== undefined) {
+          const size = await ctx.env.fileSize(s.file);
+          if (size > stateMaxBytes) {
+            return {
+              fail: `judge state \`${path}\`: "${s.file}" is ${size} bytes, over the ${stateMaxBytes}-byte cap (state-max-bytes)`,
+            };
+          }
+        }
         return { state: await ctx.env.readFile(s.file) };
       } catch (err) {
         return {

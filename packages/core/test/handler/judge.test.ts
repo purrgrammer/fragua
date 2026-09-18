@@ -129,6 +129,33 @@ function fresh(): Captured {
   return { messages: [], events: [], requests: [] };
 }
 
+describe("judge handler — bounded file reads", () => {
+  test("a {file} leaf over state-max-bytes is refused by size before it is read", async () => {
+    const c = fresh();
+    let read = false;
+    const env = {
+      ...stubEnv({ "big.md": "x" }),
+      fileSize: async () => 10_000_000,
+      readFile: async () => {
+        read = true;
+        return "x";
+      },
+    } as unknown as ExecutionEnvironment;
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      state: { doc: { file: "big.md" } },
+      questions: { ok: OK },
+      stateMaxBytes: 1024,
+    });
+    const res = await h.handler(stubCtx(c, { env, judge: stubJudge({ ok: { type: "noul", noul: 0.9 } }, c) }));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    expect(res.outcomeStatus).toBe("fail");
+    expect(res.failureReason).toMatch(/10000000 bytes, over the 1024-byte cap/);
+    expect(read).toBe(false);
+    expect(c.requests).toHaveLength(0);
+  });
+});
+
 describe("judge handler — malformed probabilities", () => {
   test("a choice answer missing an option's probability halts instead of folding a silent zero", async () => {
     const c = fresh();

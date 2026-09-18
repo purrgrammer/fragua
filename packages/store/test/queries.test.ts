@@ -724,7 +724,7 @@ describe("getStepAggregates — judge steps", () => {
     expect(llm!.nodeId).toBe("calibrate");
     expect(llm!.inputTokens).toBe(40);
     expect(llm!.outputTokens).toBe(5000);
-    expect(llm!.billedTokens).toBe(6280);
+    expect(llm!.billedTokens).toBe(5040);
     expect(llm!.costUsd).toBeCloseTo(0.1300504, 9);
     expect(llm!.costEventCount).toBe(3);
     expect(llm!.judgeCalls).toBe(1);
