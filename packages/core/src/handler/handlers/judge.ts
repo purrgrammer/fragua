@@ -164,7 +164,6 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     const usage = { input_tokens: 0, output_tokens: 0 };
     let costUsd = 0;
     let resolvedModel = model;
-    const costPayloads: Record<string, unknown>[] = [];
     for (const req of plan) {
       let response: Awaited<ReturnType<typeof judge.ask>>;
       try {
@@ -206,7 +205,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       usage.output_tokens += response.usage.output_tokens;
       costUsd += response.costUsd;
       resolvedModel = response.model;
-      costPayloads.push(judgeCostPayload(judge.provider, response));
+      // Emitted per chunk, before the next request: a provider failure on chunk
+      // two must not lose chunk one's billed spend from the log.
+      ctx.emit("cost.recorded", judgeCostPayload(judge.provider, response));
     }
     const durationMs = Date.now() - startedAt;
     const response = { model: resolvedModel, answers, usage, costUsd };
@@ -261,11 +262,13 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       provider: judge.provider,
       model: response.model,
       durationMs,
-      answers: capAnswersForEvent(response.answers),
+      // A list judge's N×Q answers cross the 4 KiB event cap at ~7 items and
+      // would truncate the whole payload to a marker; the `judge_node` row
+      // carries them, the event carries the per-item verdicts in `forEach`.
+      ...(items === undefined ? { answers: capAnswersForEvent(response.answers) } : {}),
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
       ...(forEachMeta !== undefined ? { forEach: forEachMeta } : {}),
     });
-    for (const payload of costPayloads) ctx.emit("cost.recorded", payload);
 
     const result: HandlerResult = {
       kind: "transition",
@@ -385,12 +388,24 @@ function foldAnswers(
     if (a.type === "choice" && q.type === "choice") {
       if (!(a.choice in q.criteria)) return { error: `question "${id}" chose "${a.choice}", not one of its options` };
       const probabilities: { [k: string]: OutputStructValue } = {};
-      for (const opt of Object.keys(q.criteria)) probabilities[opt] = num(a.probabilities[opt]);
+      for (const opt of Object.keys(q.criteria)) {
+        const p = a.probabilities[opt];
+        if (typeof p !== "number" || !Number.isFinite(p)) {
+          return { error: `question "${id}" has no probability for option "${opt}"` };
+        }
+        probabilities[opt] = p;
+      }
       outputs[id] = { choice: a.choice, confidence: num(a.confidence), probabilities };
     } else if (a.type === "score" && q.type === "score") {
       const levels = q.criteria.length;
       const probabilities: number[] = [];
-      for (let i = 0; i < levels; i++) probabilities.push(num(a.probabilities[String(i)]));
+      for (let i = 0; i < levels; i++) {
+        const p = a.probabilities[String(i)];
+        if (typeof p !== "number" || !Number.isFinite(p)) {
+          return { error: `question "${id}" has no probability for level ${i}` };
+        }
+        probabilities.push(p);
+      }
       let level = 0;
       for (let i = 1; i < levels; i++) if ((probabilities[i] ?? 0) > (probabilities[level] ?? 0)) level = i;
       outputs[id] = { score: num(a.score), level, confidence: num(a.confidence), probabilities };

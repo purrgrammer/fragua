@@ -115,7 +115,7 @@ steps:
           - adequate — covers the main paths with at least one concrete finding or an explicit all-clear
           - thorough — covers main and edge paths, findings cite path:line
     decide:
-      outcome: {question: schema_ok, min: 0.7}   # noul → success / fail (§3.4)
+      outcome: {schema_ok: 0.7}                  # noul → success / fail (§3.4)
     retry: synthesize                            # `retry:` = goal-gate + retarget, as today
     max-retries: 2
     next: signoff
@@ -908,6 +908,41 @@ the guard, `touched` 0.31 / 0.46 dropped two adjacent-code items; `scope`
 syntheses (0.59, 0.41, 0.90) over one borderline Medium — the same review
 text judged three ways is the remaining noise, and it is on the review-level
 gate, not the per-item ones.
+
+**After an independent multi-axis review of the branch** (seven axes, top-ten
+list), four of its findings changed the shipped shape and are worth keeping in
+mind as rules:
+
+- **A hazard noul on the artifact under review flags, it never drops.** The
+  first `injected` gate sent a flagged finding to `dropped`, which the
+  synthesiser never reads — a PR author could silence the finding about a
+  vulnerable line with one comment beside it. The RAG cookbook drops injected
+  *passages* because they are evidence for an answer; here the injected text
+  is the thing being reviewed. `injected` is now a question, not a `keep` rule;
+  the synthesiser must record any item with `injected ≥ 0.5` — kept or
+  dropped — at least as High, quoting the text.
+- **Do not ask Jev for a fact the state does not contain.** `touched` asked
+  whether a line was in the diff; the state carried plain code with no diff
+  markers, so the answer could only be a guess. The read step now looks
+  `in_diff` up in the patch (a boolean, a lookup) and the synthesiser drops on
+  it.
+- **The review-level `bar_held` was the composite the proposal bans** ("does
+  *every* finding clear the bar" is N judgments) and its 0.59 / 0.41 / 0.90
+  on one text was the drift; the per-item `concrete` and `in_diff` gates
+  already encode the bar. Removed.
+- **Keep arithmetic in code.** Three of `dependencies.review`'s four nouls
+  were a regex, a semver comparison, and a path filter; they are a `tool`
+  step now (`check-manifests.ts`) and the judge keeps `breaking_risk`, the
+  one question that needs reading.
+
+Also from that review: a chunk's `cost.recorded` is emitted as each request
+returns, so a provider failure on a later chunk cannot lose an earlier
+chunk's billed spend; a list judge's `judge.answered` event carries the
+per-item verdicts but not the N×Q answers (they crossed the 4 KiB cap at
+about seven items and the whole payload became a marker); a missing
+probability in an answer is a malformed-response halt, never a silent zero.
+The economics in §8.4 are restated: the saving was a sonnet verify becoming a
+cheaper read — the judge is what made that topology safe, at $0.0009.
 
 **Not changed, on purpose.** The canonical workflows keep `model: jev-latest`.
 The docs' condition for pinning a versioned id is thresholds tuned against

@@ -6,6 +6,7 @@ import {
   JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeAnswer,
   type JudgeClient,
+  JudgeProviderError,
   type JudgeQuestion,
   type JudgeRequest,
 } from "../../src/types/judge.ts";
@@ -202,6 +203,50 @@ describe("judge handler — for-each", () => {
     const msg = c.messages[0] as JudgeNodeMessage;
     expect(msg.forEach).toEqual({ count: 3, chunks: 3, kept: [0, 2] });
     expect(c.events.find((e) => e.type === "judge.requested")!.payload["chunks"]).toBe(3);
+  });
+
+  test("a for-each judge.answered event carries the per-item verdicts, not the N×Q answers", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
+    });
+    await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    const answered = c.events.find((e) => e.type === "judge.answered")!.payload;
+    expect(answered["answers"]).toBeUndefined();
+    expect(answered["forEach"]).toEqual({ count: 3, chunks: 1, kept: [0, 2] });
+  });
+
+  test("a provider failure on a later chunk keeps the earlier chunks' cost in the log", async () => {
+    const c = fresh();
+    let calls = 0;
+    const flaky: JudgeClient = {
+      provider: "typesafe",
+      async ask(req) {
+        c.requests.push(req);
+        calls += 1;
+        if (calls === 2) throw new JudgeProviderError("rate limited", "typesafe", 429, 1000);
+        return {
+          model: "jev-1.13.0",
+          answers: perItem(req),
+          usage: { input_tokens: 900, output_tokens: 40 },
+          costUsd: 900 * JUDGE_USD_PER_INPUT_TOKEN,
+        };
+      },
+    };
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS },
+      requestTokenBudget: 250 / 2.2,
+      stateTokenBudget: 250 / 2.2,
+    });
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, flaky));
+    expect(res.kind).toBe("pause_provider");
+    expect(c.requests).toHaveLength(2);
+    expect(c.events.filter((e) => e.type === "cost.recorded")).toHaveLength(1);
   });
 
   test("an item that cannot fit a request on its own is a routable fail", async () => {

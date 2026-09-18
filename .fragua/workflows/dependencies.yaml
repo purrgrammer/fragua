@@ -4,7 +4,7 @@
 # the inbox, where the per-bump rationale lives in the run transcript.
 #
 # Shape:
-#   update → changed? → lockfile_check → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
+#   update → changed? → lockfile_check → manifest_rules → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
 #               ↓none         ↓fail       ↑retry            ↓fail   ↓fail
 #              exit          update       update             fix ←───┘ → typecheck
 #
@@ -82,34 +82,22 @@ steps:
       git diff HEAD -- '*package.json' '**/package.json' > "$out/manifests.diff"
       bun install --frozen-lockfile
     on:
-      success: review
+      success: manifest_rules
       fail: update                     # lockfile drifted from the manifests ⇒ back to update (capped by its max-retries)
 
-  review:                              # (a)(b)(c) judged over the manifest diff — no repo reads needed, the diff is the evidence
+  manifest_rules:                      # (a)(b)(c) are a regex, a semver comparison, and a path filter — code, not judgment
+    type: tool
+    run: bun .fragua/scripts/dependencies/check-manifests.ts ${{ inputs.scope }}
+    on:
+      success: review
+      fail: update                     # a range, an out-of-scope bump, or a stray file ⇒ back to update, stderr names the rule
+
+  review:                              # the one question that needs reading — a pure producer, no gate
     type: judge
     state:
       scope:     ${{ inputs.scope }}
-      stat:      {file: .fragua/scratch/deps/stat.txt}
       manifests: {file: .fragua/scratch/deps/manifests.diff}
     questions:
-      exact_pins:
-        type: noul
-        instructions: In `manifests`, is every changed dependency version an EXACT pin?
-        criteria:
-          true: Every added or changed version string is a bare `major.minor.patch` (or a `workspace:` link left untouched)
-          false: Any changed line carries `^`, `~`, `>=`, `<`, `x`, `*`, a range, or a tag like `latest`
-      scope_respected:
-        type: noul
-        instructions: Does every bump in `manifests` stay within `scope`?
-        criteria:
-          true: Under `patch` only the third component changes; under `minor` the first component is unchanged; under `major` any bump is allowed
-          false: Any bump moves a component the scope forbids
-      manifests_only:
-        type: noul
-        instructions: Per `stat` and `manifests`, do the changes touch only dependency manifests?
-        criteria:
-          true: Every changed path is a package.json or bun.lock, and no `workspace:` internal dependency line is altered
-          false: A source, test, doc, or config file is in `stat`, or a `workspace:` line changed
       breaking_risk:
         type: score
         instructions: How likely is it that a bump in `manifests` carries a known breaking change a consumer must adapt to?
@@ -117,10 +105,6 @@ steps:
           - none — patch-level or clearly additive bumps only
           - possible — a minor bump on a library with a history of behavioural changes
           - likely — a major bump, or a bump across a documented breaking release
-    decide:
-      outcome: {exact_pins: 0.6, scope_respected: 0.6, manifests_only: 0.6}
-    retry: update
-    max-retries: 2
     next: typecheck
 
   typecheck:

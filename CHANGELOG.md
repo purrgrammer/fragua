@@ -57,12 +57,16 @@ guarantee.
   in run totals but had no step row).
 
 ### Changed
+- **`dependencies`: the pin, scope, and manifests-only rules run in code**
+  (`check-manifests.ts`) as a tool step; the judge keeps the breaking-risk score.
 - **`review` / `pr_review` lenses judge per finding.** On the full tier each lens
   is now scan → read → judge: the read step opens the cited code and records the
   evidence without a verdict, a `for-each` judge asks whether the finding holds
   and how severe it is (pr_review also: is it concrete, is it in changed code),
   and `keep` drops what falls under 0.6; every gate noul carries true / false
-  criteria, an injection guard drops evidence that addresses the reviewer, and
+  criteria, an injection-guard noul marks evidence that addresses the reviewer
+  (the synthesiser escalates it, it is never dropped), `pr_review`'s read step
+  looks up whether a finding sits in the diff, and
   the routers' options carry what / not-for / examples. `synthesize` receives the kept findings
   with the judge's probabilities and applies stated thresholds for weak evidence
   and contested severity.

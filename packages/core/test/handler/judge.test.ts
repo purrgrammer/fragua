@@ -129,6 +129,46 @@ function fresh(): Captured {
   return { messages: [], events: [], requests: [] };
 }
 
+describe("judge handler — malformed probabilities", () => {
+  test("a choice answer missing an option's probability halts instead of folding a silent zero", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({ nodeId: "j", state: "x", questions: { size: SIZE } });
+    const res = await h.handler(
+      stubCtx(c, {
+        judge: stubJudge(
+          { size: { type: "choice", choice: "quick", confidence: 0.9, probabilities: { quick: 0.9, full: 0.1 } } },
+          c,
+        ),
+      }),
+    );
+    expect(res.kind).toBe("halt");
+    if (res.kind === "halt") expect(res.detail).toMatch(/no probability for option "skip"/);
+  });
+
+  test("a score answer with a missing level halts", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({ nodeId: "j", state: "x", questions: { depth: DEPTH } });
+    const res = await h.handler(
+      stubCtx(c, {
+        judge: stubJudge(
+          {
+            depth: {
+              type: "score",
+              score: 1,
+              confidence: 0.9,
+              legend: { "0": "shallow", "1": "adequate" },
+              probabilities: { "0": 0.1, "1": 0.9 },
+            },
+          },
+          c,
+        ),
+      }),
+    );
+    expect(res.kind).toBe("halt");
+    if (res.kind === "halt") expect(res.detail).toMatch(/no probability for level 2/);
+  });
+});
+
 describe("judge handler — happy paths", () => {
   test("pure producer: derived outputs for choice / score / noul, cost from input tokens", async () => {
     const cap = fresh();
@@ -175,8 +215,9 @@ describe("judge handler — happy paths", () => {
     expect(cap.requests[0]!.questions).toEqual({ size: SIZE, ok: OK, depth: DEPTH });
 
     const types = cap.events.map((e) => e.type);
-    expect(types).toEqual(["judge.requested", "judge.answered", "cost.recorded"]);
-    const cost = cap.events[2]!.payload;
+    // cost lands as each request returns, so a later chunk failing never loses it
+    expect(types).toEqual(["judge.requested", "cost.recorded", "judge.answered"]);
+    const cost = cap.events[1]!.payload;
     expect(cost["input_tokens"]).toBe(500);
     expect(cost["cost_output_usd"]).toBe(0);
     expect(cost["model"]).toBe("jev-1.13.0");

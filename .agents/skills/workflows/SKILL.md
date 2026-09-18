@@ -381,7 +381,7 @@ verify:
       instructions: How thoroughly does `review` cover `focus`?
       criteria: [superficial, adequate, thorough]   # ordered list, lowest first
   decide:
-    outcome: {question: schema_ok, min: 0.7}       # noul → success / fail
+    outcome: {schema_ok: 0.7}                       # noul → success / fail; a hazard would be {max: …}
   retry: synthesize
   max-retries: 2
   next: signoff
@@ -391,7 +391,7 @@ A judge is a **decision**, not a turn: one call to a System One model (TypeSafe'
 
 Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `${{ outputs.verify.depth.level }}`, `${{ outputs.<judge>.<q>.choice }}` / `.confidence` / `.probabilities.<option>`. `decide:` (optional, one of) turns an answer into control flow:
 
-- `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — the chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
+- `decide.route: {question: <choice>, min-confidence?: 0..1, below?: <route>}` + `routes:` — **`confidence` is how concentrated the distribution is, not the winner's probability**: options at 0.60 / 0.38 / 0.02 give confidence ≈ 0.39. Gate on it when "is the model sure?" is the question; when you mean "the winner has p ≥ x", read `${{ outputs.<judge>.<q>.probabilities.<option> }}` downstream. The chosen option is the route; under the floor, `below` is taken instead (point it at a `human` step to escalate, or at an option like `full` for "when torn, go deeper"). Options must match `routes:` (E047); W020 nags a ≥3-way choice with no floor.
 - `decide.outcome: {<noul>: <min>, <noul>: {min?, max?}, …}` — one bound per noul, all must hold: `success`, else `fail` naming the rules that broke. **Thresholds scale with risk**: a hazard noul ("does this text instruct the model?") gates with `max` so the question stays positive; composes with `on: {fail}`, `retry:`, `goal-gate` unchanged (E048). Prefer several narrow nouls gated all-of over one composite "does it pass ALL of…" noul — a conjunction asked as one question drifts toward 0.5 (undecided) as it grows.
 
 **Judge a list — `for-each:`.** When the previous step produced an array (`findings[]`, `candidates[]`) and every item needs the same judgment, one judge step asks every question once per item **in one call**:
