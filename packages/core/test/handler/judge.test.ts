@@ -247,7 +247,13 @@ describe("judge handler — happy paths", () => {
     expect(result.outcomeStatus).toBeUndefined();
     const msg = cap.messages[0]!;
     if (msg.role === "judge_node")
-      expect(msg.decision).toEqual({ kind: "route", route: "full", belowThreshold: false });
+      expect(msg.decision).toEqual({
+        kind: "route",
+        route: "full",
+        belowThreshold: false,
+        confidence: 0.95,
+        minConfidence: 0.6,
+      });
   });
 
   test("decide.route: below min-confidence takes the `below` landing", async () => {
@@ -264,7 +270,13 @@ describe("judge handler — happy paths", () => {
     expect((result.outputs as Record<string, Record<string, unknown>>)["size"]!["choice"]).toBe("full");
     const msg = cap.messages[0]!;
     if (msg.role === "judge_node")
-      expect(msg.decision).toEqual({ kind: "route", route: "unsure", belowThreshold: true });
+      expect(msg.decision).toEqual({
+        kind: "route",
+        route: "unsure",
+        belowThreshold: true,
+        confidence: 0.41,
+        minConfidence: 0.6,
+      });
   });
 
   test("decide.route without a floor always takes the choice", async () => {
@@ -301,7 +313,12 @@ describe("judge handler — happy paths", () => {
     expect(failed.failureReason).toMatch(/ok=0\.18 \(≥ 0\.7\) out of bounds/);
     expect((failed.outputs as Record<string, unknown>)["ok"]).toEqual({ noul: 0.18 });
     const msg = capB.messages[0]!;
-    if (msg.role === "judge_node") expect(msg.decision).toEqual({ kind: "outcome", status: "fail" });
+    if (msg.role === "judge_node")
+      expect(msg.decision).toEqual({
+        kind: "outcome",
+        status: "fail",
+        rules: [{ question: "ok", value: 0.18, min: 0.7, holds: false }],
+      });
   });
 
   test("{file} leaves are read through ctx.env and nested mappings serialise as objects", async () => {

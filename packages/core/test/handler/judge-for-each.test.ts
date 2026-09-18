@@ -157,12 +157,18 @@ describe("judge handler — for-each", () => {
     });
     expect(res.outcomeStatus).toBeUndefined();
     const msg = c.messages[0] as JudgeNodeMessage;
-    expect(msg.forEach).toEqual({ count: 3, chunks: 1, kept: [0, 2] });
+    expect(msg.forEach).toEqual({
+      count: 3,
+      chunks: 1,
+      kept: [0, 2],
+      rules: [{ question: "holds", min: 0.6 }],
+      labels: ["off by one", "unused import", "null deref"],
+    });
     expect(Object.keys(msg.questions)).toEqual(["holds", "sev"]);
     const requested = c.events.find((e) => e.type === "judge.requested")!.payload;
     expect(requested["forEachCount"]).toBe(3);
     expect(requested["questionIds"]).toEqual(["holds", "sev"]);
-    expect(c.events.find((e) => e.type === "judge.answered")!.payload["forEach"]).toEqual({
+    expect(c.events.find((e) => e.type === "judge.answered")!.payload["forEach"]).toMatchObject({
       count: 3,
       chunks: 1,
       kept: [0, 2],
@@ -201,7 +207,7 @@ describe("judge handler — for-each", () => {
     expect(res.costUsd).toBeCloseTo(3 * 900 * JUDGE_USD_PER_INPUT_TOKEN, 12);
     expect(c.events.filter((e) => e.type === "cost.recorded")).toHaveLength(3);
     const msg = c.messages[0] as JudgeNodeMessage;
-    expect(msg.forEach).toEqual({ count: 3, chunks: 3, kept: [0, 2] });
+    expect(msg.forEach).toMatchObject({ count: 3, chunks: 3, kept: [0, 2] });
     expect(c.events.find((e) => e.type === "judge.requested")!.payload["chunks"]).toBe(3);
   });
 
@@ -216,7 +222,7 @@ describe("judge handler — for-each", () => {
     await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
     const answered = c.events.find((e) => e.type === "judge.answered")!.payload;
     expect(answered["answers"]).toBeUndefined();
-    expect(answered["forEach"]).toEqual({ count: 3, chunks: 1, kept: [0, 2] });
+    expect(answered["forEach"]).toMatchObject({ count: 3, chunks: 1, kept: [0, 2] });
   });
 
   test("a provider failure on a later chunk keeps the earlier chunks' cost in the log", async () => {

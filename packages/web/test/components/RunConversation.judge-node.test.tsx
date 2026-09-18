@@ -4,17 +4,14 @@
 // questions asked, the typed answers, and the `decide:` result. It renders
 // as one row per question plus a decision line; no transcript, no terminal.
 
+import type { JudgeNodeMessage } from "@fragua/types";
 import { cleanup, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { NodeState, RunMessageRow } from "../../src/lib/api.ts";
 import { renderWithClient } from "../helpers/with-query-client.tsx";
 
-function judgeRow(
-  decision?:
-    | { kind: "route"; route: string; belowThreshold: boolean }
-    | { kind: "outcome"; status: "success" | "fail" },
-): RunMessageRow {
+function judgeRow(decision?: JudgeNodeMessage["decision"]): RunMessageRow {
   return {
     ordinal: 1,
     nodeId: "triage",
@@ -60,7 +57,9 @@ describe("RunConversation — judge_node row", () => {
     const nodeStates: NodeState[] = [{ nodeId: "triage", iteration: 0, state: "completed", lastEventSeq: 1 }];
     const { container } = renderWithClient(
       <RunConversation
-        messages={[judgeRow({ kind: "route", route: "revise", belowThreshold: false })]}
+        messages={[
+          judgeRow({ kind: "route", route: "revise", belowThreshold: false, confidence: 0.98, minConfidence: 0.6 }),
+        ]}
         nodeStates={nodeStates}
       />,
     );
@@ -84,14 +83,27 @@ describe("RunConversation — judge_node row", () => {
 
   it("names the below-threshold landing and an outcome fail", () => {
     const below = renderWithClient(
-      <RunConversation messages={[judgeRow({ kind: "route", route: "unsure", belowThreshold: true })]} />,
+      <RunConversation
+        messages={[
+          judgeRow({ kind: "route", route: "unsure", belowThreshold: true, confidence: 0.41, minConfidence: 0.6 }),
+        ]}
+      />,
     );
-    expect(below.container.textContent).toContain(
-      "routed to unsure — the chosen option was below the confidence floor",
-    );
+    expect(below.container.textContent).toContain("routed to unsure — confidence 0.41 was below the floor (floor 0.6)");
     cleanup();
-    const failed = renderWithClient(<RunConversation messages={[judgeRow({ kind: "outcome", status: "fail" })]} />);
+    const failed = renderWithClient(
+      <RunConversation
+        messages={[
+          judgeRow({
+            kind: "outcome",
+            status: "fail",
+            rules: [{ question: "goal_met", value: 0.2, min: 0.7, holds: false }],
+          }),
+        ]}
+      />,
+    );
     expect(failed.container.textContent).toContain("gate failed — outcome fail");
+    expect(failed.container.querySelector("[data-testid='judge-rules']")?.textContent).toContain("goal_met 0.20 ≥ 0.7");
   });
 
   it("a decide-less judge renders answers with no decision line", () => {
@@ -121,7 +133,13 @@ describe("RunConversation — judge_node for-each row", () => {
           holds__0: { type: "noul", noul: 0.91 },
           holds__1: { type: "noul", noul: 0.2 },
         },
-        forEach: { count: 2, chunks: 1, kept: [0] },
+        forEach: {
+          count: 2,
+          chunks: 1,
+          kept: [0],
+          rules: [{ question: "holds", min: 0.6 }],
+          labels: ["a.ts:10", "b.ts:20"],
+        },
         durationMs: 800,
         timestamp: 0,
       },
@@ -137,5 +155,7 @@ describe("RunConversation — judge_node for-each row", () => {
     expect(items[0]!.textContent).toContain("0.91");
     expect(items[1]!.getAttribute("data-verdict")).toBe("dropped");
     expect(items[1]!.textContent).toContain("0.20");
+    expect(items[0]!.querySelector("[data-testid='judge-item-label']")?.textContent).toBe("a.ts:10");
+    expect(items[0]!.querySelector("[data-testid='judge-bound']")?.textContent).toBe("min 0.6");
   });
 });

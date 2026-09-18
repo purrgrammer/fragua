@@ -20,6 +20,11 @@ interface ParsedAnswer {
   torn: boolean;
 }
 
+export interface NoulThreshold {
+  min?: number;
+  max?: number;
+}
+
 interface QuestionBlockProps {
   id: string;
   type: JudgeQuestionType;
@@ -27,10 +32,22 @@ interface QuestionBlockProps {
   criteria?: unknown;
   answer: unknown;
   pending?: boolean;
+  /** The bound a `keep` / `decide.outcome` held this noul to — drawn on the
+   * yes bar so the margin is visible. */
+  threshold?: NoulThreshold;
 }
 
-export function QuestionBlock({ id, type, instructions, criteria, answer, pending }: QuestionBlockProps): JSX.Element {
+export function QuestionBlock({
+  id,
+  type,
+  instructions,
+  criteria,
+  answer,
+  pending,
+  threshold,
+}: QuestionBlockProps): JSX.Element {
   const parsed = parseAnswer(type, answer);
+  const bound = type === "noul" && threshold !== undefined ? describeBound(threshold) : undefined;
   // Score legends are sentences; choice ids and yes/no are words. Give the
   // label column the room its content needs so a level's meaning is readable
   // without hovering.
@@ -44,6 +61,11 @@ export function QuestionBlock({ id, type, instructions, criteria, answer, pendin
         <span className="text-sw-sm font-medium">{id}</span>
         <span className="text-sw-xs text-sw-muted">{type}</span>
         {parsed?.torn ? <span className="text-sw-xs text-sw-muted">undecided</span> : null}
+        {bound !== undefined ? (
+          <span className="text-sw-xs text-sw-muted" data-testid="judge-bound">
+            {bound}
+          </span>
+        ) : null}
         {parsed?.confidence !== undefined ? (
           <span className="ml-auto text-sw-xs text-sw-muted">confidence {parsed.confidence.toFixed(2)}</span>
         ) : null}
@@ -69,6 +91,19 @@ export function QuestionBlock({ id, type, instructions, criteria, answer, pendin
                   className={`absolute inset-y-0 left-0 rounded-sw-default ${o.chosen ? "bg-sw-text" : "bg-sw-accent-idle"}`}
                   style={{ width: `${Math.round(Math.max(0, Math.min(1, o.p)) * 100)}%` }}
                 />
+                {/* the bound, as a tick on the yes bar only — it is a p(yes) threshold */}
+                {threshold !== undefined && type === "noul" && o.label === "yes"
+                  ? [threshold.min, threshold.max]
+                      .filter((t): t is number => t !== undefined)
+                      .map((t) => (
+                        <span
+                          key={t}
+                          aria-hidden
+                          className="absolute inset-y-[-2px] w-px bg-sw-text"
+                          style={{ left: `${Math.round(t * 100)}%` }}
+                        />
+                      ))
+                  : null}
               </span>
               <span className={`w-10 shrink-0 text-right text-sw-xs ${o.chosen ? "" : "text-sw-muted"}`}>
                 {o.p.toFixed(2)}
@@ -144,6 +179,13 @@ export function parseAnswer(type: JudgeQuestionType, answer: unknown): ParsedAns
       chosen: k === top,
     }));
   return { options, torn, ...(confidence !== undefined ? { confidence } : {}) };
+}
+
+function describeBound(t: NoulThreshold): string {
+  const parts: string[] = [];
+  if (t.min !== undefined) parts.push(`min ${t.min}`);
+  if (t.max !== undefined) parts.push(`max ${t.max}`);
+  return parts.join(" · ");
 }
 
 export function instructionText(v: unknown): string {

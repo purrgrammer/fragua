@@ -117,6 +117,15 @@ export interface ToolNodeMessage {
   timestamp: number;
 }
 
+/** One threshold of a `decide.outcome`, with the noul it compared. */
+export interface JudgeRuleVerdict {
+  question: string;
+  value: number;
+  min?: number;
+  max?: number;
+  holds: boolean;
+}
+
 /** Row appended by a `type: judge` graph step — the questions asked and the
  * typed answers a System One model returned. Like `tool_node`, never feeds
  * back into an LLM context; the daemon filters it out of priorMessages. */
@@ -132,13 +141,21 @@ export interface JudgeNodeMessage {
   questions: Record<string, { type: "choice" | "score" | "noul"; instructions: unknown }>;
   /** question id → answer as returned by the API. */
   answers: Record<string, unknown>;
-  /** What `decide:` made of it, when present. */
+  /** What `decide:` made of it, when present — with the bound it was held to
+   * and the value it compared, so a card can show the margin. */
   decision?:
-    | { kind: "route"; route: string; belowThreshold: boolean }
-    | { kind: "outcome"; status: "success" | "fail" };
-  /** Set on a `for-each` judge: how many items were judged and, with a
-   * `keep:`, which indices stayed. `answers` is then keyed `<q>__<i>`. */
-  forEach?: { count: number; chunks: number; kept?: number[] };
+    | { kind: "route"; route: string; belowThreshold: boolean; confidence: number; minConfidence?: number }
+    | { kind: "outcome"; status: "success" | "fail"; rules: JudgeRuleVerdict[] };
+  /** Set on a `for-each` judge: how many items were judged, in how many
+   * requests, which indices a `keep:` kept, the `keep` bounds, and a short
+   * label per item (its first string field). `answers` is keyed `<q>__<i>`. */
+  forEach?: {
+    count: number;
+    chunks: number;
+    kept?: number[];
+    rules?: Array<{ question: string; min?: number; max?: number }>;
+    labels?: string[];
+  };
   durationMs: number;
   timestamp: number;
 }

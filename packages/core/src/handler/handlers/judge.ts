@@ -8,7 +8,7 @@
 // landing), a `noul` thresholds into success / fail. No tools, no thread, no
 // agent turn.
 
-import type { JudgeNodeMessage } from "@fragua/types";
+import type { JudgeNodeMessage, JudgeRuleVerdict } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import {
@@ -221,7 +221,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       forEachMeta = {
         count: items.length,
         chunks: plan.length,
+        labels: items.map(itemLabel),
         ...(folded.kept !== undefined ? { kept: folded.kept } : {}),
+        ...(cfg.keep !== undefined ? { rules: cfg.keep.rules } : {}),
       };
     } else {
       const folded = foldAnswers(cfg.questions, response.answers);
@@ -238,8 +240,14 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       decision === undefined
         ? undefined
         : decision.kind === "route"
-          ? { kind: "route", route: decision.route, belowThreshold: decision.belowThreshold }
-          : { kind: "outcome", status: decision.status };
+          ? {
+              kind: "route",
+              route: decision.route,
+              belowThreshold: decision.belowThreshold,
+              confidence: decision.confidence,
+              ...(decision.minConfidence !== undefined ? { minConfidence: decision.minConfidence } : {}),
+            }
+          : { kind: "outcome", status: decision.status, rules: decision.rules };
 
     const message: JudgeNodeMessage = {
       role: "judge_node",
@@ -465,6 +473,20 @@ function foldForEach(
   return { outputs, kept: keptIdx };
 }
 
+/** A short handle for an item on the card: its `location` or `id` when it has
+ * one, else its first string field, else its index. */
+function itemLabel(item: JudgeJson, index: number): string {
+  if (typeof item === "string") return item.slice(0, 80);
+  if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+    for (const key of ["location", "claim", "id", "title", "name", "text"]) {
+      const v = item[key];
+      if (typeof v === "string" && v.length > 0) return v.slice(0, 80);
+    }
+    for (const v of Object.values(item)) if (typeof v === "string" && v.length > 0) return v.slice(0, 80);
+  }
+  return `item ${index}`;
+}
+
 function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
@@ -472,8 +494,8 @@ function num(v: unknown): number {
 // ─────────────── decide ───────────────
 
 type Decision =
-  | { kind: "route"; route: string; belowThreshold: boolean }
-  | { kind: "outcome"; status: "success" | "fail"; reason: string }
+  | { kind: "route"; route: string; belowThreshold: boolean; confidence: number; minConfidence?: number }
+  | { kind: "outcome"; status: "success" | "fail"; reason: string; rules: JudgeRuleVerdict[] }
   | { error: string };
 
 function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, JudgeAnswer>): Decision | undefined {
@@ -487,23 +509,39 @@ function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, Ju
       decide.route.min_confidence !== undefined &&
       decide.route.below !== undefined &&
       a.confidence < decide.route.min_confidence;
-    return { kind: "route", route: below ? (decide.route.below as string) : a.choice, belowThreshold: below };
+    return {
+      kind: "route",
+      route: below ? (decide.route.below as string) : a.choice,
+      belowThreshold: below,
+      confidence: a.confidence,
+      ...(decide.route.min_confidence !== undefined ? { minConfidence: decide.route.min_confidence } : {}),
+    };
   }
   const held: string[] = [];
   const failed: string[] = [];
+  const verdicts: JudgeRuleVerdict[] = [];
   for (const rule of decide.outcome.rules) {
     const a = answers[rule.question];
     if (a === undefined || a.type !== "noul") {
       return { error: `decide.outcome question "${rule.question}" has no noul answer` };
     }
+    const holds = thresholdHolds(rule, a.noul);
+    verdicts.push({
+      question: rule.question,
+      value: a.noul,
+      holds,
+      ...(rule.min !== undefined ? { min: rule.min } : {}),
+      ...(rule.max !== undefined ? { max: rule.max } : {}),
+    });
     const shown = `${rule.question}=${a.noul.toFixed(2)}`;
-    (thresholdHolds(rule, a.noul) ? held : failed).push(`${shown} (${describeThreshold(rule)})`);
+    (holds ? held : failed).push(`${shown} (${describeThreshold(rule)})`);
   }
   const pass = failed.length === 0;
   return {
     kind: "outcome",
     status: pass ? "success" : "fail",
     reason: pass ? `${held.join(", ")} all within bounds` : `${failed.join(", ")} out of bounds`,
+    rules: verdicts,
   };
 }
 

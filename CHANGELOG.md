@@ -38,6 +38,10 @@ guarantee.
   provider is credentialed. The conversation view renders each call as a card:
   the state as a tree, every question with its answer as probability bars, the
   model and cost.
+- **Judge card shows its thresholds.** The decision line names the confidence and
+  the floor it was held to, or each outcome rule with its value and bound; a
+  gated noul's bar carries a tick at the bound; for-each groups are titled by
+  the item's location or claim.
 - **Cost tab: judge tool spend per step.** An llm step's cost popover shows the
   `judge` tool calls it made as their own row (calls, input tokens, recorded
   cost) instead of folding their tokens into the step's model buckets at the

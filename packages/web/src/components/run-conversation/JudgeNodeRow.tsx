@@ -6,7 +6,7 @@
 import type { JudgeNodeMessage } from "@fragua/types";
 import type { JSX } from "react";
 import { formatDuration } from "../../lib/time.ts";
-import { QuestionBlock } from "./judge-answers.tsx";
+import { type NoulThreshold, QuestionBlock } from "./judge-answers.tsx";
 
 interface JudgeNodeRowProps {
   message: JudgeNodeMessage;
@@ -26,7 +26,14 @@ export function JudgeNodeRow({ message, nodeId, testid }: JudgeNodeRowProps): JS
         <ForEachBlocks message={message} forEach={message.forEach} />
       ) : (
         Object.entries(message.questions).map(([id, q]) => (
-          <QuestionBlock key={id} id={id} type={q.type} instructions={q.instructions} answer={message.answers[id]} />
+          <QuestionBlock
+            key={id}
+            id={id}
+            type={q.type}
+            instructions={q.instructions}
+            answer={message.answers[id]}
+            threshold={outcomeBound(message.decision, id)}
+          />
         ))
       )}
       {message.decision !== undefined ? <DecisionLine decision={message.decision} /> : null}
@@ -49,6 +56,14 @@ function ForEachBlocks({
 }): JSX.Element {
   const keptSet = forEach.kept === undefined ? undefined : new Set(forEach.kept);
   const indices = Array.from({ length: forEach.count }, (_, i) => i);
+  const boundFor = (id: string): NoulThreshold | undefined => {
+    const rule = forEach.rules?.find((r) => r.question === id);
+    if (rule === undefined) return undefined;
+    return {
+      ...(rule.min !== undefined ? { min: rule.min } : {}),
+      ...(rule.max !== undefined ? { max: rule.max } : {}),
+    };
+  };
   return (
     <>
       {indices.map((i) => {
@@ -62,6 +77,14 @@ function ForEachBlocks({
           >
             <div className="flex items-center gap-2 px-3 pt-3 text-sw-xs uppercase tracking-[0.06em] text-sw-muted">
               <span>item {i}</span>
+              {forEach.labels?.[i] !== undefined ? (
+                <span
+                  className="min-w-0 truncate normal-case tracking-normal text-sw-text"
+                  data-testid="judge-item-label"
+                >
+                  {forEach.labels[i]}
+                </span>
+              ) : null}
               {verdict !== undefined ? (
                 <>
                   <span
@@ -79,6 +102,7 @@ function ForEachBlocks({
                 type={q.type}
                 instructions={q.instructions}
                 answer={message.answers[`${id}__${i}`]}
+                threshold={boundFor(id)}
               />
             ))}
           </div>
@@ -99,18 +123,39 @@ function DecisionLine({ decision }: { decision: NonNullable<JudgeNodeMessage["de
       : decision.belowThreshold
         ? "bg-sw-accent-warn"
         : "bg-sw-accent-success";
+  const floor =
+    decision.kind === "route" && decision.minConfidence !== undefined ? ` (floor ${decision.minConfidence})` : "";
   const text =
     decision.kind === "outcome"
       ? decision.status === "success"
         ? "gate passed — outcome success"
         : "gate failed — outcome fail"
       : decision.belowThreshold
-        ? `routed to ${decision.route} — the chosen option was below the confidence floor`
-        : `routed to ${decision.route}`;
+        ? `routed to ${decision.route} — confidence ${decision.confidence.toFixed(2)} was below the floor${floor}`
+        : `routed to ${decision.route} — confidence ${decision.confidence.toFixed(2)}${floor}`;
   return (
-    <div className="flex items-center gap-2 border-t border-sw-border px-3 py-2 text-sw-sm">
-      <span aria-hidden className={`size-2 shrink-0 rounded-full ${tone}`} />
-      <span>{text}</span>
+    <div className="flex flex-col gap-1 border-t border-sw-border px-3 py-2 text-sw-sm">
+      <div className="flex items-center gap-2">
+        <span aria-hidden className={`size-2 shrink-0 rounded-full ${tone}`} />
+        <span>{text}</span>
+      </div>
+      {decision.kind === "outcome" ? (
+        <ul className="flex flex-wrap gap-x-4 gap-y-0.5 pl-4 text-sw-xs text-sw-muted" data-testid="judge-rules">
+          {decision.rules.map((r) => (
+            <li key={r.question} className={r.holds ? "" : "text-sw-accent-error"}>
+              {r.question} {r.value.toFixed(2)} {r.min !== undefined ? `≥ ${r.min}` : ""}{" "}
+              {r.max !== undefined ? `≤ ${r.max}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
+}
+
+function outcomeBound(decision: JudgeNodeMessage["decision"], id: string): NoulThreshold | undefined {
+  if (decision === undefined || decision.kind !== "outcome") return undefined;
+  const r = decision.rules.find((x) => x.question === id);
+  if (r === undefined) return undefined;
+  return { ...(r.min !== undefined ? { min: r.min } : {}), ...(r.max !== undefined ? { max: r.max } : {}) };
 }
