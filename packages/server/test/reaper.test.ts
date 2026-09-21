@@ -62,12 +62,19 @@ describe("reapStaleDaemon", () => {
     s.enqueueRun({ runId: "orphan-run", workflowSha: "wf" });
     s.claimNextRun(1); // flips status → running
     s.forceAcquireDaemonLock(4242, "host-1");
+    const lockHeartbeat = s.currentDaemonLock()!.heartbeatAt;
 
     const now = () => Date.now() + 60_000;
     const r = reapStaleDaemon({ store: s, ttlMs: 30_000, now });
     expect(r.reaped).toBe(true);
     expect(r.swept?.requeued).toContain("orphan-run");
     expect(s.getState("orphan-run")?.status).toBe("queued");
+    // priorHeartbeatAt must actually flow into the requeue fact as the
+    // pre-crash liveness mark the reducer credits activeMs from — a bare
+    // status check wouldn't catch it being dropped.
+    const requeue = s.getEvents("orphan-run").find((e) => e.type === "fact.run_requeued_after_crash");
+    expect(requeue).toBeDefined();
+    expect((requeue!.payload as { lastAliveAt?: number }).lastAliveAt).toBe(lockHeartbeat);
   });
 
   test("idempotent — calling twice on a stale lock is safe", () => {

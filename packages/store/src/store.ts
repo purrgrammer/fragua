@@ -64,7 +64,9 @@ import {
 } from "./bundle.ts";
 import {
   deleteDaemonLock,
+  deleteDaemonLockIfMatches,
   deleteServerEndpoint,
+  forceDeleteDaemonLockRow,
   insertDaemonEvent,
   insertDaemonLock,
   selectDaemonEvents,
@@ -1337,6 +1339,67 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       deleteDaemonLock(this.db, pid);
     });
+  }
+
+  forceDeleteDaemonLock(): void {
+    this.writeTxn(() => {
+      forceDeleteDaemonLockRow(this.db);
+    });
+  }
+
+  evictDaemonLockIfStale(opts: {
+    ttlMs: number;
+    now?: () => number;
+    isHolderAlive?: (lock: DaemonLockRow) => boolean;
+  }): { evicted: boolean; swept?: SweepResult; stalePid?: number; priorHeartbeatAt?: number } {
+    const lock = this.currentDaemonLock();
+    if (lock == null) return { evicted: false };
+    const now = opts.now ?? this.now;
+    const nowMs = now();
+    const stale = nowMs - lock.heartbeatAt > opts.ttlMs;
+    // Keep a live holder's lock: skip only when the heartbeat is fresh AND
+    // (no liveness probe was supplied, or the probe says the holder is alive).
+    // A stale heartbeat evicts regardless of the probe (TTL takes precedence).
+    if (!stale && (opts.isHolderAlive == null || opts.isHolderAlive(lock))) {
+      return { evicted: false };
+    }
+    // Guarded delete FIRST, in ONE statement: a daemon that re-acquired between
+    // the snapshot above and this write installed a fresh pid/heartbeat, so the
+    // WHERE clause misses and its live lock is never clobbered.
+    //
+    // The sweep must not run before it. Sweeping first buys nothing — a crash
+    // in between is already covered, because every daemon boot runs
+    // `startupSweep` unconditionally — while costing correctness: on a lost
+    // race the guard spares the new holder's lock but the sweep has already
+    // flipped its `running` rows to `queued` underneath it. All the ordering
+    // gives up is the `priorHeartbeatAt` activeMs credit in that crash window.
+    let deleted = false;
+    this.writeTxn(() => {
+      deleted = deleteDaemonLockIfMatches(this.db, lock.pid, lock.heartbeatAt);
+    });
+    if (!deleted) return { evicted: false };
+    const sweepStart = this.now();
+    const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
+    // Mirror the daemon's direct-takeover audit trail so a harness-supervised
+    // (or server-reaper) recovery is visible in `daemon_events`.
+    this.appendDaemonEvent({
+      type: "daemon.reaper_took_over",
+      payload: {
+        priorPid: lock.pid,
+        priorHostname: lock.hostname,
+        priorHeartbeatAt: lock.heartbeatAt,
+        staleForMs: Math.max(0, nowMs - lock.heartbeatAt),
+      },
+    });
+    this.appendDaemonEvent({
+      type: "daemon.sweep_completed",
+      payload: {
+        requeued: swept.requeued.length,
+        quarantined: swept.quarantined.length,
+        durationMs: Math.max(0, this.now() - sweepStart),
+      },
+    });
+    return { evicted: true, swept, stalePid: lock.pid, priorHeartbeatAt: lock.heartbeatAt };
   }
 
   runStateCounts(): { running: number; queued: number } {

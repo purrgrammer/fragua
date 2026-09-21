@@ -7,7 +7,6 @@
 // the trivial transitions.
 
 import { mkdirSync } from "node:fs";
-import { hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
 import { parseDurationMs } from "@fragua/core";
 import {
@@ -17,7 +16,7 @@ import {
   startDaemon,
   WorktreeProvisioner,
 } from "@fragua/daemon";
-import { SqliteStore } from "@fragua/store";
+import { hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, resolveEnvPassthrough, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
 import { buildProviderCredentialContext, daemonEnvDeny } from "../env-creds.ts";
@@ -64,10 +63,11 @@ export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } 
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       // Pid is already gone; lock row is stale. Release it so the next
-      // start doesn't have to wait for the heartbeat TTL.
+      // start doesn't have to wait for the heartbeat TTL. Guard on the pid we
+      // snapshotted so a daemon that re-acquired between the read and here
+      // (fresh pid) is never clobbered by an unconditional delete.
       if (code === "ESRCH") {
-        store.forceAcquireDaemonLock(process.pid, hostnameSafe());
-        store.releaseDaemonLock(process.pid);
+        store.releaseDaemonLock(pid);
         console.log(chalk.dim(`stale lock cleared (pid=${pid} not running)`));
         return 0;
       }
@@ -87,14 +87,6 @@ export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } 
     return 1;
   } finally {
     store.close();
-  }
-}
-
-function hostnameSafe(): string {
-  try {
-    return osHostname();
-  } catch {
-    return "unknown";
   }
 }
 

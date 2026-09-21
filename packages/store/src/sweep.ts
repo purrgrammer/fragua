@@ -31,7 +31,8 @@ interface OrphanRow {
  */
 export interface StartupSweepOpts {
   /** Heartbeat timestamp captured from the dying daemon's lock just
-   * before the reaper called `forceAcquireDaemonLock`. Threaded into
+   * before the eviction cleared it (the harness supervisor's
+   * `evictDaemonLockIfStale`, or the server reaper). Threaded into
    * the `fact.run_requeued_after_crash` payload as `lastAliveAt` so
    * the reducer can credit pre-crash active time within ~5s. Omit on
    * the clean-acquire path. */
