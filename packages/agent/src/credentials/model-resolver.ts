@@ -5,8 +5,9 @@
 // thinking-level suffix parsing. Fragua only needs the small subset
 // wired into the workflow validator + daemon autodetect path today:
 //
-//   - defaultModelPerProvider: one valid id per KnownProvider, used
-//     when the user omits --model.
+//   - defaultModelPerProvider: one valid id per static-catalog
+//     KnownProvider (partial — dynamic-only providers such as `radius`
+//     are omitted), used when the user omits --model.
 //   - findByBareId: iterate the registry for "model `claude-opus-4-7`
 //     under any provider" (catches workflow nodes that declare a model
 //     but no provider).
@@ -26,8 +27,10 @@ import type { ModelRegistry } from "./model-registry.ts";
 /** Default model id per known pi-ai provider. Used when the user
  * passes `--provider <name>` without `--model`. Kept in sync with
  * pi-coding-agent's upstream. Every entry must exist in pi-ai's
- * built-in registry (enforced by tests). */
-export const defaultModelPerProvider: Record<KnownProvider, string> = {
+ * built-in registry (enforced by tests). Partial because purely
+ * dynamic providers (e.g. `radius`) carry no static catalog entry,
+ * so no built-in default id can resolve for them. */
+export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
   "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
   "ant-ling": "Ring-2.6-1T",
   anthropic: "claude-opus-4-8",
@@ -86,7 +89,7 @@ export function firstCredentialedProvider(
 ): { provider: string; model: Model<Api> } | undefined {
   const available = registry.getAvailable();
   for (const m of available) {
-    const def = (defaultModelPerProvider as Record<string, string>)[m.provider];
+    const def: string | undefined = defaultModelPerProvider[m.provider as KnownProvider];
     if (def && m.id === def) return { provider: m.provider, model: m };
   }
   // Fallback: no model matched the default list exactly — take any

@@ -30,7 +30,8 @@
 // Llm nodes only — other handler kinds (start/exit/tool/human)
 // don't LLM-dispatch.
 
-import { type Api, getModels, getProviders, type KnownProvider, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
 import { parseWorkflow } from "@fragua/core";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { findByBareId } from "./credentials/index.ts";
@@ -133,7 +134,7 @@ function buildOfflineIndex(): OfflineIndex {
   const byProvider = new Map<string, Model<Api>[]>();
   const all: Model<Api>[] = [];
   for (const provider of getProviders()) {
-    const models = getModels(provider as KnownProvider) as Model<Api>[];
+    const models = getModels(provider) as Model<Api>[];
     byProvider.set(provider, models);
     all.push(...models);
   }

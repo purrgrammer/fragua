@@ -183,7 +183,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     validateWorkflowModels: (yamlSource: string) => validateWorkflowModels(yamlSource, modelRegistry),
     authStorage,
     modelRegistry,
-    defaultModels: defaultModelPerProvider as Record<string, string>,
+    defaultModels: defaultModelPerProvider,
     testProvider: streamSimpleProviderTester,
     ...(maxQueuedRuns !== undefined ? { maxQueuedRuns } : {}),
     ...(webDistDir !== undefined ? { webDistDir } : {}),
