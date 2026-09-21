@@ -144,7 +144,7 @@ export interface JudgeNodeMessage {
   /** What `decide:` made of it, when present — with the bound it was held to
    * and the value it compared, so a card can show the margin. */
   decision?:
-    | { kind: "route"; route: string; belowThreshold: boolean; confidence: number; minConfidence?: number }
+    | { kind: "route"; route: string; belowThreshold: boolean; confidence?: number; minConfidence?: number }
     | { kind: "outcome"; status: "success" | "fail"; rules: JudgeRuleVerdict[] };
   /** Set on a `for-each` judge: how many items were judged, in how many
    * requests, which indices a `keep:` kept, the `keep` bounds, and a short

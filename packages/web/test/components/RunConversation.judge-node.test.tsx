@@ -106,6 +106,14 @@ describe("RunConversation — judge_node row", () => {
     expect(failed.container.querySelector("[data-testid='judge-rules']")?.textContent).toContain("goal_met 0.20 ≥ 0.7");
   });
 
+  it("a route decision recorded without a confidence still renders", () => {
+    const { container } = renderWithClient(
+      <RunConversation messages={[judgeRow({ kind: "route", route: "skip", belowThreshold: false })]} />,
+    );
+    expect(container.textContent).toContain("routed to skip");
+    expect(container.textContent).not.toContain("routed to skip — confidence");
+  });
+
   it("a decide-less judge renders answers with no decision line", () => {
     const { container } = renderWithClient(<RunConversation messages={[judgeRow()]} />);
     expect(container.textContent).toContain("yes");

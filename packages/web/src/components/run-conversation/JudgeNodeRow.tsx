@@ -125,14 +125,18 @@ function DecisionLine({ decision }: { decision: NonNullable<JudgeNodeMessage["de
         : "bg-sw-accent-success";
   const floor =
     decision.kind === "route" && decision.minConfidence !== undefined ? ` (floor ${decision.minConfidence})` : "";
+  const confidence =
+    decision.kind === "route" && decision.confidence !== undefined
+      ? ` — confidence ${decision.confidence.toFixed(2)}`
+      : "";
   const text =
     decision.kind === "outcome"
       ? decision.status === "success"
         ? "gate passed — outcome success"
         : "gate failed — outcome fail"
       : decision.belowThreshold
-        ? `routed to ${decision.route} — confidence ${decision.confidence.toFixed(2)} was below the floor${floor}`
-        : `routed to ${decision.route} — confidence ${decision.confidence.toFixed(2)}${floor}`;
+        ? `routed to ${decision.route}${confidence} was below the floor${floor}`
+        : `routed to ${decision.route}${confidence}${floor}`;
   return (
     <div className="flex flex-col gap-1 border-t border-sw-border px-3 py-2 text-sw-sm">
       <div className="flex items-center gap-2">
