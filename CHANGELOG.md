@@ -10,11 +10,22 @@ guarantee.
 
 ### Changed
 
+- **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
+  operator's provider credentials.** The daemon applies the same env-strip
+  `fragua ci` uses — every secret-shaped variable name (`*_KEY`, `*_SECRET`,
+  `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE`)
+  plus the env names of store-configured providers — to every shell subprocess,
+  including the worktree bootstrap command. A new `bash.env-passthrough:
+  [NAME, ...]` config key re-admits named non-credential variables, resolved per
+  run from the run's project config over global; provider credentials are never
+  re-admitted. `fragua ci --allow-env` now refuses provider credentials beyond
+  `*_API_KEY` too, pointing at `fragua providers add <provider>`. See
+  [`docs/execution-model.md`](docs/execution-model.md) §2c.
+
 - **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
   the providers and models added in that range — including the `radius`
-  provider — and pick up updated cost/context
-  metadata for existing models. Model ids already referenced by the built-in
-  workflows continue to resolve; no default model choices changed. `radius` is
+  provider — and pick up updated cost/context metadata for existing models.
+  Model ids already referenced by the built-in workflows continue to resolve; no default model choices changed. `radius` is
   a purely dynamic provider with no static catalog default, so `--provider
   radius` without an explicit `--model` has no built-in fallback.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a

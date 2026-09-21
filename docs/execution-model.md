@@ -75,6 +75,76 @@ order, `allowed_tools` order, or server response order.
 
 ---
 
+## 2c. Bash env-strip — provider credentials never reach shell steps
+
+Every `bash` call spawns `/bin/sh -c` with a filtered copy of the daemon's
+`process.env`. Under `fragua daemon` (and hence `fragua harness`) the filter
+strips, by default, every variable whose **name** ends in one of eight
+secret-shaped suffixes (the `CI_ENV_SECRET_SUFFIXES` set, matched
+case-insensitively): `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`,
+`*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE` — plus the env-var names of
+any provider the daemon holds credentials for in its store. This is the same
+rule `fragua ci` applies, so a workflow's shell steps can't read the operator's
+LLM-provider keys. Note the strip is **broader than provider credentials
+alone**: generic secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`,
+`VAULT_PASSPHRASE`, `S3_ACCESS_KEY`, `MYSQL_PASS`, or `SIGNING_KEY` are removed
+too (empty values included), with no diagnostic. The strip is applied at spawn
+time, so a secret-named variable set *after* the daemon started is still removed.
+
+The **worktree bootstrap command runs under this same strip** — `init()` shells
+the bootstrap through the same filtered environment as every `bash` step. So a
+`bun install` that needs `NPM_TOKEN`, a `gh auth login` needing `GITHUB_TOKEN`,
+or a `pip install` against a `*_PASSWORD`-shaped index URL silently loses those
+variables. To re-admit one, add its name to `bash.env-passthrough` (below) — or,
+for an actual provider credential, migrate it into the store via `fragua
+providers` (passthrough refuses provider credentials).
+
+To re-admit a specific non-credential variable — e.g. `GH_TOKEN` for a step that
+shells out to `gh` — list it under `bash.env-passthrough` in
+`.fragua/config.yaml`:
+
+```yaml
+bash:
+  env-passthrough:
+    - GH_TOKEN
+    - CI
+```
+
+The list merges global ⊕ project as a **whole-array replace** (a project list
+overrides the global one; it does not append). Provider credentials are never
+re-admitted even if named here — a provider credential listed under
+`bash.env-passthrough` is refused (surfaced in the daemon log, pointing at
+`fragua providers`) and still stripped regardless (same rail as
+`fragua ci --allow-env`). Refusals from the daemon's own launch-cwd config are
+surfaced once at startup; refusals discovered per-run from **another project's**
+config are warned once per unique name on first sight (deduped for the daemon's
+lifetime), so a project silently losing a provider credential still appears in
+the log without repeating on every provision. A name is
+treated as a provider credential by the `*_API_KEY` shape, the pi-ai registry, an
+`ANTHROPIC_OAUTH_TOKEN`-style always-refused name, or an **exact** provider
+prefix followed by a secret suffix (`OPENAI_SECRET` → `OPENAI`). The prefix match
+is exact: a name that merely *starts with* a provider prefix (`OPENAI_PROXY_AUTH`)
+is NOT a provider credential and stays re-admittable. A custom store-only
+provider's odd-shaped creds are caught separately — any secret-shaped env var
+carrying that provider's prefix is stripped whenever the provider is held in the
+store. `fragua ci` is unaffected by this key; it keeps its own `--allow-env`
+flag.
+
+Two daemon-scoping notes. First, `bash.env-passthrough` is resolved **per run**
+from the run's project config (`<run.cwd>/.fragua/config.yaml`) merged over the
+global `~/.fragua/config.yaml` — so each project served by one daemon picks up
+its own passthrough regardless of the daemon's launch cwd. This is a *different*
+config seam from `bootstrap`: passthrough merges global ⊕ project (a global
+passthrough applies everywhere), whereas `bootstrap` is **project-only** (a
+global bootstrap never leaks into a project that doesn't declare one). Second,
+the store-provider env-var names added to the strip
+are a **startup snapshot** of the daemon's held credentials; the suffix/prefix
+predicate covers virtually every real provider regardless, but a provider whose
+credential is added after startup is only covered by the predicate, not the
+snapshot.
+
+---
+
 ## 3. Worktree lifecycle
 
 | Phase | What happens |
