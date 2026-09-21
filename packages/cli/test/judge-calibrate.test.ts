@@ -87,9 +87,9 @@ describe("fragua judge calibrate", () => {
     seed([0.59, 0.62, 0.95]);
     expect(await judgeCalibrateCommand({ dbPath })).toBe(0);
     const out = lines.join("\n");
-    // The run was enqueued without a display name, so the report falls back
-    // to the workflow sha.
-    expect(out).toContain("sha");
+    // The run carries no display label, so the report falls back to the name
+    // the workflow was minted with.
+    expect(out).toContain("lens");
     expect(out).toContain("present");
     expect(out).toContain("keep");
     expect(out).toMatch(/near bound 2 \(67%\)/);
@@ -117,5 +117,58 @@ describe("fragua judge calibrate", () => {
     seed([0.8]);
     expect(await judgeCalibrateCommand({ dbPath, workflow: "other" })).toBe(0);
     expect(lines.join("\n")).toContain('workflow "other"');
+  });
+
+  test("the filter matches a run that carries no display label", async () => {
+    seed([0.8]);
+    expect(await judgeCalibrateCommand({ dbPath, workflow: "lens" })).toBe(0);
+    expect(lines.join("\n")).toContain("1 gate read(s)");
+  });
+
+  test("keep and its review band each get a line, counted once", async () => {
+    const store = new SqliteStore({ path: dbPath });
+    const src = `
+name: banded
+steps:
+  read:
+    prompt: p
+    outputs:
+      findings:
+        type: array
+        items: {type: object, fields: {claim: {type: string}}}
+    next: judge
+  judge:
+    type: judge
+    for-each: \${{ outputs.read.findings }}
+    questions:
+      present: {type: noul, instructions: Does \`item.claim\` hold?}
+    keep: {present: 0.6}
+    review: {present: {min: 0.3, max: 0.6}}
+    next: exit
+`;
+    store.saveWorkflow("sha2", "banded", src, serializeGraph(parseWorkflow(src)), CURRENT_IR_VERSION);
+    store.enqueueRun({ runId: "01ktest0000000000000000001", workflowSha: "sha2" });
+    store.appendMessage("01ktest0000000000000000001", {
+      content: {
+        role: "judge_node",
+        provider: "typesafe",
+        model: "jev-1.13.0",
+        statePreview: "",
+        stateBytes: 0,
+        questions: { present: { type: "noul", instructions: "q" } },
+        answers: { present__0: { type: "noul", noul: 0.45 } },
+        durationMs: 1,
+        timestamp: 0,
+      } as never,
+      nodeId: "judge",
+      iteration: 0,
+    });
+    store.close();
+    expect(await judgeCalibrateCommand({ dbPath, workflow: "banded" })).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("keep");
+    expect(out).toContain("review");
+    // One question, two bounds, one read — counted once in the totals.
+    expect(out).toContain("1 gate read(s)");
   });
 });

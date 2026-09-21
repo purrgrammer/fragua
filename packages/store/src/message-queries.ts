@@ -266,16 +266,20 @@ export interface JudgeAnswerRow {
   content: string;
 }
 
+// `run_state.workflow_name` is the display label and is null for a run
+// enqueued straight from a file path, so fall back to the name minted with the
+// workflow itself — otherwise an ad-hoc run is invisible to a name filter.
 const SELECT_JUDGE_MESSAGES_SQL = `
-  SELECT m.run_id        AS runId,
-         m.node_id       AS nodeId,
-         rs.workflow_name AS workflowName,
-         rs.workflow_sha  AS workflowSha,
-         m.content       AS content
+  SELECT m.run_id                              AS runId,
+         m.node_id                             AS nodeId,
+         COALESCE(rs.workflow_name, w.name)    AS workflowName,
+         rs.workflow_sha                       AS workflowSha,
+         m.content                             AS content
     FROM messages m
     JOIN run_state rs ON rs.run_id = m.run_id
+    LEFT JOIN workflows w ON w.sha = rs.workflow_sha
    WHERE m.content LIKE '%"role":"judge_node"%'
-     AND (?1 IS NULL OR rs.workflow_name = ?1)
+     AND (?1 IS NULL OR COALESCE(rs.workflow_name, w.name) = ?1)
    ORDER BY m.run_id, m.ordinal
 `;
 

@@ -34,15 +34,17 @@ interface Gate {
 }
 
 interface Reads {
-  gate: Gate | undefined;
+  /** Every bound that tests this question. `keep` and `review` both bound the
+   * same noul, and each wants its own line. */
+  gates: Gate[];
   values: number[];
 }
 
 /** Every noul / composite bound a judge node authors, by question id. */
-function gatesOf(attrs: Record<string, unknown>): Map<string, Gate> {
-  const out = new Map<string, Gate>();
+function gatesOf(attrs: Record<string, unknown>): Map<string, Gate[]> {
+  const out = new Map<string, Gate[]>();
   const add = (source: string, rules: readonly JudgeThreshold[] | undefined): void => {
-    for (const r of rules ?? []) out.set(r.question, { source, bound: r });
+    for (const r of rules ?? []) out.set(r.question, [...(out.get(r.question) ?? []), { source, bound: r }]);
   };
   const keep = attrs["judge_keep"] as { rules: JudgeThreshold[] } | undefined;
   const review = attrs["judge_review"] as { rules: JudgeThreshold[] } | undefined;
@@ -53,21 +55,20 @@ function gatesOf(attrs: Record<string, unknown>): Map<string, Gate> {
   add("review", review?.rules);
   add("decide.outcome", decide?.outcome?.rules);
   if (decide?.route?.min_confidence !== undefined) {
-    out.set(decide.route.question, {
-      source: "decide.route",
-      bound: { question: decide.route.question, min: decide.route.min_confidence },
-    });
+    add("decide.route", [{ question: decide.route.question, min: decide.route.min_confidence }]);
   }
   return out;
 }
 
 /** The single number a gate reads off an answer: a noul's probability, or a
  * choice's confidence when the gate is a routing floor. */
-function readValue(answer: unknown, source: string | undefined): number | undefined {
+function readValue(answer: unknown, gates: readonly Gate[]): number | undefined {
   if (typeof answer !== "object" || answer === null) return undefined;
   const a = answer as Record<string, unknown>;
   if (a["type"] === "noul" && typeof a["noul"] === "number") return a["noul"];
-  if (source === "decide.route" && typeof a["confidence"] === "number") return a["confidence"];
+  if (gates.some((g) => g.source === "decide.route") && typeof a["confidence"] === "number") {
+    return a["confidence"];
+  }
   return undefined;
 }
 
@@ -100,7 +101,7 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
     // run executed, so a threshold edited since is compared against its own
     // runs rather than against today's number.
     const byWorkflow = new Map<string, Map<string, Map<string, Reads>>>();
-    const gateCache = new Map<string, Map<string, Gate>>();
+    const gateCache = new Map<string, Map<string, Gate[]>>();
     const seenRuns = new Set<string>();
 
     for (const row of rows) {
@@ -119,7 +120,7 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
       if (gates === undefined) {
         const wf = store.getWorkflow(row.workflowSha);
         const node = wf === null ? undefined : deserializeGraph(wf.ir).nodes[row.nodeId];
-        gates = node === undefined ? new Map() : gatesOf(node.attrs as Record<string, unknown>);
+        gates = node === undefined ? new Map<string, Gate[]>() : gatesOf(node.attrs as Record<string, unknown>);
         gateCache.set(cacheKey, gates);
       }
 
@@ -133,10 +134,10 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
         // A for-each judge keys its answers `<question>__<item index>`; every
         // item is another read of the same gate.
         const id = rawId.split("__")[0] ?? rawId;
-        const gate = gates.get(id);
-        const value = readValue(answer, gate?.source);
+        const nodeGates = gates.get(id) ?? [];
+        const value = readValue(answer, nodeGates);
         if (value === undefined) continue;
-        const reads = questions.get(id) ?? { gate, values: [] };
+        const reads = questions.get(id) ?? { gates: nodeGates, values: [] };
         reads.values.push(value);
         questions.set(id, reads);
       }
@@ -153,28 +154,35 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
       ),
     );
     for (const [wf, nodes] of [...byWorkflow].sort()) {
-      const gatedNodes = [...nodes].sort().filter(([, qs]) => [...qs.values()].some((r) => r.gate !== undefined));
+      const gatedNodes = [...nodes].sort().filter(([, qs]) => [...qs.values()].some((r) => r.gates.length > 0));
       if (gatedNodes.length === 0) continue;
       console.log(`\n${chalk.bold(wf)}`);
       for (const [nodeId, questions] of gatedNodes) {
         console.log(`  ${chalk.cyan(nodeId)}`);
         for (const [qid, reads] of [...questions].sort()) {
-          const gate = reads.gate;
-          if (gate === undefined) continue;
           const vs = reads.values;
-          const near = vs.filter((v) => distanceToBound(gate.bound, v) <= margin).length;
+          if (vs.length === 0) continue;
           const band = vs.filter((v) => v >= UNCERTAIN_LO && v <= UNCERTAIN_HI).length;
-          totalGated += vs.length;
-          totalNear += near;
-          totalBand += band;
           const pct = (k: number): string => `${Math.round((k / vs.length) * 100)}%`;
-          const nearText = near === 0 ? chalk.green("0") : chalk.yellow(`${near} (${pct(near)})`);
-          console.log(
-            `    ${qid.padEnd(16)} ${chalk.dim(gate.source.padEnd(14))} ${describeBound(gate.bound).padEnd(12)}` +
-              ` n=${String(vs.length).padStart(4)}  near bound ${nearText}` +
-              `  uncertain ${band} (${pct(band)})` +
-              `  ${chalk.dim(`range ${Math.min(...vs).toFixed(2)}-${Math.max(...vs).toFixed(2)}`)}`,
-          );
+          // The same reads, once per bound that tests them. Only the primary
+          // decision counts toward the totals, so a `review:` band beside a
+          // `keep:` does not double-count its own question.
+          reads.gates.forEach((gate, i) => {
+            const near = vs.filter((v) => distanceToBound(gate.bound, v) <= margin).length;
+            if (i === 0) {
+              totalGated += vs.length;
+              totalNear += near;
+              totalBand += band;
+            }
+            const nearText = near === 0 ? chalk.green("0") : chalk.yellow(`${near} (${pct(near)})`);
+            console.log(
+              `    ${(i === 0 ? qid : "").padEnd(16)} ${chalk.dim(gate.source.padEnd(14))}` +
+                ` ${describeBound(gate.bound).padEnd(13)}` +
+                ` n=${String(vs.length).padStart(4)}  near bound ${nearText}` +
+                `  uncertain ${band} (${pct(band)})` +
+                `  ${chalk.dim(`range ${Math.min(...vs).toFixed(2)}-${Math.max(...vs).toFixed(2)}`)}`,
+            );
+          });
         }
       }
     }
