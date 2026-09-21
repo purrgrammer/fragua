@@ -31,7 +31,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { DAEMON_LOCK_TTL_MS, SqliteStore } from "@fragua/store";
+import { DAEMON_LOCK_TTL_MS, hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { startUpdateNotice } from "../update-notice.ts";
 import { FRAGUA_VERSION } from "../version.ts";
@@ -109,6 +109,9 @@ export interface HarnessCommandOptions {
    * via `web.port` from `~/.fragua/config.yaml`, then `DEFAULT_WEB_PORT`
    * (6767). Pass 0 for an ephemeral bind. */
   port?: number;
+  /** Bind address. When omitted, `startServer` resolves via `web.host`,
+   * then loopback. */
+  host?: string;
   /** Spawn seam for the daemon subprocess. Defaults to `Bun.spawn` with
    * inherited stdio; injected by tests to simulate crashes / hung shutdown. */
   spawn?: SpawnDaemon;
@@ -140,6 +143,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   try {
     const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir, version: FRAGUA_VERSION };
     if (opts.port !== undefined) startOpts.port = opts.port;
+    if (opts.host !== undefined) startOpts.hostname = opts.host;
     serverHandle = await startServer(startOpts);
   } catch (err) {
     console.error(chalk.red(`harness: failed to bind HTTP — ${(err as Error).message}`));
@@ -256,8 +260,8 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     // releasing its lock in `finally` before the gate times out) routes through
     // `registerFailure` with backoff instead of falling through to a bare
     // exit 1. A hard crash never runs the daemon's lock release, so the stale
-    // row survives; `evictStaleLock` clears it (TTL/liveness-gated, sweep
-    // first) so the new child acquires cleanly.
+    // row survives; `evictStaleLock` clears it (TTL/liveness-gated, then
+    // sweeps) so the new child acquires cleanly.
     const bootOrRestart = async () => {
       evictStaleLock(cfg.dbPath);
       const proc = spawn(argv);
@@ -275,6 +279,13 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
         } catch {
           /* ESRCH — already gone */
         }
+        // Reap before counting the failure. A SIGTERMed daemon that is still
+        // shutting down still answers `kill(pid, 0)`, so `evictStaleLock`
+        // rightly declines to clear its lock and the replacement cannot
+        // acquire — with a 500ms first backoff the supervisor would just burn
+        // its failure budget against its own dying child until the TTL closes.
+        await raceExit(proc.exited, cfg.shutdownGraceMs);
+        if (stopping) return;
         registerFailure(`daemon failed to acquire lock within ${cfg.lockWaitMs}ms`);
         return;
       }
@@ -354,14 +365,16 @@ async function gateReady(
  *  pid is reachable. `ESRCH` → the process is gone (`"dead"`); a successful
  *  probe → `"alive"`; `EPERM` → the pid exists but belongs to another user, so
  *  we can't attribute it to our crashed daemon (a recycled pid is common in
- *  small PID namespaces) — `"unknown"`, decided by the TTL instead. Any other
- *  error is treated as `"dead"`. */
+ *  small PID namespaces) — `"unknown"`, decided by the TTL instead. Only
+ *  `ESRCH` yields `"dead"`: every other errno (EINVAL, and whatever a future
+ *  runtime adds) is a probe we could not complete, and defaulting those to the
+ *  eviction-permitting branch would evict on a failure to know. */
 function probePidState(pid: number): "alive" | "dead" | "unknown" {
   try {
     process.kill(pid, 0);
     return "alive";
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM" ? "unknown" : "dead";
+    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "dead" : "unknown";
   }
 }
 
@@ -379,9 +392,10 @@ function pidHolderAlive(pid: number): boolean {
  *  the pid dead. A live daemon (fresh heartbeat + reachable pid), including an
  *  orphan from a SIGKILLed sibling harness, is left untouched so the
  *  replacement can't acquire the lock beside it and violate single-writer.
- *  On eviction the startup sweep runs FIRST (crediting the dead daemon's last
- *  heartbeat as `priorHeartbeatAt` so in-flight runs keep their pre-crash
- *  active-time credit), THEN the row is deleted — mirroring the server reaper.
+ *  The pid probe is only meaningful for a lock taken on THIS machine. A daemon
+ *  in another PID namespace (container vs host) or on another host sharing the
+ *  store over a network FS reports `ESRCH` for a perfectly live pid, so a
+ *  foreign-hostname lock ignores the probe and defers to the TTL arm.
  *  Opened `migrate: false`: the daemon owns migrations. Exported for tests to
  *  drive both the TTL arm and the dead-pid arm deterministically. */
 export function evictStaleLock(
@@ -394,7 +408,10 @@ export function evictStaleLock(
     store.evictDaemonLockIfStale({
       ttlMs: DAEMON_LOCK_TTL_MS,
       ...(opts?.now ? { now: opts.now } : {}),
-      isHolderAlive: (lock) => isPidAlive(lock.pid),
+      // A pid on another host is not ours to probe — treat it as alive and let
+      // the TTL decide, or we evict a live daemon over an ESRCH that only
+      // means "not in this namespace".
+      isHolderAlive: (lock) => lock.hostname !== hostnameSafe() || isPidAlive(lock.pid),
     });
   } finally {
     store.close();

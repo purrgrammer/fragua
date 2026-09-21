@@ -1,10 +1,10 @@
--- fragua event store schema — Revision 1 (0.1.0 baseline)
+-- fragua event store schema — canonical current shape.
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
--- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
--- This file is the canonical shape every DB starts at. There is no
--- walk-forward migration chain yet; `migrate()` creates this shape and
--- pins `schema_version` to 1. The first post-0.1.0 schema change bumps
--- the version and registers a step-delta in `migrations.ts`.
+-- This file is the shape a FRESH DB starts at: `migrate()` creates it and
+-- pins `schema_version` to `CURRENT_SCHEMA_VERSION` (see `pragmas.ts`).
+-- An EXISTING DB is walked forward through the reversible step chain in
+-- `migrations.ts` (`SCHEMA_MIGRATIONS`, each step `{ up, down? }`); this
+-- file always reflects the end state of that chain, not any single revision.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -214,9 +214,9 @@ CREATE INDEX IF NOT EXISTS idx_outputs_run ON outputs(run_id, node_id);
 
 -- Blob metadata only — the bytes live on the filesystem under the store's
 -- `blobsDir`, keyed by sha256. Keeping raw content out of SQLite keeps the
--- WAL small under large-artifact workloads; the `blobs` row + content file
--- are committed in that order so crashes leak orphan files (GC sweeps),
--- never dangling row pointers.
+-- WAL small under large-artifact workloads; the content file is written
+-- BEFORE the `blobs` row that points at it, so crashes leak orphan files
+-- (GC sweeps), never dangling row pointers.
 CREATE TABLE IF NOT EXISTS blobs (
   sha256 TEXT PRIMARY KEY,
   size_bytes INTEGER NOT NULL,

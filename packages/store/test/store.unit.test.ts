@@ -670,8 +670,11 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
-  test("evictDaemonLockIfStale spares a lock re-acquired between snapshot and delete", () => {
+  test("evictDaemonLockIfStale spares a lock re-acquired between snapshot and delete", async () => {
     const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "race-run", workflowSha: sha });
+    store.claimNextRun(1); // status → running
     store.forceAcquireDaemonLock(202, "host-b");
     // Race: a fresh daemon takes the lock after the liveness snapshot is read
     // but before the delete lands. The probe hook fires in that exact window.
@@ -687,10 +690,14 @@ describe("SqliteStore — daemon lock", () => {
     expect(res.evicted).toBe(false);
     expect(store.currentDaemonLock()).not.toBeNull();
     expect(store.currentDaemonLock()!.pid).toBe(303);
+    // …and the sweep must not have run either: requeuing 303's in-flight runs
+    // while sparing its lock is the worse half of losing this race.
+    expect(res.swept).toBeUndefined();
+    expect(store.getState("race-run")!.status).toBe("running");
     store.close();
   });
 
-  test("evictDaemonLockIfStale runs the sweep before deleting the lock", async () => {
+  test("evictDaemonLockIfStale sweeps only after the guarded delete lands", async () => {
     const store = freshStore();
     const sha = await seedWorkflow(store);
     store.enqueueRun({ runId: "sweep-run", workflowSha: sha });

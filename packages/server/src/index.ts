@@ -84,7 +84,7 @@ export interface ServerOptions {
    * injects @fragua/agent's `defaultModelPerProvider`; injected rather
    * than imported so @fragua/server carries no @fragua/agent runtime
    * dependency. */
-  defaultModels?: Readonly<Record<string, string>>;
+  defaultModels?: Readonly<Partial<Record<string, string>>>;
   /** 1-token probe behind `POST /providers/:name/test`. The CLI wires a
    * pi-ai `streamSimple`-backed implementation; injected rather than
    * imported so @fragua/server stays free of pi-ai — same seam as

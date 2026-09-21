@@ -57,6 +57,10 @@ Three properties fall out of this shape:
 
 Add the factory entry to `lib/queries.ts` **before** the hook call that needs it. Keys are tuples built from the domain's `all()` root. Keep the config as narrow as possible — only set `refetchInterval`, `staleTime`, etc. when the behavior actually differs from the defaults in `query-client.ts`.
 
+### Read-plane DTOs & soft-compat
+
+Run-read DTOs (`RunSummary`, `RunDetail`, …) are the read plane's TypeBox schemas from `@fragua/core/read-plane`, re-exported through `lib/api.ts` — never re-declare them. The `isRunSummary` / `isRunDetail` shape validators **soft-accept** old-daemon payloads that omit newer fields (they require identity/status and coerce missing metrics downstream). When a validator lets a field be absent, the exported type must say so: widen it to optional at the web boundary in `lib/api.ts` (e.g. `Omit<CoreRunSummary, "runStatus"> & { runStatus?: … | undefined }`) so the type matches runtime and the compiler forces every consumer to guard the missing case (`row.runStatus === undefined ? … : …`, `NonNullable<…>` for `Record` keys / status-filter arrays). Never let a validator gap and a required type diverge — that hides the `undefined` from every call site.
+
 ### Components never call `api.*` directly
 
 If you see `api.listX()` inside a component, something has jumped a layer. Route the call through `useQuery(queries.x.list(api))` (or `useMutation` when that lands). The one audit point is `lib/queries.ts`.

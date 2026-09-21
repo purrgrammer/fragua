@@ -815,6 +815,8 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+      ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
+      ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
     } satisfies RunEnqueuedPayload);
     const genesisBytes = utf8ByteLength(genesisPayload);
     if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
@@ -849,6 +851,8 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
+        baseGitSha: params.baseGitSha ?? null,
+        baseGitRef: params.baseGitRef ?? null,
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
@@ -1359,18 +1363,23 @@ export class SqliteStore implements IEventStore {
     if (!stale && (opts.isHolderAlive == null || opts.isHolderAlive(lock))) {
       return { evicted: false };
     }
-    // Sweep BEFORE clearing so a crash between the two leaves the stale row in
-    // place for the next boot to re-detect (mirroring the server reaper).
-    const sweepStart = this.now();
-    const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
-    // Guarded delete in ONE statement: a daemon that re-acquired between the
-    // snapshot above and this write installed a fresh pid/heartbeat, so the
+    // Guarded delete FIRST, in ONE statement: a daemon that re-acquired between
+    // the snapshot above and this write installed a fresh pid/heartbeat, so the
     // WHERE clause misses and its live lock is never clobbered.
+    //
+    // The sweep must not run before it. Sweeping first buys nothing — a crash
+    // in between is already covered, because every daemon boot runs
+    // `startupSweep` unconditionally — while costing correctness: on a lost
+    // race the guard spares the new holder's lock but the sweep has already
+    // flipped its `running` rows to `queued` underneath it. All the ordering
+    // gives up is the `priorHeartbeatAt` activeMs credit in that crash window.
     let deleted = false;
     this.writeTxn(() => {
       deleted = deleteDaemonLockIfMatches(this.db, lock.pid, lock.heartbeatAt);
     });
     if (!deleted) return { evicted: false };
+    const sweepStart = this.now();
+    const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
     // Mirror the daemon's direct-takeover audit trail so a harness-supervised
     // (or server-reaper) recovery is visible in `daemon_events`.
     this.appendDaemonEvent({
@@ -2225,6 +2234,8 @@ export class SqliteStore implements IEventStore {
               workflowScope: d.workflowScope,
               workflowPath: d.workflowPath,
               scheduleId: d.scheduleId,
+              baseGitSha: d.baseGitSha,
+              baseGitRef: d.baseGitRef,
             });
             writeRunStateProjection(this.db, {
               runId: d.runId,

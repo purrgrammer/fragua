@@ -11,13 +11,14 @@
 #
 # `surface` (structural | narrative | both) selects which collector(s) run.
 #
-# Shape: collect (deterministic inventory) → analyze (evidence-cited findings,
-# reading the snapshot + each skill's SKILL.md directly) → propose (edit blocks
-# for the doc-fixable findings; the rest go to a Manual list) → verify (quality gate:
-# drop weak findings, validate each edit's OLD/NEW against the doc) → apply (edit
-# tool, in the run's worktree; writes the PR body) → open_pr (commit the doc edits,
-# push a fresh per-run branch, open a PR). The first five steps share `thread: drift`
-# so the snapshot, findings, and edits carry forward.
+# Shape: collect (a `tool` step — runs the collector scripts, snapshot JSON lands
+# under `.fragua/scratch/drift/`) → analyze (evidence-cited findings, reading the
+# snapshot files + each skill's SKILL.md directly) → propose (edit blocks for the
+# doc-fixable findings; the rest go to a Manual list) → verify (quality gate: drop
+# weak findings, validate each edit's OLD/NEW against the doc) → apply (edit tool,
+# in the run's worktree; writes the PR body) → open_pr (commit the doc edits, push
+# a fresh per-run branch, open a PR). The four llm steps share `thread: drift` so
+# the findings and edits carry forward; the snapshot is re-read from disk.
 #
 # NO human gate. The PR review IS the gate: drift only ever edits docs and never
 # merges — a human reads the diff and merges. Runs unattended weekly in CI
@@ -65,18 +66,24 @@ defaults:
   model: claude-sonnet-4-6
 
 steps:
-  collect:
-    type: llm
-    model: claude-haiku-4-5
-    thread: drift
+  collect:                             # deterministic inventory — no model; a non-zero exit halts the run
+    type: tool
     next: analyze
-    allowed-tools: [bash]
-    prompt: |
-      Run the drift collector(s) for surface `${{ inputs.surface }}` via the bash tool — once each, in this order:
-        - structural or both → `bun .fragua/scripts/drift/structural.ts "${{ inputs.focus }}"`
-        - narrative  or both → `bun .fragua/scripts/drift/narrative.ts "${{ inputs.focus }}"`
-
-      Do not interpret, summarise, or reformat the JSON. If a script exits non-zero or emits malformed JSON, call `abort` with reason `collector failed: <exit code or parse error>`. Otherwise reply with EXACTLY: `collected`.
+    run: |
+      set -euo pipefail
+      out=.fragua/scratch/drift
+      rm -rf "$out" && mkdir -p "$out"
+      surface=${{ inputs.surface }}
+      focus=${{ inputs.focus }}
+      if [ "$surface" = structural ] || [ "$surface" = both ]; then
+        bun .fragua/scripts/drift/structural.ts "$focus" > "$out/structural.json"
+        jq -e . "$out/structural.json" > /dev/null
+      fi
+      if [ "$surface" = narrative ] || [ "$surface" = both ]; then
+        bun .fragua/scripts/drift/narrative.ts "$focus" > "$out/narrative.json"
+        jq -e . "$out/narrative.json" > /dev/null
+      fi
+      ls -la "$out"
 
   analyze:
     type: llm
@@ -84,7 +91,7 @@ steps:
     next: propose
     allowed-tools: [read, grep, find]
     prompt: |
-      Build a drift findings table from the collector snapshot(s) in this thread. Surface every discrepancy you can back with evidence — no speculation. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
+      Build a drift findings table from the collector snapshot(s) on disk: `.fragua/scratch/drift/structural.json` and/or `.fragua/scratch/drift/narrative.json` — read whichever exist (surface `${{ inputs.surface }}`). Surface every discrepancy you can back with evidence — no speculation. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
 
       If a STRUCTURAL snapshot is present (`contract_files`, `taxonomy`, `schema_sql`, `doc_code_blocks`, `recent_commits`, `contract_file_history`), cross-reference code↔docs surface by surface. Trust the snapshot values verbatim; re-read source only for surrounding context:
         1. Schema — every column / index / table / generated column / CHECK in `schema_sql` vs ARCHITECTURE.md §2.

@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { SqliteStore } from "@fragua/store";
+import { hostnameSafe, SqliteStore } from "@fragua/store";
 import {
   type DaemonProcess,
   evictStaleLock,
@@ -61,7 +61,7 @@ function makeFakeProc(pid: number): FakeProc {
 function acquireLock(dbPath: string, pid: number): boolean {
   const store = new SqliteStore({ path: dbPath, migrate: false });
   try {
-    return store.acquireDaemonLock(pid, "test-host").acquired;
+    return store.acquireDaemonLock(pid, hostnameSafe()).acquired;
   } finally {
     store.close();
   }
@@ -142,6 +142,41 @@ describe("superviseDaemon", () => {
     };
   }
 
+  test("reaps a gate-timed-out child before spawning its replacement", async () => {
+    const dbPath = await freshDbPath();
+    // A child whose `kill()` does NOT resolve `exited` at once — a real daemon
+    // takes time to shut down, and while it does it still answers
+    // `kill(pid, 0)`, so `evictStaleLock` refuses to clear its lock and the
+    // replacement cannot acquire. The supervisor must wait for the corpse.
+    const LINGER_MS = 150;
+    const exitedAt: number[] = [];
+    const spawnedAt: number[] = [];
+    // No child ever takes the lock, so every readiness gate times out.
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(6_000 + spawnedAt.length);
+      const realKill = p.kill.bind(p);
+      p.kill = (signal?: number) => {
+        setTimeout(() => {
+          exitedAt.push(Date.now());
+          realKill(signal);
+        }, LINGER_MS);
+      };
+      spawnedAt.push(Date.now());
+      return p;
+    };
+
+    const cfg = await makeConfig(dbPath, { lockWaitMs: 30, restartInitialBackoffMs: 1 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    expect(await waitFor(() => spawnedAt.length >= 2, 4_000)).toBe(true);
+    // The replacement must not predate the first child's exit.
+    expect(exitedAt.length).toBeGreaterThanOrEqual(1);
+    expect(spawnedAt[1]!).toBeGreaterThanOrEqual(exitedAt[0]!);
+
+    process.emit("SIGINT");
+    await done;
+    await cfg.serverHandle.close();
+  });
+
   test("restarts the daemon subprocess after an unexpected crash", async () => {
     const dbPath = await freshDbPath();
 
@@ -197,7 +232,7 @@ describe("superviseDaemon", () => {
     // A prior harness/daemon hard-crashed within the TTL: a fresh stale row is
     // left behind under a dead pid. The FIRST child must still acquire cleanly.
     const seed = new SqliteStore({ path: dbPath, migrate: false });
-    seed.forceAcquireDaemonLock(999_999, "dead-host");
+    seed.forceAcquireDaemonLock(999_999, hostnameSafe());
     seed.close();
 
     const procs: FakeProc[] = [];
@@ -229,7 +264,7 @@ describe("superviseDaemon", () => {
     seed.saveWorkflow("wf", "t", wf, serializeGraph(parseWorkflow(wf)), CURRENT_IR_VERSION);
     seed.enqueueRun({ runId: "orphan-run", workflowSha: "wf" });
     seed.claimNextRun(1); // status → running
-    seed.forceAcquireDaemonLock(999_999, "dead-host");
+    seed.forceAcquireDaemonLock(999_999, hostnameSafe());
     seed.close();
 
     const procs: FakeProc[] = [];
@@ -306,10 +341,10 @@ describe("superviseDaemon", () => {
     // Re-assert the blocking lock after the initial eviction so gateReady can
     // never see the child's pid, forcing the lockWaitMs deadline.
     const cfg = await makeConfig(dbPath, { lockWaitMs: 120 });
-    seed.forceAcquireDaemonLock(4242, "other-host");
+    seed.forceAcquireDaemonLock(4242, hostnameSafe());
     // The initial eviction clears it; re-hold it on a microtask so the child's
     // pid never appears under the lock.
-    const reHold = setInterval(() => seed.forceAcquireDaemonLock(4242, "other-host"), 10);
+    const reHold = setInterval(() => seed.forceAcquireDaemonLock(4242, hostnameSafe()), 10);
 
     const startedAt = Date.now();
     const code = await superviseDaemon(spawn, ["dummy"], cfg);
@@ -594,17 +629,32 @@ describe("evictStaleLock", () => {
     expect(lockPid(dbPath)).toBeNull();
   });
 
-  test("evicts a fresh lock whose pid is provably dead", async () => {
-    const { dbPath } = await seedLock(4242, "some-host");
+  test("evicts a fresh lock whose pid is provably dead on THIS host", async () => {
+    const { dbPath } = await seedLock(4242, hostnameSafe());
     // Fresh heartbeat, but the pid is gone (kill(pid,0) → ESRCH).
     evictStaleLock(dbPath, { isPidAlive: () => false });
     expect(lockPid(dbPath)).toBeNull();
   });
 
   test("leaves a fresh lock whose pid is alive (live daemon from another harness)", async () => {
-    const { dbPath } = await seedLock(4242, "some-host");
+    const { dbPath } = await seedLock(4242, hostnameSafe());
     // Fresh heartbeat AND a reachable pid — never evict a live daemon.
     evictStaleLock(dbPath, { isPidAlive: () => true });
     expect(lockPid(dbPath)).toBe(4242);
+  });
+
+  test("ignores the pid probe for a lock held on another host", async () => {
+    const { dbPath } = await seedLock(4242, "some-other-host");
+    // A daemon in another PID namespace (container vs host) or on another
+    // machine sharing the store reports ESRCH for a live pid. Only the TTL
+    // may evict it.
+    evictStaleLock(dbPath, { isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBe(4242);
+  });
+
+  test("the TTL still evicts a foreign-host lock", async () => {
+    const { dbPath, heartbeatAt } = await seedLock(4242, "some-other-host");
+    evictStaleLock(dbPath, { now: () => heartbeatAt + 30_001, isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBeNull();
   });
 });

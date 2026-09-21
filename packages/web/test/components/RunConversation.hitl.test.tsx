@@ -26,7 +26,7 @@ describe("RunConversation — HITL step card", () => {
 
   it("renders HitlStepCard at the tail of the matching node section", () => {
     const messages: RunMessageRow[] = [userRow(1, "review", "Please review the diff.")];
-    const nodeStates: NodeState[] = [{ nodeId: "review", iteration: 0, state: "running", lastEventSeq: 1 }];
+    const nodeStates: NodeState[] = [{ nodeId: "review", iteration: 0, state: "running", lastEventSeq: 1, pass: 0 }];
 
     const { container } = renderWithClient(
       <RunConversation
@@ -61,7 +61,7 @@ describe("RunConversation — HITL step card", () => {
   });
 
   it("synthesises an orphan node section when the paused node has no messages", () => {
-    const nodeStates: NodeState[] = [{ nodeId: "gate", iteration: 0, state: "running", lastEventSeq: 2 }];
+    const nodeStates: NodeState[] = [{ nodeId: "gate", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 }];
 
     const { container } = renderWithClient(
       <RunConversation
@@ -121,8 +121,8 @@ describe("RunConversation — HITL step card", () => {
       userRow(2, "review", "Here is the data."),
     ];
     const nodeStates: NodeState[] = [
-      { nodeId: "fetch", iteration: 0, state: "completed", lastEventSeq: 1 },
-      { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2 },
+      { nodeId: "fetch", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+      { nodeId: "review", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
     ];
 
     const { container } = renderWithClient(

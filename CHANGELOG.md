@@ -10,6 +10,32 @@ guarantee.
 
 ### Changed
 
+- **The HTTP server binds loopback (`127.0.0.1`) by default.** The API is
+  unauthenticated, so exposing it to the network is now opt-in: pass
+  `--host <addr>` to `fragua harness` / `fragua serve`, or set `web.host` in
+  `~/.fragua/config.yaml` (`"::"` for dual-stack). `web.host` is read from the
+  global config only; a project's `.fragua/config.yaml` cannot widen the bind.
+  Port auto-bump is unchanged.
+
+- **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
+  operator's provider credentials.** The daemon applies the same env-strip
+  `fragua ci` uses — every secret-shaped variable name (`*_KEY`, `*_SECRET`,
+  `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE`)
+  plus the env names of store-configured providers — to every shell subprocess,
+  including the worktree bootstrap command. A new `bash.env-passthrough:
+  [NAME, ...]` config key re-admits named non-credential variables, resolved per
+  run from the run's project config over global; provider credentials are never
+  re-admitted. `fragua ci --allow-env` now refuses provider credentials beyond
+  `*_API_KEY` too, pointing at `fragua providers add <provider>`. See
+  [`docs/execution-model.md`](docs/execution-model.md) §2c.
+
+- **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
+  the providers and models added in that range — including the `radius`
+  provider — and pick up updated cost/context metadata for existing models.
+  Model ids already referenced by the built-in workflows continue to resolve;
+  no default model choices changed. `radius` is
+  a purely dynamic provider with no static catalog default, so `--provider
+  radius` without an explicit `--model` has no built-in fallback.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
@@ -44,6 +70,13 @@ guarantee.
 
 ### Fixed
 
+- Accepting a run whose tail renamed or deleted tracked files no longer leaves
+  the old paths on disk as untracked copies. The worktree is now brought in line
+  with the staged tree after accept, so a following `git checkout` is not blocked
+  by "untracked working tree files would be overwritten".
+- A budget, priority, max-retries, goal-gate, or max-loops raise sent to a
+  running run no longer aborts the step in flight; the new ceiling applies at
+  the next step boundary. "Raise & Resume" no longer costs one wasted LLM call.
 - `fragua harness` now supervises the executor daemon instead of dying with it.
   An unexpected daemon exit is restarted with exponential backoff (500ms
   doubling to 30s, reset after 60s of healthy uptime); five consecutive fast
@@ -100,6 +133,14 @@ guarantee.
 
 ### Added
 
+- **`fragua run --base <ref>` pins the worktree base.** A run can now pin the git
+  ref (branch, tag, or sha) its worktree is provisioned from. The ref is resolved
+  to a commit sha at enqueue and stored on the run, so the worktree is built from
+  that sha regardless of where the enqueuing checkout's HEAD moves afterward — no
+  need to keep a branch checked out until the daemon provisions. An unresolvable
+  ref is rejected before the run is minted; the resolved sha is printed in the
+  enqueue output and shown by `fragua runs status`. Without `--base`, the base
+  still defaults to the cwd's HEAD at provision time.
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context
   Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
   is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a
@@ -434,7 +475,7 @@ guarantee.
   crash or pause mid-fan-out resumes by re-dispatching only the unfinished
   sub-nodes and replay reproduces the run. Budget is re-checked at each sub-node
   completion; a branch that repeatedly fails or overruns the per-branch timeout
-  pauses the run, naming it. See `docs/proposals/fan-out-nodes.md`.
+  pauses the run, naming it. See `docs/proposals/archive/fan-out-nodes.md`.
 - Custom model entries and per-model overrides in `provider_config` accept
   `thinkingLevelMap`, mapping pi thinking levels (`off`–`xhigh`) to
   provider-specific values (`null` marks a level unsupported). Anthropic-style
@@ -735,11 +776,6 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
   credentials), so the embedded-executor store is shareable.
 - `non_retryable` is now a retry-policy hint rather than a goal-gate gate
   ([core, agent]).
-
-### Fixed
-
-- Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
-  deflaked timer-fragile tests (#4).
 
 [0.8.0]: https://github.com/purrgrammer/fragua/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/purrgrammer/fragua/compare/v0.4.0...v0.5.0

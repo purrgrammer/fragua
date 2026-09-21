@@ -83,6 +83,12 @@ export interface EnqueueInput {
   workflowScope?: "global" | "local" | "path" | "ephemeral" | undefined;
   workflowPath?: string | undefined;
   scheduleId?: string | undefined;
+  /** Pinned worktree base, resolved to a commit sha at enqueue (CLI `--base`).
+   * Carried onto the genesis payload + `run_state.base_git_sha`; the provisioner
+   * provisions the worktree detached at this sha. */
+  baseGitSha?: string | undefined;
+  /** The `--base` ref as typed (branch/tag/sha) — human label for `baseGitSha`. */
+  baseGitRef?: string | undefined;
 }
 
 export type EnqueueBuild =
@@ -330,6 +336,8 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         ...(input.workflowScope !== undefined ? { workflowScope: input.workflowScope } : {}),
         ...(input.workflowPath !== undefined ? { workflowPath: input.workflowPath } : {}),
         ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+        ...(input.baseGitSha !== undefined ? { baseGitSha: input.baseGitSha } : {}),
+        ...(input.baseGitRef !== undefined ? { baseGitRef: input.baseGitRef } : {}),
       };
       return { ok: true, runId, params };
     },
