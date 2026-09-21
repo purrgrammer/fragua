@@ -9,7 +9,7 @@ last-reviewed: 2026-06-07
 # Fan-out nodes (Model A)
 
 Umbrella, the linearization invariant, and the spec reversal (A0):
-[concurrency.md](concurrency.md). This is the **node-level** primitive — "N
+[concurrency.md](../concurrency.md). This is the **node-level** primitive — "N
 fresh, parallel, read-only sessions over shared state, combined."
 
 ## Shape (DSL)
