@@ -9,7 +9,14 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, originHost, serveCommand, startServer } from "../src/commands/serve.ts";
+import {
+  DEFAULT_WEB_HOST,
+  DEFAULT_WEB_PORT,
+  isLoopbackBind,
+  originHost,
+  serveCommand,
+  startServer,
+} from "../src/commands/serve.ts";
 
 describe("startServer", () => {
   let handle: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -149,6 +156,30 @@ describe("startServer", () => {
     expect(originHost("192.168.1.20")).toBe("192.168.1.20");
   });
 
+  test("isLoopbackBind covers the whole 127.0.0.0/8 block, not just 127.0.0.1", () => {
+    for (const h of ["127.0.0.1", "127.0.0.2", "127.1.2.3", "::1", "localhost"]) {
+      expect(isLoopbackBind(h)).toBe(true);
+    }
+    for (const h of ["0.0.0.0", "::", "128.0.0.1", "10.0.0.1", "1270.0.0.1", "example.com"]) {
+      expect(isLoopbackBind(h)).toBe(false);
+    }
+  });
+
+  test("a project-level web.host is ignored, and says so", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    await mkdir(join(scratch, ".fragua"), { recursive: true });
+    await writeFile(join(scratch, ".fragua", "config.yaml"), "web:\n  host: '::'\n");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
+      expect(handle.origin).toContain("127.0.0.1");
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("ignoring web.host"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("a non-loopback bind warns; loopback does not", async () => {
     scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
     scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
@@ -157,6 +188,7 @@ describe("startServer", () => {
       handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome });
       expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("exposes"))).toBe(false);
       await handle.close();
+      handle = undefined;
       handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, hostname: "::" });
       expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("exposes"))).toBe(true);
     } finally {

@@ -31,12 +31,19 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 /** TCP port used when neither `--port` nor `web.port` (in
  * `~/.fragua/config.yaml`) is set. Picked once and stable so the user
- * can bookmark `http://localhost:6767/` across harness restarts. When
+ * can bookmark `http://127.0.0.1:6767/` across harness restarts. When
  * 6767 is occupied, `startServer` walks up one port at a time (see
  * `portRetries` below) so a stray collision doesn't kill startup. */
 export const DEFAULT_WEB_PORT = 6767;
 export const DEFAULT_WEB_HOST = "127.0.0.1";
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"]);
+/** Is this bind address reachable only from this machine? The whole
+ * `127.0.0.0/8` block is loopback, not just `127.0.0.1` — an exact-match set
+ * cried wolf on a `127.0.0.2` bind. `localhost` counts: it is resolver-
+ * dependent in principle, but a hosts file that maps it off-loopback is a
+ * compromise this warning is not the defence against. */
+export function isLoopbackBind(host: string): boolean {
+  return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+}
 
 /** Host part of the URL we publish for a given bind address. A wildcard bind
  * is reachable as `localhost`; a concrete address must be printed verbatim
@@ -188,12 +195,21 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // `--host` or `web.host`. A dual-stack or 0.0.0.0 occupant still trips
   // EADDRINUSE against 127.0.0.1, so port auto-bump keeps working. An
   // `::1`-only occupant on the same port is not detected, but it is also
-  // harmless: the published origin names the bound address, never
-  // `localhost`, so clients reach this listener and not the occupant. The config layer is global-only: a repo's committed
-  // .fragua/config.yaml must not be able to widen the bind for whoever runs
-  // the harness from it.
+  // harmless: the published origin names the address we actually bound, so
+  // clients reach this listener and not the occupant.
+  //
+  // The config layer is global-only: a repo's committed .fragua/config.yaml
+  // must not be able to widen the bind for whoever runs the harness from it.
   const globalCfg = await loadGlobalConfig(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
   const hostname = opts.hostname ?? globalCfg.web?.host ?? DEFAULT_WEB_HOST;
+  // Both layers validate against the same schema, so a project-level
+  // `web.host` parses clean and is then silently dropped here. Say so, or the
+  // operator edits the file and watches nothing change.
+  if (cfg.web?.host !== undefined && cfg.web.host !== globalCfg.web?.host) {
+    console.warn(
+      chalk.yellow(`serve: ignoring web.host in ${cwd}/.fragua/config.yaml — the bind address is global-only`),
+    );
+  }
   const portExplicit = opts.port !== undefined;
   // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
   // Keeping this here (not in the bin layer) means `fragua serve`,
@@ -230,7 +246,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   void lastErr;
   const port = server.port ?? 0;
   const origin = `http://${originHost(hostname)}:${port}`;
-  if (!LOOPBACK_HOSTS.has(hostname)) {
+  if (!isLoopbackBind(hostname)) {
     console.warn(chalk.yellow(`serve: binding ${hostname} exposes the unauthenticated API beyond this machine`));
   }
   // In web mode the API is scoped under `/api/*`; API-only mode keeps bare
