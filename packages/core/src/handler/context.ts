@@ -2,9 +2,9 @@ import type { AgentMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import { readGoalGateRetries } from "../routing.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
-import type { JudgeClient } from "../types/judge.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
+import type { JudgeClient } from "./judge-contract.ts";
 import type {
   ArtifactRef,
   ArtifactScope,

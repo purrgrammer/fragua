@@ -2,8 +2,8 @@
 // question validation, the cost.recorded emission, and the error surfaces.
 
 import { describe, expect, test } from "bun:test";
-import type { ExecutionEnvironment, JudgeClient, JudgeRequest } from "@fragua/core";
-import { JudgeProviderError } from "@fragua/core";
+import type { ExecutionEnvironment } from "@fragua/core";
+import { type JudgeClient, JudgeProviderError, type JudgeRequest } from "@fragua/core/handler";
 import { judgeTool } from "../src/judge-tool.ts";
 import type { FraguaToolContext } from "../src/types.ts";
 

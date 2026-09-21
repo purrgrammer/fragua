@@ -11,7 +11,8 @@
 // against it never sees a "not configured" answer at runtime.
 
 import type { JudgeJson, JudgeQuestion } from "@fragua/core";
-import { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload, parseJudgeQuestions } from "@fragua/core";
+import { parseJudgeQuestions } from "@fragua/core";
+import { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "@fragua/core/handler";
 import { Type } from "@sinclair/typebox";
 import type { Tool } from "./types.ts";
 

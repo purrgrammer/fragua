@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeJudgeClient, TYPESAFE_BASE_URL } from "../../src/handler/judge-client.ts";
-import { JudgeNotCredentialedError, JudgeProviderError, type JudgeRequest } from "../../src/types/judge.ts";
+import { JudgeNotCredentialedError, JudgeProviderError, type JudgeRequest } from "../../src/handler/judge-contract.ts";
 
 const REQ: JudgeRequest = {
   model: "jev-latest",

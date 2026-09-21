@@ -4,15 +4,15 @@
 // survives the attempts surfaces as `JudgeProviderError` for the handler to
 // map onto `pause_provider`.
 
+import { JUDGE_DEFAULT_PROVIDER } from "../types/judge.ts";
 import {
-  JUDGE_DEFAULT_PROVIDER,
   JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeClient,
   JudgeNotCredentialedError,
   JudgeProviderError,
   type JudgeRequest,
   type JudgeResponse,
-} from "../types/judge.ts";
+} from "./judge-contract.ts";
 
 export interface JudgeClientOpts {
   /** Resolved per call so a credential added after boot is picked up. */

@@ -5,8 +5,8 @@
 // See docs/SPEC.md §3.4.
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment, JudgeClient } from "@fragua/core";
-import type { HttpClient } from "@fragua/core/handler";
+import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@fragua/core";
+import type { HttpClient, JudgeClient } from "@fragua/core/handler";
 import type { Skill } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 

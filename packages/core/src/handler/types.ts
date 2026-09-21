@@ -8,8 +8,8 @@
 import type { AgentMessage, Message as PiMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
-import type { JudgeClient } from "../types/judge.ts";
 import type { OutputsValue } from "../types/outputs.ts";
+import type { JudgeClient } from "./judge-contract.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
 

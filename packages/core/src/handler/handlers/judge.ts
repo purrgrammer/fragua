@@ -20,19 +20,21 @@ import {
   JUDGE_DEFAULT_MODEL,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
   JUDGE_FOR_EACH_ITEMS_KEY,
-  type JudgeAnswer,
   type JudgeDecide,
   type JudgeJson,
   type JudgeKeep,
-  JudgeNotCredentialedError,
-  JudgeProviderError,
   type JudgeQuestion,
   type JudgeState,
-  judgeCostPayload,
   planForEachChunks,
   thresholdHolds,
 } from "../../types/judge.ts";
 import type { OutputStructValue, OutputsValue } from "../../types/outputs.ts";
+import {
+  type JudgeAnswer,
+  JudgeNotCredentialedError,
+  JudgeProviderError,
+  judgeCostPayload,
+} from "../judge-contract.ts";
 import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
 
 export interface JudgeConfig {

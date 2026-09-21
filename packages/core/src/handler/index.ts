@@ -1,5 +1,3 @@
-export type { JudgeAnswer, JudgeClient, JudgeRequest, JudgeResponse } from "../types/judge.ts";
-export { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "../types/judge.ts";
 export type { BuildContextOpts } from "./context.ts";
 export { buildHandlerContext } from "./context.ts";
 export type { MakeExternalCallOpts } from "./external-call.ts";
@@ -16,6 +14,8 @@ export type { IntentDecision } from "./intent-fold.ts";
 export { foldIntents } from "./intent-fold.ts";
 export type { JudgeClientOpts } from "./judge-client.ts";
 export { makeJudgeClient, TYPESAFE_BASE_URL } from "./judge-client.ts";
+export type { JudgeAnswer, JudgeClient, JudgeRequest, JudgeResponse } from "./judge-contract.ts";
+export { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "./judge-contract.ts";
 export type { LlmAccounting, LlmCallFn, LlmClientOpts } from "./llm-client.ts";
 export { makeLlmClient } from "./llm-client.ts";
 export { sha256Hex } from "./sha256.ts";

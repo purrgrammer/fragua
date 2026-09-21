@@ -8,7 +8,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
-import type { EventType, JudgeClient, JudgeRequest } from "@fragua/core";
+import type { EventType } from "@fragua/core";
+import type { JudgeClient, JudgeRequest } from "@fragua/core/handler";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 

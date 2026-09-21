@@ -1,17 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@fragua/types";
 import { makeJudgeHandler } from "../../src/handler/handlers/judge.ts";
-import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
-import type { ExecutionEnvironment } from "../../src/types/execution.ts";
 import {
   JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeAnswer,
   type JudgeClient,
   JudgeNotCredentialedError,
   JudgeProviderError,
-  type JudgeQuestion,
   type JudgeRequest,
-} from "../../src/types/judge.ts";
+} from "../../src/handler/judge-contract.ts";
+import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
+import type { ExecutionEnvironment } from "../../src/types/execution.ts";
+import type { JudgeQuestion } from "../../src/types/judge.ts";
 
 const emptyRegistry: ToolRegistry = {
   get: () => {

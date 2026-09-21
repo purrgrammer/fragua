@@ -3,11 +3,11 @@
 // a HandlerContext.
 
 import type { AgentMessage } from "@fragua/types";
+import type { JudgeClient } from "../handler/judge-contract.ts";
 import type { BudgetSnapshotInput } from "../handler/types.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { Node } from "../types/graph.ts";
-import type { JudgeClient } from "../types/judge.ts";
 import type { Outcome } from "../types/outcome.ts";
 import type { OutputsDecl } from "../types/outputs.ts";
 import type { SummaryLevel } from "../types/summary.ts";
