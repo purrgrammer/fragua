@@ -6,9 +6,7 @@
 //
 // We do NOT assert that toast text appears inside the live region — that
 // is sonner library behaviour and can be broken by `mock.module("sonner")`
-// calls in co-located test files that share the same bun process. The
-// `mutationToast` and toast call-site tests in `toast.test.ts` cover the
-// end-to-end wiring at the spy level instead.
+// calls in co-located test files that share the same bun process.
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";

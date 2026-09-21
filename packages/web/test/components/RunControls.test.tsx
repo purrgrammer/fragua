@@ -239,3 +239,26 @@ describe("RunControls — imported runs", () => {
     }
   });
 });
+
+describe("RunControls — missing runStatus (old-daemon payload)", () => {
+  afterEach(() => cleanup());
+
+  // `runStatus` is optional at the web boundary: an old-daemon payload can
+  // omit it, leaving `runStatus === undefined`. The component must render
+  // without crashing when it can't distinguish the pause sub-status. With no
+  // raw status to gate on, Cancel falls through (`undefined !== "paused"`).
+  test("paused run with undefined runStatus still renders operate controls (no crash)", () => {
+    // Rendered directly: passing `undefined` to `renderControls` would trip
+    // its parameter default back to "running".
+    const { restore } = installFetchMock({});
+    const { getByTestId } = renderWithClient(
+      <RunControls runId="run-99" status="paused" runStatus={undefined} imported={false} />,
+    );
+    try {
+      getByTestId("run-controls");
+      getByTestId("run-controls-cancel");
+    } finally {
+      restore();
+    }
+  });
+});

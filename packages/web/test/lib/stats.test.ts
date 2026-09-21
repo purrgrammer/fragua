@@ -9,25 +9,8 @@
 //     terminal runs exist.
 
 import { describe, expect, it } from "vitest";
-import type { RunSummary } from "../../src/lib/api.ts";
 import { computeStats } from "../../src/lib/stats.ts";
-
-function row(overrides: Partial<RunSummary> = {}): RunSummary {
-  return {
-    runId: overrides.runId ?? "r",
-    startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",
-    status: overrides.status ?? "success",
-    eventCount: overrides.eventCount ?? 1,
-    costUsd: overrides.costUsd ?? 0,
-    inputTokens: overrides.inputTokens ?? 0,
-    outputTokens: overrides.outputTokens ?? 0,
-    ...(overrides.cacheReadTokens !== undefined ? { cacheReadTokens: overrides.cacheReadTokens } : {}),
-    ...(overrides.cacheWriteTokens !== undefined ? { cacheWriteTokens: overrides.cacheWriteTokens } : {}),
-    ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
-    ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
-    ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
-  };
-}
+import { summaryRow as row } from "../helpers/fixtures.ts";
 
 describe("computeStats", () => {
   it("returns all-zero tiles for an empty list", () => {
