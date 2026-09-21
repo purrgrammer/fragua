@@ -9,11 +9,13 @@ import {
   isSettled,
   isTerminal,
   mapStatus,
+  RUN_STATE_FACT_TYPES,
   RUN_STATUSES,
   type RunStatus,
   SETTLED_STATUS_TERMINAL_FACT,
   SETTLED_STATUSES,
   TERMINAL_FACT_TYPES,
+  TERMINAL_RUN_FACT_TYPES,
 } from "../src/index.ts";
 
 describe("enum literal tuples", () => {
@@ -43,6 +45,30 @@ describe("enum literal tuples", () => {
     const expected = new Set(["fact.run_terminated", "fact.run_quarantined"]);
     expect(TERMINAL_FACT_TYPES).toEqual(expected);
     expect(new Set(Object.values(SETTLED_STATUS_TERMINAL_FACT))).toEqual(TERMINAL_FACT_TYPES);
+  });
+
+  test("RUN_STATE_FACT_TYPES pins the v4 + LEGACY run-state facts, both directions", () => {
+    // Pinned so dropping a LEGACY fold literal during a refactor fails here.
+    const expected = new Set([
+      "fact.run_paused",
+      "fact.run_resumed",
+      "fact.run_terminated",
+      "fact.run_quarantined",
+      "fact.run_paused_human",
+      "fact.run_completed",
+      "fact.run_halted",
+      "fact.run_cancelled",
+    ]);
+    expect(RUN_STATE_FACT_TYPES).toEqual(expected);
+  });
+
+  test("TERMINAL_RUN_FACT_TYPES = TERMINAL_FACT_TYPES ∪ LEGACY terminal facts, both directions", () => {
+    const expected = new Set([...TERMINAL_FACT_TYPES, "fact.run_completed", "fact.run_halted", "fact.run_cancelled"]);
+    expect(TERMINAL_RUN_FACT_TYPES).toEqual(expected);
+    // Every terminal run fact is a run-state fact.
+    for (const t of TERMINAL_RUN_FACT_TYPES) {
+      expect(RUN_STATE_FACT_TYPES.has(t)).toBe(true);
+    }
   });
 
   test("isSettled is isTerminal plus quarantined, and quarantined is NOT terminal", () => {

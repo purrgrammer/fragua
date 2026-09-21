@@ -93,12 +93,28 @@ function checkGate(
  * plain deletions so their old paths are removed too.
  *
  * A non-zero exit from the delete-listing diff (corrupt index, wrong cwd) is
- * propagated via `mustGit` rather than swallowed: leaving stale worktree files
- * silently would let `accept` report success on a possibly inconsistent tree. */
+ * propagated rather than swallowed: leaving stale worktree files silently would
+ * let `accept` report success on a possibly inconsistent tree. */
 async function pruneDeletedWorktreePaths(git: GitExec, cwd: string): Promise<void> {
-  const out = await mustGit(git, cwd, ["diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z"]);
-  const paths = out.split("\0").filter((p) => p !== "");
-  await Promise.all(paths.map((p) => rm(join(cwd, p), { force: true })));
+  // Index paths are relative to the repo toplevel, but `cwd` is the run's
+  // project root, which may sit in a subdirectory of it (the project root is
+  // the nearest `.fragua/config.yaml`, only *bounded* by the git root). Joining
+  // against `cwd` there would miss the real files and unlink unrelated ones.
+  const top = await mustGit(git, cwd, ["rev-parse", "--show-toplevel"]);
+  // Not `mustGit`: it trims, and a NUL-separated listing whose first entry
+  // begins with whitespace would lose that leading space and name a different,
+  // undeleted file.
+  const r = await git(cwd, ["diff", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z"]);
+  if (r.exitCode !== 0) {
+    throw new Error(`git diff --cached --diff-filter=D failed (${r.exitCode}): ${r.stderr.trim() || r.stdout.trim()}`);
+  }
+  // Sequential, not `Promise.all`: a rejecting `rm` there leaves siblings in
+  // flight, and the caller's `reset --hard` could restore a path a straggler
+  // then unlinks.
+  for (const path of r.stdout.split("\0")) {
+    if (path === "") continue;
+    await rm(join(top, path), { force: true });
+  }
 }
 
 /** Run the post-stage prune and, on failure, roll the index+worktree back to
@@ -309,4 +325,21 @@ export async function applyDiscard(git: GitExec, gate: RunActionGate): Promise<D
     deleted.push(ref);
   }
   return { ok: true, refs: deleted };
+}
+
+export type BaseRefResolution = { ok: true; sha: string; ref: string } | { ok: false; error: string };
+
+/** Resolve a `fragua run --base <ref>` argument to a concrete commit sha, so a
+ * run pins a base independent of the cwd's live HEAD. Returns the sha plus the
+ * ref as typed (the human label stored on `run_state.base_git_ref`). A ref that
+ * doesn't resolve — or a non-git cwd — yields `{ ok: false }` carrying git's own
+ * diagnostic so the caller can refuse the enqueue with something actionable. */
+export async function resolveBaseRef(git: GitExec, cwd: string, ref: string): Promise<BaseRefResolution> {
+  const r = await git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  const sha = r.stdout.trim();
+  if (r.exitCode !== 0 || sha === "") {
+    const detail = r.stderr.trim() || r.stdout.trim() || `exit ${r.exitCode}`;
+    return { ok: false, error: `--base ${ref} is not a valid ref in ${cwd}: ${detail}` };
+  }
+  return { ok: true, sha, ref };
 }

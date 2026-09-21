@@ -46,7 +46,8 @@ export interface LocalEnvironmentOptions {
   defaultTimeoutMs?: number;
   /** Additional blocklist patterns appended to the built-in defaults. */
   extraBlockedPatterns?: string[];
-  /** CI-profile only (proposal §6 unit 9b). When set, every named env var is
+  /** Set by `fragua ci` (full perimeter strip) and by `fragua daemon` / harness
+   * (`daemonEnvDeny` provider-credential strip). When set, every named env var is
    * deleted from the spawned subprocess env AFTER the `{ ...process.env,
    * ...opts.env }` merge — so even a caller-supplied opts.env override of a
    * denied name is stripped. When unset (the default — operator-trusted local

@@ -42,6 +42,13 @@ describe("defaultModelPerProvider invariants", () => {
       expect(m, `provider "${provider}" default "${modelId}" does not resolve`).toBeDefined();
     }
   });
+
+  // pi-ai 0.80.x added `radius`, a purely dynamic provider with no static
+  // catalog entry. It's a KnownProvider but carries no built-in default id,
+  // so the map is partial and must not list it (any id would fail to resolve).
+  test("omits purely dynamic providers that have no static catalog default", () => {
+    expect(defaultModelPerProvider).not.toHaveProperty("radius");
+  });
 });
 
 describe("findByBareId — lenient validator path", () => {

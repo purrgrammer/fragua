@@ -22,7 +22,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 

@@ -494,8 +494,9 @@ const INSERT_RUN_STATE_SQL = `
     run_id, version, status, current_node, workflow_sha,
     contract_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+    cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id,
+    base_git_sha, base_git_ref
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -517,6 +518,8 @@ export function insertRunState(
     workflowScope: "global" | "local" | "path" | "ephemeral" | null;
     workflowPath: string | null;
     scheduleId: string | null;
+    baseGitSha?: string | null;
+    baseGitRef?: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -536,6 +539,8 @@ export function insertRunState(
     args.workflowScope,
     args.workflowPath,
     args.scheduleId,
+    args.baseGitSha ?? null,
+    args.baseGitRef ?? null,
   );
 }
 

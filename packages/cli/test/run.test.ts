@@ -215,6 +215,68 @@ describe("fragua run", () => {
     expect(errs.join("\n")).toContain("is not valid JSON");
   });
 
+  test("--base with an unresolvable ref → exit 1, nothing enqueued", async () => {
+    const r = rig();
+    const errs: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errs.push(args.map(String).join(" "));
+    };
+    try {
+      // A real git repo so `git rev-parse` runs but the ref doesn't resolve.
+      const repo = mkdtempSync(join(tmpdir(), "fragua-base-"));
+      tmps.push(repo);
+      Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo });
+      Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+        cwd: repo,
+      });
+      const code = await runCommand({
+        workflow: writeWorkflow(),
+        dbPath: r.dbPath,
+        cwd: repo,
+        follow: false,
+        base: "no-such-ref-xyz",
+      });
+      expect(code).toBe(1);
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      console.error = originalError;
+      await r.close();
+    }
+    expect(errs.join("\n")).toContain("no-such-ref-xyz");
+  });
+
+  test("--base resolves a ref to a sha and pins it on the run", async () => {
+    const r = rig();
+    try {
+      const repo = mkdtempSync(join(tmpdir(), "fragua-base-ok-"));
+      tmps.push(repo);
+      Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo });
+      Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+        cwd: repo,
+      });
+      const head = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: repo })
+        .stdout.toString()
+        .trim();
+      const code = await runCommand({
+        workflow: writeWorkflow(),
+        dbPath: r.dbPath,
+        cwd: repo,
+        follow: false,
+        base: "HEAD",
+      });
+      expect(code).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      const state = r.store.getState(runId)!;
+      expect(state.baseGitSha).toBe(head);
+      expect(state.baseGitRef).toBe("HEAD");
+    } finally {
+      await r.close();
+    }
+  });
+
   test("--title is recorded on the run; no free-form input is set", async () => {
     const r = rig();
     try {
