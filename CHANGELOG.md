@@ -70,6 +70,10 @@ guarantee.
 
 ### Fixed
 
+- Accepting a run whose tail renamed or deleted tracked files no longer leaves
+  the old paths on disk as untracked copies. The worktree is now brought in line
+  with the staged tree after accept, so a following `git checkout` is not blocked
+  by "untracked working tree files would be overwritten".
 - A budget, priority, max-retries, goal-gate, or max-loops raise sent to a
   running run no longer aborts the step in flight; the new ceiling applies at
   the next step boundary. "Raise & Resume" no longer costs one wasted LLM call.
