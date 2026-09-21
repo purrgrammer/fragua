@@ -1,5 +1,8 @@
 # Arbitration — tool-outputs.md
 
+> Status: sketch. Arbitration companion to [`tool-outputs.md`](tool-outputs.md);
+> tracks its status.
+
 Verdicts: adversarial=revise, feasibility=revise, clarity=revise, precedent=approve, scope=approve.
 Not unanimous → arbitrate.
 

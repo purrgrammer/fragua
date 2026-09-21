@@ -30,7 +30,7 @@ goal: Triage a task and route it through a scope-appropriate plan/implement/revi
 # Run-level budget bounds the whole run, including the ci↔fix loop — the right
 # lever for a looped workflow (a per-node max-cost sums across iterations and
 # trips mid-loop; see the fix step). Pause-on-breach lets the operator raise it.
-budget: 4.00
+budget: 8.00
 budget-policy: pause
 
 inputs:
