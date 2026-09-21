@@ -16,7 +16,8 @@ guarantee.
   One model (TypeSafe Jev) in one call. Every question becomes a typed output
   (`${{ outputs.<judge>.<q>.choice }}`, `.confidence`, `.probabilities.<opt>`,
   `.noul`, `.score` / `.level`). An optional `decide:` binds a `choice` to
-  routing (`decide.route` with `min-confidence` + a `below:` landing) or a `noul`
+  routing (`decide.route` with a `min-confidence` and/or `min-probability` floor + a
+  `below:` landing) or a `noul`
   to success / fail (`decide.outcome`), so `routes:`, `on:`, `retry:` and
   `goal-gate` compose unchanged. Judges may run as `parallel` branches.
   Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add

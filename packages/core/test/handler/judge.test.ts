@@ -279,6 +279,7 @@ describe("judge handler — happy paths", () => {
         route: "full",
         belowThreshold: false,
         confidence: 0.95,
+        probability: 0.8,
         minConfidence: 0.6,
       });
   });
@@ -302,8 +303,45 @@ describe("judge handler — happy paths", () => {
         route: "unsure",
         belowThreshold: true,
         confidence: 0.41,
+        probability: 0.8,
         minConfidence: 0.6,
       });
+  });
+
+  test("decide.route: below min-probability takes the `below` landing even when confidence holds", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({
+      nodeId: "j",
+      state: "x",
+      questions: { size: SIZE },
+      decide: { route: { question: "size", min_probability: 0.85, below: "unsure" } },
+    });
+    const result = await spec.handler(stubCtx(cap, { judge: stubJudge({ size: sizeAnswer("full", 0.95) }, cap) }));
+    if (result.kind !== "transition") throw new Error(result.kind);
+    expect(result.route).toBe("unsure");
+    const msg = cap.messages[0]!;
+    if (msg.role === "judge_node")
+      expect(msg.decision).toEqual({
+        kind: "route",
+        route: "unsure",
+        belowThreshold: true,
+        confidence: 0.95,
+        probability: 0.8,
+        minProbability: 0.85,
+      });
+  });
+
+  test("decide.route: both floors declared, the choice needs both to hold", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({
+      nodeId: "j",
+      state: "x",
+      questions: { size: SIZE },
+      decide: { route: { question: "size", min_confidence: 0.6, min_probability: 0.5, below: "unsure" } },
+    });
+    const result = await spec.handler(stubCtx(cap, { judge: stubJudge({ size: sizeAnswer("full", 0.95) }, cap) }));
+    if (result.kind !== "transition") throw new Error(result.kind);
+    expect(result.route).toBe("full");
   });
 
   test("decide.route without a floor always takes the choice", async () => {

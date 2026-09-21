@@ -114,6 +114,24 @@ function ForEachBlocks({
 
 // ─── decision ──────────────────────────────────────────────────────────
 
+type RouteDecision = Extract<NonNullable<JudgeNodeMessage["decision"]>, { kind: "route" }>;
+
+function routeText(d: RouteDecision): string {
+  const measures: string[] = [];
+  if (d.confidence !== undefined) {
+    measures.push(
+      `confidence ${d.confidence.toFixed(2)}${d.minConfidence !== undefined ? ` (floor ${d.minConfidence})` : ""}`,
+    );
+  }
+  if (d.probability !== undefined) {
+    measures.push(
+      `probability ${d.probability.toFixed(2)}${d.minProbability !== undefined ? ` (floor ${d.minProbability})` : ""}`,
+    );
+  }
+  const tail = measures.length > 0 ? ` — ${measures.join(", ")}` : "";
+  return d.belowThreshold ? `routed to ${d.route}${tail} — below the floor` : `routed to ${d.route}${tail}`;
+}
+
 function DecisionLine({ decision }: { decision: NonNullable<JudgeNodeMessage["decision"]> }): JSX.Element {
   const tone =
     decision.kind === "outcome"
@@ -123,20 +141,12 @@ function DecisionLine({ decision }: { decision: NonNullable<JudgeNodeMessage["de
       : decision.belowThreshold
         ? "bg-sw-accent-warn"
         : "bg-sw-accent-success";
-  const floor =
-    decision.kind === "route" && decision.minConfidence !== undefined ? ` (floor ${decision.minConfidence})` : "";
-  const confidence =
-    decision.kind === "route" && decision.confidence !== undefined
-      ? ` — confidence ${decision.confidence.toFixed(2)}`
-      : "";
   const text =
     decision.kind === "outcome"
       ? decision.status === "success"
         ? "gate passed — outcome success"
         : "gate failed — outcome fail"
-      : decision.belowThreshold
-        ? `routed to ${decision.route}${confidence} was below the floor${floor}`
-        : `routed to ${decision.route}${confidence}${floor}`;
+      : routeText(decision);
   return (
     <div className="flex flex-col gap-1 border-t border-sw-border px-3 py-2 text-sw-sm">
       <div className="flex items-center gap-2">

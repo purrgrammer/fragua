@@ -171,25 +171,38 @@ export function parseJudgeDecide(raw: unknown): JudgeDecide {
   if (keys[0] === "route") {
     const r = raw["route"];
     if (!isPlainObject(r))
-      throw new JudgeParseError("`decide.route` must be a mapping {question, min-confidence?, below?}");
+      throw new JudgeParseError(
+        "`decide.route` must be a mapping {question, min-confidence?, min-probability?, below?}",
+      );
     for (const k of Object.keys(r)) {
-      if (k !== "question" && k !== "min-confidence" && k !== "below") {
+      if (k !== "question" && k !== "min-confidence" && k !== "min-probability" && k !== "below") {
         throw new JudgeParseError(
-          `\`decide.route\` has unknown key "${k}" (expected question / min-confidence / below)`,
+          `\`decide.route\` has unknown key "${k}" (expected question / min-confidence / min-probability / below)`,
         );
       }
     }
     const question = questionRef(r["question"], "decide.route.question");
     const minC = r["min-confidence"];
+    const minP = r["min-probability"];
     const below = r["below"];
-    if ((minC === undefined) !== (below === undefined)) {
-      throw new JudgeParseError("`decide.route` needs both `min-confidence` and `below` or neither");
+    const hasFloor = minC !== undefined || minP !== undefined;
+    if (hasFloor !== (below !== undefined)) {
+      throw new JudgeParseError(
+        "`decide.route` needs `below` together with a floor (`min-confidence` and/or `min-probability`), or none of them",
+      );
     }
-    if (minC === undefined) return { route: { question } };
+    if (!hasFloor) return { route: { question } };
     if (typeof below !== "string" || below.length === 0) {
       throw new JudgeParseError("`decide.route.below` must name a route declared in `routes:`");
     }
-    return { route: { question, min_confidence: unitInterval(minC, "decide.route.min-confidence"), below } };
+    return {
+      route: {
+        question,
+        ...(minC !== undefined ? { min_confidence: unitInterval(minC, "decide.route.min-confidence") } : {}),
+        ...(minP !== undefined ? { min_probability: unitInterval(minP, "decide.route.min-probability") } : {}),
+        below,
+      },
+    };
   }
   return { outcome: { rules: parseJudgeThresholds(raw["outcome"], "decide.outcome") } };
 }

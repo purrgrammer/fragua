@@ -247,7 +247,7 @@ separate fields, so the injection surface the wrapping closes does not exist.
 
 ```yaml
 decide:
-  route: {question: <id>, min-confidence?: <0..1>, below?: <route-name>}
+  route: {question: <id>, min-confidence?: <0..1>, min-probability?: <0..1>, below?: <route-name>}
 routes: { … }
 ```
 
@@ -265,9 +265,16 @@ routes: { … }
   `below` must be declared in `routes:` and is typically a `human` step (the
   TypeSafe *confidence-routing* pattern: "the answer tells you what; confidence
   tells you whether to act" — escalate uncertain cases to a person). Setting
-  `min-confidence` without `below` is a parse error. Omitting both means "always take
-  the choice", which is right for harmless preferences where a spread
-  distribution is fine.
+  a floor without `below` (or `below` without a floor) is a parse error. Omitting
+  all three means "always take the choice", which is right for harmless
+  preferences where a spread distribution is fine.
+- `min-probability` floors the **winning option's own probability**
+  (`probabilities[choice]`) — the other axis TypeSafe exposes. Confidence
+  measures how concentrated the whole distribution is: 0.60 / 0.38 / 0.02 gives
+  ≈ 0.39 confidence with a 0.60 winner. When the question is "is the model sure
+  which?" gate on confidence; when it is "does the winner clear p ≥ x?" gate on
+  probability. Both may be declared; `below` is taken when either fails. The
+  judge card shows each floor beside the value it tested.
 - `min-confidence` is **only** defined for `choice` (and `score`, unused here)
   because noul has no confidence. A noul-driven branch is `decide.outcome` (§3.4),
   a two-way `routes:` is not offered for it — an author who wants three-way on
@@ -568,7 +575,7 @@ below are the cross-attribute rules a well-shaped graph can still break:
 | E050 | a `for-each` question references `` `item.<path>` `` into a field the producer's item type does not declare |
 | E051 | the iterated items carry a field named `judge`, which the kept / dropped answers would overwrite |
 | W022 | `item.<field>` outside backticks in a `for-each` question — never re-aimed, the model reads the words |
-| W020 | a routed `choice` with ≥ 3 options and no `min-confidence` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
+| W020 | a routed `choice` with ≥ 3 options and neither `min-confidence` nor `min-probability` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |
 
 E035 / W015 (broken / not-on-every-path output refs) cover a judge's derived

@@ -30,11 +30,14 @@ export function isJudgeFileLeaf(s: JudgeState): s is { file: string } {
   );
 }
 
-/** `decide.route` — a `choice` answer drives route-case edge selection. Below
- * `min_confidence` the handler takes `below` instead of the chosen option. */
+/** `decide.route` — a `choice` answer drives route-case edge selection. Two
+ * independent floors, each optional: `min_confidence` on the distribution's
+ * concentration, `min_probability` on the winning option's own probability.
+ * When any declared floor fails the handler takes `below` instead. */
 export interface JudgeRouteDecision {
   question: string;
   min_confidence?: number;
+  min_probability?: number;
   below?: string;
 }
 

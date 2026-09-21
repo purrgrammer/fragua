@@ -233,7 +233,17 @@ describe("parseWorkflow — judge step rejections", () => {
     [
       "decide.route min-confidence without below",
       `    state: hi\n${Q}    decide:\n      route: {question: ok, min-confidence: 0.5}\n`,
-      /both `min-confidence` and `below` or neither/,
+      /needs `below` together with a floor/,
+    ],
+    [
+      "decide.route below without a floor",
+      `    state: hi\n${Q}    decide:\n      route: {question: ok, below: x}\n`,
+      /needs `below` together with a floor/,
+    ],
+    [
+      "decide.route min-probability out of range",
+      `    state: hi\n${Q}    decide:\n      route: {question: ok, min-probability: 2, below: x}\n`,
+      /in \[0, 1\]/,
     ],
     [
       "decide.route min-confidence out of range",

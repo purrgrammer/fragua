@@ -247,7 +247,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
               route: decision.route,
               belowThreshold: decision.belowThreshold,
               confidence: decision.confidence,
+              probability: decision.probability,
               ...(decision.minConfidence !== undefined ? { minConfidence: decision.minConfidence } : {}),
+              ...(decision.minProbability !== undefined ? { minProbability: decision.minProbability } : {}),
             }
           : { kind: "outcome", status: decision.status, rules: decision.rules };
 
@@ -511,7 +513,15 @@ function num(v: unknown): number {
 // ─────────────── decide ───────────────
 
 type Decision =
-  | { kind: "route"; route: string; belowThreshold: boolean; confidence: number; minConfidence?: number }
+  | {
+      kind: "route";
+      route: string;
+      belowThreshold: boolean;
+      confidence: number;
+      probability: number;
+      minConfidence?: number;
+      minProbability?: number;
+    }
   | { kind: "outcome"; status: "success" | "fail"; reason: string; rules: JudgeRuleVerdict[] }
   | { error: string };
 
@@ -522,16 +532,22 @@ function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, Ju
     if (a === undefined || a.type !== "choice") {
       return { error: `decide.route question "${decide.route.question}" has no choice answer` };
     }
+    const probability = a.probabilities[a.choice];
+    if (probability === undefined) {
+      return { error: `decide.route question "${decide.route.question}" has no probability for "${a.choice}"` };
+    }
+    const { min_confidence: minC, min_probability: minP, below: landing } = decide.route;
     const below =
-      decide.route.min_confidence !== undefined &&
-      decide.route.below !== undefined &&
-      a.confidence < decide.route.min_confidence;
+      landing !== undefined &&
+      ((minC !== undefined && a.confidence < minC) || (minP !== undefined && probability < minP));
     return {
       kind: "route",
-      route: below ? (decide.route.below as string) : a.choice,
+      route: below ? landing : a.choice,
       belowThreshold: below,
       confidence: a.confidence,
-      ...(decide.route.min_confidence !== undefined ? { minConfidence: decide.route.min_confidence } : {}),
+      probability,
+      ...(minC !== undefined ? { minConfidence: minC } : {}),
+      ...(minP !== undefined ? { minProbability: minP } : {}),
     };
   }
   const held: string[] = [];

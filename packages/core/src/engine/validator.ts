@@ -774,11 +774,11 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         if (r.below !== undefined && !routes.includes(r.below)) {
           err("E047", `judge "${n.id}" \`decide.route.below\` "${r.below}" is not declared in \`routes:\``);
         }
-        if (r.min_confidence === undefined && options.length >= 3) {
+        if (r.min_confidence === undefined && r.min_probability === undefined && options.length >= 3) {
           diags.push({
             severity: "warning",
             code: "W020",
-            message: `judge "${n.id}" routes on a ${options.length}-way choice with no \`min-confidence\` — a spread distribution routes silently; add \`min-confidence\` + \`below:\` to escalate uncertain cases`,
+            message: `judge "${n.id}" routes on a ${options.length}-way choice with no floor — a spread distribution routes silently; add \`min-confidence\` or \`min-probability\` + \`below:\` to escalate uncertain cases`,
             nodeId: n.id,
             ...nodeLoc,
           });

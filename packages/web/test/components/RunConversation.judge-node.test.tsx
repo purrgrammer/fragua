@@ -89,7 +89,25 @@ describe("RunConversation — judge_node row", () => {
         ]}
       />,
     );
-    expect(below.container.textContent).toContain("routed to unsure — confidence 0.41 was below the floor (floor 0.6)");
+    expect(below.container.textContent).toContain("routed to unsure — confidence 0.41 (floor 0.6) — below the floor");
+    cleanup();
+    const belowP = renderWithClient(
+      <RunConversation
+        messages={[
+          judgeRow({
+            kind: "route",
+            route: "unsure",
+            belowThreshold: true,
+            confidence: 0.9,
+            probability: 0.48,
+            minProbability: 0.5,
+          }),
+        ]}
+      />,
+    );
+    expect(belowP.container.textContent).toContain(
+      "routed to unsure — confidence 0.90, probability 0.48 (floor 0.5) — below the floor",
+    );
     cleanup();
     const failed = renderWithClient(
       <RunConversation
