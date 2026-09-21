@@ -313,3 +313,43 @@ steps:
     expect(codes(src, "W021")).toEqual(["W021"]);
   });
 });
+
+describe("judge — composite (E052)", () => {
+  const COMPOSITE = (composite: string, decide = "decide:\n      outcome: {quality: 0.6}") => `
+name: wf
+steps:
+  produce:
+    prompt: p
+    next: verify
+  verify:
+    type: judge
+    state: {review: {file: review.md}}
+    questions:
+      ok: {type: noul, instructions: ok?}
+      depth: {type: score, instructions: deep?, criteria: [a, b]}
+      kind: {type: choice, instructions: which?, criteria: {x: a, y: b}}
+    composite:
+${composite}
+    ${decide}
+    retry: produce
+    max-retries: 1
+    next: exit
+`;
+
+  test("a composite over noul + score validates clean and thresholds in decide.outcome", () => {
+    expect(codes(COMPOSITE("      quality: {ok: 1, depth: 1}"), "E")).toEqual([]);
+  });
+
+  test("a composite named like a question, or a reserved fold field", () => {
+    expect(messages(COMPOSITE("      ok: {depth: 1}", "decide:\n      outcome: {ok: 0.5}"), "E052").join("\n")).toMatch(
+      /shares its name with a question/,
+    );
+    expect(messages(COMPOSITE("      kept: {depth: 1}", ""), "E052").join("\n")).toMatch(/reserved output name/);
+  });
+
+  test("a composite weighting an undeclared or a choice question", () => {
+    const m = messages(COMPOSITE("      quality: {ghost: 1, kind: 1}"), "E052").join("\n");
+    expect(m).toMatch(/weights question "ghost", which is not declared/);
+    expect(m).toMatch(/weights "kind", a `choice`/);
+  });
+});

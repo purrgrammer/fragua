@@ -132,6 +132,18 @@ describe("RunConversation — judge_node row", () => {
     expect(container.textContent).not.toContain("routed to skip — confidence");
   });
 
+  it("lists each composite with its value and the bound the outcome held it to", () => {
+    const row = judgeRow({
+      kind: "outcome",
+      status: "success",
+      rules: [{ question: "quality", value: 0.73, holds: true, min: 0.6 }],
+    });
+    const content = { ...row.content, composites: { quality: 0.73 } } as RunMessageRow["content"];
+    const { container } = renderWithClient(<RunConversation messages={[{ ...row, content }]} />);
+    const line = container.querySelector("[data-testid='judge-composites']");
+    expect(line?.textContent).toContain("quality composite 0.73 ≥ 0.6");
+  });
+
   it("a decide-less judge renders answers with no decision line", () => {
     const { container } = renderWithClient(<RunConversation messages={[judgeRow()]} />);
     expect(container.textContent).toContain("yes");

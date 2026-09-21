@@ -231,6 +231,17 @@ describe("parseWorkflow — judge step rejections", () => {
     ],
     ["decide empty", `    state: hi\n${Q}    decide: {}\n`, /exactly one of/],
     [
+      "composite with a non-positive weight",
+      `    state: hi\n${Q}    composite:\n      q: {ok: 0}\n`,
+      /must be a positive number/,
+    ],
+    ["composite empty", `    state: hi\n${Q}    composite: {}\n`, /mapping of name/],
+    [
+      "composite entry with no weights",
+      `    state: hi\n${Q}    composite:\n      q: {}\n`,
+      /mapping of question id → weight/,
+    ],
+    [
       "decide.route min-confidence without below",
       `    state: hi\n${Q}    decide:\n      route: {question: ok, min-confidence: 0.5}\n`,
       /needs `below` together with a floor/,
@@ -333,5 +344,29 @@ ${decide}
     ["out of range", "      outcome: {a: 1.5}", /in \[0, 1\]/],
   ])("%s is rejected", (_n, decide, re) => {
     expect(() => parseWorkflow(src(decide))).toThrow(re);
+  });
+});
+
+describe("judge parser — composite:", () => {
+  test("a composite parses to weights and becomes a number output", () => {
+    const g = parseWorkflow(`
+name: wf
+steps:
+  j:
+    type: judge
+    state: hi
+    questions:
+      ok: {type: noul, instructions: ok?}
+      depth: {type: score, instructions: deep?, criteria: [a, b, c]}
+    composite:
+      quality: {ok: 2, depth: 1}
+    decide:
+      outcome: {quality: 0.6}
+    next: exit
+`);
+    const j = g.nodes["j"]!;
+    expect(j.attrs.judge_composite).toEqual([{ name: "quality", weights: { ok: 2, depth: 1 } }]);
+    expect(j.attrs.outputs!["quality"]).toEqual({ kind: "number" });
+    expect(j.attrs.judge_decide).toEqual({ outcome: { rules: [{ question: "quality", min: 0.6 }] } });
   });
 });

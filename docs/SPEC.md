@@ -82,7 +82,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 | `llm` | LLM call (the implicit default when `type:` is omitted) |
 | `human` | operator-gated routing |
 | `tool` | graph-level shell step (`run:`) |
-| `judge` | turn-less typed judgment: `state:` + `questions:` (`choice` / `score` / `noul`) asked of a System One model in one call; outputs derived from the questions; optional `decide:` binds a `choice` to route-case edge selection or a `noul` to `success` / `fail`; `for-each:` asks every question once per item of an array output in one call and `keep:` splits the list into typed `kept` / `dropped` (see [`proposals/judge-step.md`](proposals/judge-step.md)) |
+| `judge` | turn-less typed judgment: `state:` + `questions:` (`choice` / `score` / `noul`) asked of a System One model in one call; outputs derived from the questions; optional `decide:` binds a `choice` to route-case edge selection or a `noul` to `success` / `fail`; `for-each:` asks every question once per item of an array output in one call and `keep:` splits the list into typed `kept` / `dropped`; `composite:` declares weighted means over `noul` / `score` answers as `number` outputs that `decide.outcome` / `keep` may threshold (see [`proposals/judge-step.md`](proposals/judge-step.md)) |
 | `parallel` | fork-all into ≥2 concurrent branch sub-pipelines, joined by `wait_all` (§3.1.1) |
 | `exit` | reserved graceful-halt sink |
 

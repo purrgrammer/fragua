@@ -32,6 +32,14 @@ guarantee.
   `for-each-max-items` caps the list (default 200). Validator E049.
 - **Per-question thresholds.** `decide.outcome` and `keep` take a mapping of noul
   id → `<min>` or `{min, max}`; every rule must hold. A hazard gates with `max`.
+- **`composite:` on judge steps.** `composite: {<name>: {<question>: <weight>, …}}`
+  declares weighted means over `noul` / `score` answers (each mapped to [0, 1]);
+  every composite is a `number` output beside the answers, per item on a
+  `for-each` judge, and `decide.outcome` / `keep` threshold it like a noul.
+  Validator E052.
+- **`min-probability` on `decide.route`.** Floors the chosen option's own
+  probability, beside (or instead of) `min-confidence`; `below` is taken when any
+  declared floor fails.
 - **`judge` agent tool.** The same primitives inside any `llm` step:
   `judge({ state, questions })` asks a batch of typed questions over evidence
   the agent has gathered and returns the answers with probabilities; cost lands

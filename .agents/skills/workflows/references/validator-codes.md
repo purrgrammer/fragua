@@ -49,6 +49,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E049 | `judge` `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, or a scalar / record); or a `keep` threshold names a question that is not one of the judge's own `noul`s. |
 | E050 | A `for-each` judge question references `` `item.<path>` `` into a field the producer's item type does not declare (a typo the model would answer anyway, about nothing). |
 | E051 | The items a `for-each` judge iterates carry a field named `judge` — the answers land under `judge` on `kept` / `dropped` and would overwrite it. Rename the producer's field. |
+| E052 | A judge `composite:` is named like one of its questions or a fold field (`answers`, `kept`, `dropped`, `judge`, `item`), or weights a question that is undeclared or a `choice` — only `noul` and `score` answers have an order to average. |
 
 ## Warnings
 

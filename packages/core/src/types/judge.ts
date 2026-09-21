@@ -41,6 +41,20 @@ export interface JudgeRouteDecision {
   below?: string;
 }
 
+/** `composite:` — a named weighted mean of `noul` / `score` answers, in [0, 1].
+ * A noul contributes p(yes); a score its probability-weighted position
+ * normalised by its top level. Weights are normalised by their sum. The value
+ * becomes a `number` output beside the answers and may be thresholded by
+ * `decide.outcome` / `keep` like a noul. */
+export interface JudgeComposite {
+  name: string;
+  weights: Record<string, number>;
+}
+
+/** Field names a composite may not take: the question ids, and the names the
+ * for-each fold owns. */
+export const JUDGE_COMPOSITE_RESERVED_NAMES: readonly string[] = ["answers", "kept", "dropped", "judge", "item"];
+
 /** One `noul` threshold: the answer must reach `min` and/or stay under `max`.
  * Authored as `<id>: <min>` or `<id>: {min?, max?}`; at least one bound. */
 export interface JudgeThreshold {
@@ -156,8 +170,10 @@ export function isJudgeIdentifier(s: string): boolean {
 export function deriveJudgeOutputs(
   questions: Record<string, JudgeQuestion>,
   forEach?: { itemProfile: OutputProfile | undefined; keep: boolean },
+  composites: readonly JudgeComposite[] = [],
 ): OutputsDecl {
   const perQuestion = deriveAnswerRecords(questions);
+  for (const c of composites) perQuestion[c.name] = { kind: "number" };
   if (forEach === undefined) return perQuestion;
   const answerRecord: OutputProfile = {
     kind: "record",

@@ -141,6 +141,8 @@ export interface JudgeNodeMessage {
   questions: Record<string, { type: "choice" | "score" | "noul"; instructions: unknown }>;
   /** question id → answer as returned by the API. */
   answers: Record<string, unknown>;
+  /** `composite:` values for a single-shot judge, name → weighted mean in [0, 1]. */
+  composites?: Record<string, number>;
   /** What `decide:` made of it, when present — with the bound it was held to
    * and the value it compared, so a card can show the margin. */
   decision?:
@@ -164,6 +166,8 @@ export interface JudgeNodeMessage {
     kept?: number[];
     rules?: Array<{ question: string; min?: number; max?: number }>;
     labels?: string[];
+    /** Per-item `composite:` values, aligned with the input list. */
+    composites?: Array<Record<string, number>>;
   };
   durationMs: number;
   timestamp: number;

@@ -36,9 +36,49 @@ export function JudgeNodeRow({ message, nodeId, testid }: JudgeNodeRowProps): JS
           />
         ))
       )}
+      {message.composites !== undefined ? (
+        <CompositeLine values={message.composites} decision={message.decision} />
+      ) : null}
       {message.decision !== undefined ? <DecisionLine decision={message.decision} /> : null}
     </div>
   );
+}
+
+// ─── composites ────────────────────────────────────────────────────────
+
+function CompositeLine({
+  values,
+  decision,
+  rules,
+}: {
+  values: Record<string, number>;
+  decision?: JudgeNodeMessage["decision"];
+  rules?: NonNullable<JudgeNodeMessage["forEach"]>["rules"];
+}): JSX.Element {
+  const boundOf = (name: string): string => {
+    const b = outcomeBound(decision, name) ?? ruleBound(rules, name);
+    if (b === undefined) return "";
+    return ` ${b.min !== undefined ? `≥ ${b.min}` : ""}${b.max !== undefined ? ` ≤ ${b.max}` : ""}`.replace(
+      /\s+/g,
+      " ",
+    );
+  };
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-0.5 px-3 py-2 text-sw-xs text-sw-muted" data-testid="judge-composites">
+      {Object.entries(values).map(([name, v]) => (
+        <li key={name}>
+          <span className="text-sw-text">{name}</span> composite {v.toFixed(2)}
+          {boundOf(name)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ruleBound(rules: NonNullable<JudgeNodeMessage["forEach"]>["rules"], id: string): NoulThreshold | undefined {
+  const rule = rules?.find((r) => r.question === id);
+  if (rule === undefined) return undefined;
+  return { ...(rule.min !== undefined ? { min: rule.min } : {}), ...(rule.max !== undefined ? { max: rule.max } : {}) };
 }
 
 // ─── for-each: one group per item ──────────────────────────────────────
@@ -105,6 +145,9 @@ function ForEachBlocks({
                 threshold={boundFor(id)}
               />
             ))}
+            {forEach.composites?.[i] !== undefined ? (
+              <CompositeLine values={forEach.composites[i]} rules={forEach.rules} />
+            ) : null}
           </div>
         );
       })}

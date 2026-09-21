@@ -614,3 +614,57 @@ describe("judge handler — oversized state at the provider", () => {
     if (result.kind === "transition") expect(result.failureReason).toMatch(/max_tokens_exceeded/);
   });
 });
+
+describe("judge handler — composite", () => {
+  const depthAnswer = (score: number): JudgeAnswer => ({
+    type: "score",
+    score,
+    confidence: 0.8,
+    legend: { "0": "shallow", "1": "adequate", "2": "thorough" },
+    probabilities: { "0": 0.1, "1": 0.8, "2": 0.1 },
+  });
+
+  test("the weighted mean of p(yes) and the normalised score lands as a number output and gates the outcome", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({
+      nodeId: "j",
+      state: "x",
+      questions: { ok: OK, depth: DEPTH },
+      composites: [{ name: "quality", weights: { ok: 3, depth: 1 } }],
+      decide: { outcome: { rules: [{ question: "quality", min: 0.6 }] } },
+    });
+    const res = await spec.handler(
+      stubCtx(cap, { judge: stubJudge({ ok: { type: "noul", noul: 0.8 }, depth: depthAnswer(1.0) }, cap) }),
+    );
+    if (res.kind !== "transition") throw new Error(res.kind);
+    // (3 · 0.8 + 1 · 1.0/2) / 4 = 0.725
+    expect((res.outputs as Record<string, unknown>)["quality"]).toBeCloseTo(0.725, 6);
+    expect(res.outcomeStatus).toBe("success");
+    const msg = cap.messages[0]!;
+    if (msg.role !== "judge_node") throw new Error(msg.role);
+    expect(msg.composites!["quality"]).toBeCloseTo(0.725, 6);
+    if (msg.decision?.kind !== "outcome") throw new Error("expected an outcome decision");
+    expect(msg.decision.status).toBe("success");
+    expect(msg.decision.rules).toHaveLength(1);
+    expect(msg.decision.rules[0]).toMatchObject({ question: "quality", holds: true, min: 0.6 });
+    expect(msg.decision.rules[0]!.value).toBeCloseTo(0.725, 6);
+  });
+
+  test("a composite below its floor fails the outcome while the raw answers stay in the outputs", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({
+      nodeId: "j",
+      state: "x",
+      questions: { ok: OK, depth: DEPTH },
+      composites: [{ name: "quality", weights: { ok: 1, depth: 1 } }],
+      decide: { outcome: { rules: [{ question: "quality", min: 0.6 }] } },
+    });
+    const res = await spec.handler(
+      stubCtx(cap, { judge: stubJudge({ ok: { type: "noul", noul: 0.2 }, depth: depthAnswer(1.0) }, cap) }),
+    );
+    if (res.kind !== "transition") throw new Error(res.kind);
+    expect(res.outcomeStatus).toBe("fail");
+    expect((res.outputs as Record<string, unknown>)["quality"]).toBeCloseTo(0.35, 6);
+    expect((res.outputs as Record<string, Record<string, unknown>>)["ok"]!["noul"]).toBe(0.2);
+  });
+});

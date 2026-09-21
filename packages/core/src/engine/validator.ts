@@ -2,7 +2,7 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph, NodeAttrs } from "../types/graph.ts";
-import { isJudgeFileLeaf, type JudgeState } from "../types/judge.ts";
+import { isJudgeFileLeaf, JUDGE_COMPOSITE_RESERVED_NAMES, type JudgeState } from "../types/judge.ts";
 import { isOutputRecord, type OutputProfile, resolveOutputProfile } from "../types/outputs.ts";
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
@@ -81,6 +81,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "judge_for_each",
   "judge_keep",
   "judge_for_each_max_items",
+  "judge_composite",
   "outputs",
   "branches",
   "concurrency",
@@ -734,6 +735,42 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({ severity: "error", code, message, nodeId: n.id, ...nodeLoc });
     };
 
+    // E052: a `composite:` is a weighted mean over this judge's own noul /
+    // score answers, named apart from every question and the fold's fields.
+    const composites = n.attrs.judge_composite ?? [];
+    const compositeNames = new Set(composites.map((c) => c.name));
+    for (const c of composites) {
+      if (c.name in questions) {
+        err("E052", `judge "${n.id}" \`composite.${c.name}\` shares its name with a question — pick another`);
+      } else if (JUDGE_COMPOSITE_RESERVED_NAMES.includes(c.name)) {
+        err(
+          "E052",
+          `judge "${n.id}" \`composite.${c.name}\` uses a reserved output name (${JUDGE_COMPOSITE_RESERVED_NAMES.join(", ")})`,
+        );
+      }
+      for (const qid of Object.keys(c.weights)) {
+        const q = questions[qid];
+        if (q === undefined) {
+          err(
+            "E052",
+            `judge "${n.id}" \`composite.${c.name}\` weights question "${qid}", which is not declared in \`questions:\``,
+          );
+        } else if (q.type === "choice") {
+          err(
+            "E052",
+            `judge "${n.id}" \`composite.${c.name}\` weights "${qid}", a \`choice\` — options have no order; only \`noul\` and \`score\` carry weight`,
+          );
+        }
+      }
+    }
+    /** A threshold rule may name a noul question or a composite. */
+    const thresholdable = (qid: string): "ok" | "missing" | string => {
+      if (compositeNames.has(qid)) return "ok";
+      const q = questions[qid];
+      if (q === undefined) return "missing";
+      return q.type === "noul" ? "ok" : q.type;
+    };
+
     if (decide !== undefined && "route" in decide) {
       const r = decide.route;
       const q = questions[r.question];
@@ -787,16 +824,16 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     } else if (decide !== undefined && "outcome" in decide) {
       const o = decide.outcome;
       for (const { question: qid } of o.rules) {
-        const q = questions[qid];
-        if (q === undefined) {
+        const t = thresholdable(qid);
+        if (t === "missing") {
           err(
             "E048",
-            `judge "${n.id}" \`decide.outcome\` names question "${qid}", which is not declared in \`questions:\``,
+            `judge "${n.id}" \`decide.outcome\` names question "${qid}", which is not declared in \`questions:\` (nor as a composite)`,
           );
-        } else if (q.type !== "noul") {
+        } else if (t !== "ok") {
           err(
             "E048",
-            `judge "${n.id}" \`decide.outcome\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds into success / fail`,
+            `judge "${n.id}" \`decide.outcome\` question "${qid}" is a \`${t}\` — only a \`noul\` or a \`composite\` thresholds into success / fail`,
           );
         }
       }
@@ -837,13 +874,16 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       const keep = n.attrs.judge_keep;
       if (keep !== undefined) {
         for (const { question: qid } of keep.rules) {
-          const q = questions[qid];
-          if (q === undefined) {
-            err("E049", `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\``);
-          } else if (q.type !== "noul") {
+          const t = thresholdable(qid);
+          if (t === "missing") {
             err(
               "E049",
-              `judge "${n.id}" \`keep\` question "${qid}" is a \`${q.type}\` — only a \`noul\` thresholds an item in or out`,
+              `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\` (nor as a composite)`,
+            );
+          } else if (t !== "ok") {
+            err(
+              "E049",
+              `judge "${n.id}" \`keep\` question "${qid}" is a \`${t}\` — only a \`noul\` or a \`composite\` thresholds an item in or out`,
             );
           }
         }

@@ -106,6 +106,7 @@ import { deriveJudgeOutputs } from "../types/judge.ts";
 import { resolveOutputProfile } from "../types/outputs.ts";
 import {
   JudgeParseError,
+  parseJudgeComposite,
   parseJudgeDecide,
   parseJudgeForEach,
   parseJudgeForEachMaxItems,
@@ -196,6 +197,7 @@ const STEP_RESERVED = new Set([
   "for-each",
   "keep",
   "for-each-max-items",
+  "composite",
 ]);
 
 /** Step keys a `judge` may not carry — they configure an agent turn it never runs. */
@@ -515,6 +517,11 @@ function parseJudgeBlocks(
   const parsedQuestions = lift("questions", questions.node, () => parseJudgeQuestions(questions.raw));
   attrs["judge_questions"] = parsedQuestions;
 
+  const composite = block("composite");
+  const composites =
+    composite.node === undefined ? [] : lift("composite", composite.node, () => parseJudgeComposite(composite.raw));
+  if (composite.node !== undefined) attrs["judge_composite"] = composites;
+
   const keep = block("keep");
   if (keep.node !== undefined) {
     if (forEach.node === undefined) {
@@ -555,8 +562,8 @@ function parseJudgeBlocks(
   // known only once every step is parsed — `attachForEachOutputs` fills them.
   attrs["outputs"] =
     forEach.node === undefined
-      ? deriveJudgeOutputs(parsedQuestions)
-      : deriveJudgeOutputs(parsedQuestions, { itemProfile: undefined, keep: keep.node !== undefined });
+      ? deriveJudgeOutputs(parsedQuestions, undefined, composites)
+      : deriveJudgeOutputs(parsedQuestions, { itemProfile: undefined, keep: keep.node !== undefined }, composites);
 
   const smb = block("state-max-bytes");
   attrs["judge_state_max_bytes"] = lift("state-max-bytes", smb.node, () => parseJudgeStateMaxBytes(smb.raw));
@@ -578,7 +585,11 @@ function attachForEachOutputs(nodes: Record<string, Node>): void {
         ? undefined
         : resolveOutputProfile(producer.attrs.outputs, parsed.path);
     const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
-    n.attrs.outputs = deriveJudgeOutputs(questions, { itemProfile, keep: n.attrs.judge_keep !== undefined });
+    n.attrs.outputs = deriveJudgeOutputs(
+      questions,
+      { itemProfile, keep: n.attrs.judge_keep !== undefined },
+      n.attrs.judge_composite ?? [],
+    );
   }
 }
 

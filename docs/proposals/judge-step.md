@@ -436,6 +436,38 @@ list: the llm step gathers (opens the cited code, emits it as data), the judge
 answers atomic questions per item, `keep` and the consumer's thresholds are the
 `if` statements — written in the workflow, not in an agent's prose.
 
+### 3.8 `composite:` — weights the workflow owns
+
+```yaml
+composite:
+  quality: {correct: 3, clear: 1, tested: 1}     # name → question → weight
+decide:
+  outcome: {quality: 0.7}                         # or keep: {quality: 0.7}
+```
+
+TypeSafe's *composite scoring* pattern: ask atomic dimensions, combine them
+with weights in code, keep the raw scores so a weight change never re-runs
+inference. `composite:` is that combination step, declared beside the
+questions so the graph, not an agent's prose, owns the policy.
+
+- Each entry is a weighted mean in [0, 1]. A `noul` contributes p(yes); a
+  `score` its probability-weighted position divided by its top level (a
+  three-level score at 1.0 contributes 0.5). Weights are positive and
+  normalised by their sum, so `{a: 3, b: 1}` reads "a counts three times b".
+  A `choice` cannot carry weight — its options have no order (E052).
+- The value is a `number` output beside the answers: `${{ outputs.j.quality }}`
+  on a plain judge, `answers[i].quality` and `kept[i].judge.quality` on a
+  `for-each` judge. The raw per-question outputs are unchanged.
+- `decide.outcome` and `keep` threshold a composite exactly as they threshold a
+  noul — the same `<min>` / `{min, max}` grammar, all-of. The card lists every
+  composite with its value and the bound it was held to.
+- A composite may not be named like a question or a fold field (`answers`,
+  `kept`, `dropped`, `judge`, `item`) (E052).
+
+What it does **not** do: pick a winner across items (sort in the consumer, the
+values are there), or replace an "any serious violation" rule — that is a
+separate `max` threshold on the hazard noul, as the docs advise.
+
 ### 3.6 Cost, observability, the message row
 
 - **Cost.** `costUsd = usage.input_tokens × 0.042 / 1e6`; output tokens are
@@ -570,10 +602,11 @@ below are the cross-attribute rules a well-shaped graph can still break:
 | Code | Rule |
 |---|---|
 | E047 | `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:` |
-| E048 | `decide.outcome`: names an undeclared question or a non-`noul`; `decide.outcome` together with `routes:` |
+| E048 | `decide.outcome`: names something that is neither a `noul` question nor a `composite`; `decide.outcome` together with `routes:` |
 | E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); `keep.question` is not one of the judge's own `noul`s. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
 | E050 | a `for-each` question references `` `item.<path>` `` into a field the producer's item type does not declare |
 | E051 | the iterated items carry a field named `judge`, which the kept / dropped answers would overwrite |
+| E052 | `composite:` named like a question or a fold field (`answers` / `kept` / `dropped` / `judge` / `item`); weights an undeclared question or a `choice` |
 | W022 | `item.<field>` outside backticks in a `for-each` question — never re-aimed, the model reads the words |
 | W020 | a routed `choice` with ≥ 3 options and neither `min-confidence` nor `min-probability` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |

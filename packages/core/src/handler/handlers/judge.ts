@@ -20,6 +20,7 @@ import {
   JUDGE_DEFAULT_MODEL,
   JUDGE_DEFAULT_STATE_MAX_BYTES,
   JUDGE_FOR_EACH_ITEMS_KEY,
+  type JudgeComposite,
   type JudgeDecide,
   type JudgeJson,
   type JudgeKeep,
@@ -46,6 +47,7 @@ export interface JudgeConfig {
   /** `for-each:` — an `${{ outputs.X.f }}` reference to an array output. */
   forEach?: string;
   keep?: JudgeKeep;
+  composites?: JudgeComposite[];
   forEachMaxItems?: number;
   /** Test seams: the provider budgets the chunk planner sizes against. */
   requestTokenBudget?: number;
@@ -214,10 +216,12 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     const durationMs = Date.now() - startedAt;
     const response = { model: resolvedModel, answers, usage, costUsd };
 
+    const composites = cfg.composites ?? [];
     let outputs: OutputsValue;
     let forEachMeta: JudgeNodeMessage["forEach"];
+    let compositeValues: Record<string, number> | undefined;
     if (items !== undefined) {
-      const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep);
+      const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep, composites);
       if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
       outputs = folded.outputs;
       forEachMeta = {
@@ -226,14 +230,16 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
         labels: items.map(itemLabel),
         ...(folded.kept !== undefined ? { kept: folded.kept } : {}),
         ...(cfg.keep !== undefined ? { rules: cfg.keep.rules } : {}),
+        ...(composites.length > 0 ? { composites: folded.composites } : {}),
       };
     } else {
-      const folded = foldAnswers(cfg.questions, response.answers);
+      const folded = foldAnswers(cfg.questions, response.answers, composites);
       if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
       outputs = folded.outputs;
+      if (composites.length > 0) compositeValues = folded.composites;
     }
 
-    const decision = applyDecide(cfg.decide, response.answers);
+    const decision = applyDecide(cfg.decide, response.answers, compositeValues ?? {});
     if (decision !== undefined && "error" in decision) return halt(decision.error);
 
     const inputTokens = response.usage.input_tokens;
@@ -263,6 +269,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
         Object.entries(cfg.questions).map(([id, q]) => [id, { type: q.type, instructions: q.instructions }]),
       ),
       answers: response.answers,
+      ...(compositeValues !== undefined ? { composites: compositeValues } : {}),
       ...(recordedDecision !== undefined ? { decision: recordedDecision } : {}),
       ...(forEachMeta !== undefined ? { forEach: forEachMeta } : {}),
       durationMs,
@@ -406,7 +413,8 @@ function capAnswersForEvent(answers: Record<string, JudgeAnswer>): Record<string
 function foldAnswers(
   questions: Record<string, JudgeQuestion>,
   answers: Record<string, JudgeAnswer>,
-): { outputs: OutputsValue } | { error: string } {
+  composites: readonly JudgeComposite[] = [],
+): { outputs: OutputsValue; composites: Record<string, number> } | { error: string } {
   const outputs: OutputsValue = {};
   for (const [id, q] of Object.entries(questions)) {
     const a = answers[id];
@@ -440,7 +448,54 @@ function foldAnswers(
       outputs[id] = { noul: num(a.noul) };
     }
   }
-  return { outputs };
+  const values: Record<string, number> = {};
+  for (const c of composites) {
+    const v = compositeValue(c, questions, answers);
+    if (typeof v !== "number") return v;
+    values[c.name] = v;
+    outputs[c.name] = v;
+  }
+  return { outputs, composites: values };
+}
+
+/** The weighted mean behind one `composite:` entry. Each weighted answer is
+ * mapped onto [0, 1] first — a noul as p(yes), a score as its
+ * probability-weighted position over the top level — then averaged by
+ * weight. Which question types may carry weight is the validator's rule; a
+ * mismatch here is malformed provider output. */
+function compositeValue(
+  c: JudgeComposite,
+  questions: Record<string, JudgeQuestion>,
+  answers: Record<string, JudgeAnswer>,
+): number | { error: string } {
+  let total = 0;
+  let weightSum = 0;
+  for (const [id, w] of Object.entries(c.weights)) {
+    const q = questions[id];
+    const a = answers[id];
+    if (q === undefined || a === undefined)
+      return { error: `composite "${c.name}" weights "${id}", which has no answer` };
+    let unit: number;
+    if (a.type === "noul") unit = num(a.noul);
+    else if (a.type === "score" && q.type === "score") {
+      const top = q.criteria.length - 1;
+      unit = top <= 0 ? 0 : num(a.score) / top;
+    } else return { error: `composite "${c.name}" weights "${id}", a ${a.type} — only noul / score carry weight` };
+    total += w * Math.min(1, Math.max(0, unit));
+    weightSum += w;
+  }
+  return weightSum > 0 ? total / weightSum : 0;
+}
+
+/** The value a threshold rule tests: a noul's p(yes), or a composite's mean. */
+function ruleValue(
+  question: string,
+  answers: Record<string, JudgeAnswer>,
+  composites: Record<string, number>,
+): number | undefined {
+  const a = answers[question];
+  if (a !== undefined && a.type === "noul") return a.noul;
+  return composites[question];
 }
 
 /** Per-item fold of a `for-each` response: `answers[i]` is the fold of item
@@ -451,28 +506,31 @@ function foldForEach(
   answers: Record<string, JudgeAnswer>,
   items: readonly JudgeJson[],
   keep: JudgeKeep | undefined,
-): { outputs: OutputsValue; kept?: number[] } | { error: string } {
+  composites: readonly JudgeComposite[] = [],
+): { outputs: OutputsValue; kept?: number[]; composites: Array<Record<string, number>> } | { error: string } {
   const perItem: OutputStructValue[] = [];
   const kept: OutputStructValue[] = [];
   const dropped: OutputStructValue[] = [];
   const keptIdx: number[] = [];
+  const perItemComposites: Array<Record<string, number>> = [];
   for (let i = 0; i < items.length; i++) {
     const own: Record<string, JudgeAnswer> = {};
     for (const id of Object.keys(questions)) {
       const a = answers[forEachQuestionId(id, i)];
       if (a !== undefined) own[id] = a;
     }
-    const folded = foldAnswers(questions, own);
+    const folded = foldAnswers(questions, own, composites);
     if ("error" in folded) return { error: `item ${i}: ${folded.error}` };
     perItem.push(folded.outputs);
+    perItemComposites.push(folded.composites);
     if (keep === undefined) continue;
     let pass = true;
     for (const rule of keep.rules) {
-      const verdict = own[rule.question];
-      if (verdict === undefined || verdict.type !== "noul") {
-        return { error: `item ${i}: keep question "${rule.question}" has no noul answer` };
+      const value = ruleValue(rule.question, own, folded.composites);
+      if (value === undefined) {
+        return { error: `item ${i}: keep question "${rule.question}" has no noul or composite value` };
       }
-      if (!thresholdHolds(rule, verdict.noul)) pass = false;
+      if (!thresholdHolds(rule, value)) pass = false;
     }
     const item = items[i] as OutputStructValue;
     const fields: { [k: string]: OutputStructValue } =
@@ -486,10 +544,10 @@ function foldForEach(
     }
   }
   const outputs: OutputsValue = { answers: perItem };
-  if (keep === undefined) return { outputs };
+  if (keep === undefined) return { outputs, composites: perItemComposites };
   outputs["kept"] = kept;
   outputs["dropped"] = dropped;
-  return { outputs, kept: keptIdx };
+  return { outputs, kept: keptIdx, composites: perItemComposites };
 }
 
 /** A short handle for an item on the card: its `location` or `id` when it has
@@ -525,7 +583,11 @@ type Decision =
   | { kind: "outcome"; status: "success" | "fail"; reason: string; rules: JudgeRuleVerdict[] }
   | { error: string };
 
-function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, JudgeAnswer>): Decision | undefined {
+function applyDecide(
+  decide: JudgeDecide | undefined,
+  answers: Record<string, JudgeAnswer>,
+  composites: Record<string, number>,
+): Decision | undefined {
   if (decide === undefined) return undefined;
   if ("route" in decide) {
     const a = answers[decide.route.question];
@@ -554,19 +616,19 @@ function applyDecide(decide: JudgeDecide | undefined, answers: Record<string, Ju
   const failed: string[] = [];
   const verdicts: JudgeRuleVerdict[] = [];
   for (const rule of decide.outcome.rules) {
-    const a = answers[rule.question];
-    if (a === undefined || a.type !== "noul") {
-      return { error: `decide.outcome question "${rule.question}" has no noul answer` };
+    const value = ruleValue(rule.question, answers, composites);
+    if (value === undefined) {
+      return { error: `decide.outcome question "${rule.question}" has no noul or composite value` };
     }
-    const holds = thresholdHolds(rule, a.noul);
+    const holds = thresholdHolds(rule, value);
     verdicts.push({
       question: rule.question,
-      value: a.noul,
+      value,
       holds,
       ...(rule.min !== undefined ? { min: rule.min } : {}),
       ...(rule.max !== undefined ? { max: rule.max } : {}),
     });
-    const shown = `${rule.question}=${a.noul.toFixed(2)}`;
+    const shown = `${rule.question}=${value.toFixed(2)}`;
     (holds ? held : failed).push(`${shown} (${describeThreshold(rule)})`);
   }
   const pass = failed.length === 0;

@@ -336,3 +336,28 @@ describe("judge handler — for-each", () => {
     ]);
   });
 });
+
+describe("judge handler — for-each composite", () => {
+  test("a composite is computed per item, rides on answers and judge, and keep may threshold it", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS, sev: SEV },
+      composites: [{ name: "priority", weights: { holds: 1, sev: 1 } }],
+      keep: { rules: [{ question: "priority", min: 0.6 }] },
+    });
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    const out = res.outputs as { answers: Array<Record<string, number>>; kept: unknown[]; dropped: unknown[] };
+    // item 0: holds 0.9, sev 0/2 → 0.45; item 1: 0.2, 1/2 → 0.35; item 2: 0.9, 2/2 → 0.95
+    expect(out.answers.map((a) => a["priority"])).toEqual([0.45, 0.35, 0.95]);
+    expect(out.kept).toHaveLength(1);
+    expect(out.dropped).toHaveLength(2);
+    expect((out.kept[0] as { judge: Record<string, number> }).judge["priority"]).toBe(0.95);
+    const msg = c.messages.find((m) => m.role === "judge_node");
+    if (msg === undefined || msg.role !== "judge_node") throw new Error("no judge message");
+    expect(msg.forEach?.composites?.map((v) => v["priority"])).toEqual([0.45, 0.35, 0.95]);
+    expect(msg.forEach?.kept).toEqual([2]);
+  });
+});

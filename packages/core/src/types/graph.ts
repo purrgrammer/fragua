@@ -1,7 +1,7 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
 import type { RetryPresetName } from "../engine/retry-policy.ts";
-import type { JudgeDecide, JudgeKeep, JudgeQuestion, JudgeState } from "./judge.ts";
+import type { JudgeComposite, JudgeDecide, JudgeKeep, JudgeQuestion, JudgeState } from "./judge.ts";
 import type { OutputProfile, OutputsDecl } from "./outputs.ts";
 import type { SummaryLevel } from "./summary.ts";
 
@@ -119,6 +119,10 @@ export interface NodeAttrs {
   /** `type: judge` with `for-each` — the per-item decision (authoring: `keep:`):
    * an item is kept when its `noul` answer reaches `min`. */
   judge_keep?: JudgeKeep;
+  /** `type: judge` — named weighted means over noul / score answers (authoring:
+   * `composite:`), each a `number` output; `decide.outcome` / `keep` may
+   * threshold them. */
+  judge_composite?: JudgeComposite[];
   /** `type: judge` with `for-each` — list-length cap (authoring:
    * `for-each-max-items`). Parser fills the default. */
   judge_for_each_max_items?: number;

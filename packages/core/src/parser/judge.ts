@@ -11,6 +11,7 @@ import {
   JUDGE_DEFAULT_STATE_MAX_BYTES,
   JUDGE_HARD_FOR_EACH_MAX_ITEMS,
   JUDGE_HARD_STATE_MAX_BYTES,
+  type JudgeComposite,
   type JudgeDecide,
   type JudgeJson,
   type JudgeKeep,
@@ -257,6 +258,38 @@ export function parseJudgeForEach(raw: unknown): string {
     );
   }
   return trimmed;
+}
+
+/** `composite:` — `{<name>: {<question>: <weight>, …}}`; weights are positive
+ * numbers, at least one per composite. Which questions may carry weight is
+ * the validator's (E052). */
+export function parseJudgeComposite(raw: unknown): JudgeComposite[] {
+  if (!isPlainObject(raw) || Object.keys(raw).length === 0) {
+    throw new JudgeParseError("`composite` must be a mapping of name → {question: weight, …}");
+  }
+  const out: JudgeComposite[] = [];
+  for (const [name, spec] of Object.entries(raw)) {
+    if (!isJudgeIdentifier(name)) {
+      throw new JudgeParseError(
+        `\`composite.${name}\` is not an identifier (letters, digits, _; starts with a letter)`,
+      );
+    }
+    if (!isPlainObject(spec) || Object.keys(spec).length === 0) {
+      throw new JudgeParseError(`\`composite.${name}\` must be a mapping of question id → weight`);
+    }
+    const weights: Record<string, number> = {};
+    for (const [q, w] of Object.entries(spec)) {
+      if (!isJudgeIdentifier(q)) {
+        throw new JudgeParseError(`\`composite.${name}.${q}\` is not a question id`);
+      }
+      if (typeof w !== "number" || !Number.isFinite(w) || w <= 0) {
+        throw new JudgeParseError(`\`composite.${name}.${q}\` must be a positive number (got ${JSON.stringify(w)})`);
+      }
+      weights[q] = w;
+    }
+    out.push({ name, weights });
+  }
+  return out;
 }
 
 /** `keep:` — the per-item thresholds, same grammar as `decide.outcome`. */
