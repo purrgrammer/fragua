@@ -12,11 +12,3 @@ name: fragua
 # run. Project-specific because the command depends on the project's
 # stack (bun / pnpm / pip / cargo / …).
 bootstrap: bun install --frozen-lockfile
-
-# Harness-level System One uses, all opt-in (need `fragua providers add
-# typesafe`). skill-suggestion: one judge call per llm step names the skill
-# the prompt calls for. tool-guard: `flag` annotates suspicious
-# bash/write/edit/MCP calls, `block` refuses them.
-# judge:
-#   skill-suggestion: true
-#   tool-guard: flag

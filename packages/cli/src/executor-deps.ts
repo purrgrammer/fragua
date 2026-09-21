@@ -264,10 +264,6 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
         oauthProviderFor: (url) => makeHeadlessMcpProvider(url, makeMcpOAuthStore(store)),
       }),
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
-      judgeAssist: {
-        skillSuggestion: config.judge?.["skill-suggestion"] ?? false,
-        toolGuard: config.judge?.["tool-guard"] ?? "off",
-      },
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler — for llm
     // that would force every call to route to whichever edge appears first,

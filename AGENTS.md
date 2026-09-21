@@ -70,7 +70,7 @@ Runtime state: `~/.fragua/fragua.db` (the global store the harness binds to by d
 
 **Never run `fragua` commands against the live store while developing.** The `daemon` / `serve` / `run` commands all take `--db <path>` (default `~/.fragua/fragua.db`) — when you need to exercise a CLI command to test a change, point it at an ephemeral DB (e.g. `--db "$(mktemp -d)/t.db"`) so a stray write or schema migration can't corrupt the operator's running instance. Prefer the test suite over booting a daemon/server at all.
 
-Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, `judge` skill-suggestion / tool-guard, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. YAML only.
+Config cascade: `~/.fragua/config.yaml` (global — defaults, auto-title, blocklist, concurrency, …) overlaid by `<cwd>/.fragua/config.yaml` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep. YAML only.
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `workflows`, `operate`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 

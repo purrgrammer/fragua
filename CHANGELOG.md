@@ -40,15 +40,6 @@ guarantee.
 - **`min-probability` on `decide.route`.** Floors the chosen option's own
   probability, beside (or instead of) `min-confidence`; `below` is taken when any
   declared floor fails.
-- **Harness-level judge uses, opt-in.** Nothing here is on unless a `judge:`
-  section in `config.yaml` turns it on. `skill-suggestion: true` asks the judge, once per llm step,
-  which of the node's visible skills the prompt calls for and appends one
-  "Relevant to this step: <skill>" line to the system prompt (the catalogue
-  itself is unchanged); `tool-guard: flag | block` judges every `bash` /
-  `write` / `edit` / MCP call for destructive, off-task or exfiltrating intent
-  before it runs — `flag` annotates the result and warns, `block` refuses the
-  call with a tool error. Both default off and are inert without a
-  credentialed judge provider; their spend lands on the calling step.
 - **`judge` agent tool.** The same primitives inside any `llm` step:
   `judge({ state, questions })` asks a batch of typed questions over evidence
   the agent has gathered and returns the answers with probabilities; cost lands
@@ -71,10 +62,10 @@ guarantee.
 ### Fixed
 
 - **`skill` tool inside a worktree.** Loading a project-scope skill failed with
-  a path-escape error because the catalogue's path points at the project root.
-  The tool now reads the run's own copy when its tree carries one (so a
-  worktree sees skill edits it made) and falls back to the discovery path
-  otherwise.
+  a path-escape error because the catalogue's path points at the project root,
+  outside the worktree. The tool now reads the run's own copy when its tree
+  carries one (so a worktree sees skill edits it made) and falls back to the
+  discovery path otherwise.
 - `review` on a merged PR now diffs the PR's own change (its head over the point
   it forked from the base) instead of `origin/main..HEAD`, which ran backwards
   once the PR had merged; the worktree lands on the merge commit.

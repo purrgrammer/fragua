@@ -43,15 +43,6 @@ import {
 } from "@fragua/workspace";
 import { Type } from "@sinclair/typebox";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import {
-  DEFAULT_JUDGE_ASSIST,
-  guardedAgentTool,
-  isGuardedTool,
-  type JudgeAssistConfig,
-  type SkillSuggestion,
-  suggestionLine,
-  suggestSkill,
-} from "./judge-assist.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
@@ -65,9 +56,6 @@ export interface PiLlmBackendOptions {
    * with a WorktreeProvisioner wire a per-run env via `LlmInput`
    * and can leave this unset. */
   env?: ExecutionEnvironment;
-  /** Harness-level System One uses (skill suggestion, tool guard). Both off
-   * by default and inert when the run carries no judge client. */
-  judgeAssist?: JudgeAssistConfig;
   /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel.
    * Daemons wire a ModelRegistry here so custom providers (Ollama etc.)
    * and `provider_config` overrides are honoured. */
@@ -159,7 +147,6 @@ export class PiLlmBackend implements LlmBackend {
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
   private readonly mcpConnector: McpConnector | undefined;
-  private readonly judgeAssist: JudgeAssistConfig;
 
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
@@ -176,7 +163,6 @@ export class PiLlmBackend implements LlmBackend {
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
     this.mcpConnector = opts.mcpConnector;
-    this.judgeAssist = opts.judgeAssist ?? DEFAULT_JUDGE_ASSIST;
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -457,24 +443,7 @@ export class PiLlmBackend implements LlmBackend {
         : () => {},
       ...(input.judge !== undefined ? { judge: input.judge } : {}),
     };
-    const adaptedTools = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
-    const guardMode = this.judgeAssist.toolGuard;
-    const guardJudge = input.judge;
-    const tools: AgentTool[] =
-      guardMode === "off" || guardJudge === undefined
-        ? adaptedTools
-        : adaptedTools.map((t) =>
-            isGuardedTool(t.label ?? t.name)
-              ? guardedAgentTool(t, {
-                  judge: guardJudge,
-                  mode: guardMode,
-                  stepPrompt: input.prompt,
-                  emit: (type, data) => {
-                    if (fraguaEmit) void fraguaEmit(type, data);
-                  },
-                })
-              : t,
-          );
+    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
 
     // Exit-tool synthesis — a node exits via exactly ONE terminating tool:
     //   routes → the ephemeral, per-call `route` tool whose `name` parameter is
@@ -525,29 +494,13 @@ export class PiLlmBackend implements LlmBackend {
     const derivedRunEnv = deriveRunEnv(effectiveEnv);
     const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? this.runEnv?.bootstrapCommand;
     const effectiveRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
-    let systemPrompt = buildSystemPrompt({
+    const systemPrompt = buildSystemPrompt({
       global: this.systemPrompt,
       perNode: perNodeSystemPrompt,
       contextBlock,
       skillsCatalog,
       runEnv: effectiveRunEnv,
     });
-
-    // One System One call ranks the visible skills against the prompt; the
-    // winner is one line at the END of the system prompt so the catalogue
-    // block ahead of it stays byte-stable for the provider's prompt cache.
-    // Its cost and verdict are emitted after `llm.start` so the step's cost
-    // window (opened by that event) attributes them to this node.
-    let suggestion: SkillSuggestion | undefined;
-    let suggestionWarning: string | undefined;
-    if (this.judgeAssist.skillSuggestion && input.judge !== undefined) {
-      try {
-        suggestion = await suggestSkill(input.judge, input.prompt, effectiveSkills, input.signal);
-      } catch (err) {
-        suggestionWarning = `skill suggestion skipped: ${err instanceof Error ? err.message : String(err)}`;
-      }
-      if (suggestion?.skill !== undefined) systemPrompt = `${systemPrompt}\n\n${suggestionLine(suggestion.skill)}`;
-    }
 
     // Now that the system prompt is resolved, expose the run's skill
     // catalogue so the `skill` tool can resolve names against it.
@@ -753,19 +706,6 @@ export class PiLlmBackend implements LlmBackend {
       const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs as Record<string, unknown>);
       if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
-      if (suggestion !== undefined) {
-        await input.emit("cost.recorded", suggestion.cost);
-        await input.emit("agent.info", {
-          kind: "skill_suggestion",
-          skill: suggestion.skill ?? null,
-          choice: suggestion.choice,
-          probability: suggestion.probability,
-          needs_skill: suggestion.needsSkill,
-        });
-      }
-      if (suggestionWarning !== undefined) {
-        await input.emit("agent.warning", { kind: "skill_suggestion", message: suggestionWarning });
-      }
     }
 
     const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
