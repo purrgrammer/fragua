@@ -70,7 +70,11 @@ steps:
     type: tool
     next: analyze
     run: |
-      set -euo pipefail
+      # POSIX sh, not bash: a `tool` step's `run:` is `/bin/sh -c`
+      # (docs/execution-model.md §2), which is dash on Linux — `-o pipefail`
+      # is a bash extension and aborts the step with "Illegal option".
+      # There are no pipelines here, so `set -eu` loses nothing.
+      set -eu
       out=.fragua/scratch/drift
       rm -rf "$out" && mkdir -p "$out"
       surface=${{ inputs.surface }}
