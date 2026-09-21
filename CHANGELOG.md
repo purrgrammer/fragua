@@ -10,6 +10,13 @@ guarantee.
 
 ### Changed
 
+- **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
+  the providers and models added in that range — including the `radius`
+  provider — and pick up updated cost/context
+  metadata for existing models. Model ids already referenced by the built-in
+  workflows continue to resolve; no default model choices changed. `radius` is
+  a purely dynamic provider with no static catalog default, so `--provider
+  radius` without an explicit `--model` has no built-in fallback.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
