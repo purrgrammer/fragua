@@ -42,6 +42,8 @@ const NO_SKILL = "none";
 export interface SkillSuggestion {
   /** Set when a skill cleared both gates. */
   skill?: string;
+  /** What the choice picked, `none` included — recorded even when nothing is suggested. */
+  choice: string;
   probability: number;
   needsSkill: number;
   /** The `cost.recorded` payload — emitted by the caller once `llm.start` is out. */
@@ -95,6 +97,7 @@ export async function suggestSkill(
   if (choice?.type !== "choice" || needs?.type !== "noul") return undefined;
   const probability = choice.probabilities[choice.choice] ?? 0;
   const out: SkillSuggestion = {
+    choice: choice.choice,
     probability,
     needsSkill: needs.noul,
     cost: judgeCostPayload(judge.provider, res),

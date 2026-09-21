@@ -147,6 +147,7 @@ describe("PiLlmBackend — skill suggestion", () => {
       expect(costIdx).toBeGreaterThan(startIdx);
       expect(infoIdx).toBeGreaterThan(startIdx);
       expect(events[infoIdx]!.data["skill"]).toBe("frontend");
+      expect(events[infoIdx]!.data["choice"]).toBe("frontend");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

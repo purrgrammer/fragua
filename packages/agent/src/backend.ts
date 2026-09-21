@@ -758,6 +758,7 @@ export class PiLlmBackend implements LlmBackend {
         await input.emit("agent.info", {
           kind: "skill_suggestion",
           skill: suggestion.skill ?? null,
+          choice: suggestion.choice,
           probability: suggestion.probability,
           needs_skill: suggestion.needsSkill,
         });
