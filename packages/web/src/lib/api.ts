@@ -21,11 +21,11 @@
 // injection seam required.
 
 import type {
+  NodeState as CoreNodeState,
   RunDetail as CoreRunDetail,
   RunSummary as CoreRunSummary,
+  SelectedEdge as CoreSelectedEdge,
   StepSnapshot as CoreStepSnapshot,
-  NodeState,
-  SelectedEdge,
 } from "@fragua/core/read-plane";
 import type { AgentMessage, FeedEvent, RunStatus, SnapshotStat } from "@fragua/types";
 import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
@@ -36,17 +36,19 @@ export type { FeedEvent };
 // client hands back. Re-exported here so component call sites keep importing
 // them from `../lib/api.ts`; never re-declare them.
 //
-// `runStatus` is widened to optional at the web boundary. The shape
-// validators (`isRunSummary` / `isRunDetail`) soft-accept old-daemon
-// payloads that omit `runStatus`, so at runtime the field can be absent.
-// Making it optional here forces every consumer to guard the missing case.
-export type RunSummary = Omit<CoreRunSummary, "runStatus"> & {
-  runStatus?: CoreRunSummary["runStatus"] | undefined;
-};
-export type RunDetail = Omit<CoreRunDetail, "runStatus"> & {
-  runStatus?: CoreRunDetail["runStatus"] | undefined;
-};
-export type { NodeState, SelectedEdge };
+// Every field the shape validators (`isRunSummary` / `isRunDetail`) soft-accept
+// as absent is widened to optional here. The read plane types them as required,
+// but an old-daemon payload can omit them and still pass validation, so the
+// narrow type would be a lie and consumers would skip the guard. A validator
+// gap and a required type must never diverge — widen both sides together.
+type SoftFields = "runStatus" | "costUsd" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens";
+export type RunSummary = Omit<CoreRunSummary, SoftFields> & Partial<Pick<CoreRunSummary, SoftFields>>;
+// Same reasoning for `pass`: the validators don't inspect array elements at
+// all, and pre-pass servers omit it — hence the `?? 0` guards at every read.
+export type NodeState = Omit<CoreNodeState, "pass"> & Partial<Pick<CoreNodeState, "pass">>;
+export type SelectedEdge = Omit<CoreSelectedEdge, "pass"> & Partial<Pick<CoreSelectedEdge, "pass">>;
+export type RunDetail = Omit<CoreRunDetail, SoftFields | "nodes" | "selectedEdges"> &
+  Partial<Pick<CoreRunDetail, SoftFields>> & { nodes: NodeState[]; selectedEdges: SelectedEdge[] };
 
 const BASE_URL = "/api";
 

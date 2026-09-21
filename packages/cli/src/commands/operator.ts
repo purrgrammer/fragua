@@ -345,6 +345,11 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   console.log(`  status:   ${statusColor(d.runStatus)} ${chalk.dim(`(${d.status})`)}`);
   console.log(`  workflow: ${d.workflowName ?? d.workflow?.slice(0, 12) ?? chalk.dim("?")}`);
   if (d.cwd != null) console.log(`  cwd:      ${d.cwd}`);
+  if (d.baseGitRef != null || d.baseGitSha != null) {
+    const ref = d.baseGitRef != null ? d.baseGitRef : "";
+    const sha = d.baseGitSha != null ? chalk.dim(` ${d.baseGitSha.slice(0, 7)}`) : "";
+    console.log(`  base:     ${ref}${sha}`);
+  }
   console.log(`  cost:     $${d.costUsd.toFixed(4)} ${chalk.dim(`(${d.inputTokens}+${d.outputTokens} tok)`)}`);
   if (d.durationMs != null) console.log(`  duration: ${(d.durationMs / 1000).toFixed(1)}s`);
 

@@ -30,22 +30,18 @@
 // - Extension registration (custom streamSimple + OAuth provider) is
 //   preserved since summariser / custom-provider flows may need it.
 
-import {
-  type AnthropicMessagesCompat,
-  type Api,
-  type AssistantMessageEventStream,
-  type Context,
-  getModels,
-  getProviders,
-  type KnownProvider,
-  type Model,
-  type OAuthProviderInterface,
-  type OpenAICompletionsCompat,
-  type OpenAIResponsesCompat,
-  registerApiProvider,
-  resetApiProviders,
-  type SimpleStreamOptions,
+import type {
+  AnthropicMessagesCompat,
+  Api,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { getModels, getProviders, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai/compat";
+import type { OAuthProviderInterface } from "@earendil-works/pi-ai/oauth";
 import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
@@ -110,6 +106,7 @@ const ThinkingLevelMapSchema = Type.Object({
   medium: Type.Optional(ThinkingLevelMapValueSchema),
   high: Type.Optional(ThinkingLevelMapValueSchema),
   xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+  max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
@@ -404,7 +401,7 @@ export class ModelRegistry {
     modelOverrides: Map<string, Map<string, ModelOverride>>,
   ): Model<Api>[] {
     return getProviders().flatMap((provider) => {
-      const models = getModels(provider as KnownProvider) as Model<Api>[];
+      const models = getModels(provider) as Model<Api>[];
       const providerOverride = overrides.get(provider);
       const perModelOverrides = modelOverrides.get(provider);
       return models.map((m) => {
@@ -530,26 +527,24 @@ export class ModelRegistry {
 
   private parseModels(config: ModelsConfig): Model<Api>[] {
     const models: Model<Api>[] = [];
-    const builtInProviders = new Set<string>(getProviders());
-    const builtInDefaultsCache = new Map<string, { api: string; baseUrl: string }>();
-    const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
-      if (!builtInProviders.has(providerName)) return undefined;
-      if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
-      const builtIn = getModels(providerName as KnownProvider) as Model<Api>[];
-      const first = builtIn[0];
-      if (!first) return undefined;
-      const defaults = { api: first.api, baseUrl: first.baseUrl };
-      builtInDefaultsCache.set(providerName, defaults);
-      return defaults;
-    };
+    // api/baseUrl defaults keyed by built-in provider name. Built by
+    // iterating `getProviders()` (each element typed `BuiltinProvider`,
+    // so no cast) and skipping providers whose static catalogue is empty
+    // — purely dynamic providers like `radius` carry no first model to
+    // borrow defaults from, so they're simply absent from the map.
+    const builtInDefaults = new Map<string, { api: string; baseUrl: string }>();
+    for (const provider of getProviders()) {
+      const first = (getModels(provider) as Model<Api>[])[0];
+      if (first) builtInDefaults.set(provider, { api: first.api, baseUrl: first.baseUrl });
+    }
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
       const modelDefs = providerConfig.models ?? [];
       if (modelDefs.length === 0) continue;
-      const builtInDefaults = getBuiltInDefaults(providerName);
+      const providerDefaults = builtInDefaults.get(providerName);
       for (const modelDef of modelDefs) {
-        const api = modelDef.api ?? providerConfig.api ?? builtInDefaults?.api;
+        const api = modelDef.api ?? providerConfig.api ?? providerDefaults?.api;
         if (!api) continue;
-        const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? builtInDefaults?.baseUrl;
+        const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? providerDefaults?.baseUrl;
         if (!baseUrl) continue;
         const compat = mergeCompat(providerConfig.compat, modelDef.compat);
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);

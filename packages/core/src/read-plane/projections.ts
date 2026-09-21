@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
-import { HALT_REASONS, type HaltReason, mapStatus } from "@fragua/types";
+import { HALT_REASONS, type HaltReason, mapStatus, RUN_STATE_FACT_TYPES, TERMINAL_RUN_FACT_TYPES } from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { projectRunOutput } from "../engine/outputs-substitution.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
@@ -538,32 +538,6 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
     return a.iteration - b.iteration;
   });
 }
-
-/** Run-state-changing facts. A `fact.run_paused` is the *active* pause only
- *  when it's the latest of these in the trail — a later resume/terminal/
- *  human-pause supersedes it. */
-const RUN_STATE_FACT_TYPES = new Set<string>([
-  "fact.run_paused",
-  "fact.run_resumed",
-  "fact.run_terminated",
-  "fact.run_quarantined",
-  // LEGACY (≤v3) read-only fold paths — superseded in emission by the v4 facts
-  // above, but still fold for runs pinned below contract v4.
-  "fact.run_paused_human",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
-]);
-
-/** Terminal run facts, v4 + LEGACY (≤v3). A run ends on exactly one of these;
- *  the node-state fold uses its seq to downgrade still-`running` nodes. */
-const TERMINAL_RUN_FACT_TYPES = new Set<string>([
-  "fact.run_terminated",
-  "fact.run_quarantined",
-  "fact.run_completed",
-  "fact.run_halted",
-  "fact.run_cancelled",
-]);
 
 /** The currently-active `fact.run_paused` node + seq, or `null` when the
  *  run isn't paused (no pause fact, or a later run-state fact superseded it).

@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerFauxProvider } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 

@@ -100,6 +100,35 @@ describe("genesis derivation", () => {
     store.close();
   });
 
+  test("pinned base seeds run_state.base_git_{sha,ref} at enqueue and round-trips through the log", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const runId = newRunId();
+    const baseSha = "b".repeat(40);
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id-1",
+      projectName: "proj",
+      baseGitSha: baseSha,
+      baseGitRef: "feature-x",
+    });
+
+    // Seeded onto the live projection before any fact runs (status still queued).
+    const queued = store.getState(runId)!;
+    expect(queued.status).toBe("queued");
+    expect(queued.baseGitSha).toBe(baseSha);
+    expect(queued.baseGitRef).toBe("feature-x");
+
+    // The base lands on the genesis event, not a side table — deriving from the
+    // raw log reproduces it.
+    const derived = deriveFromLog(runId, store.getEvents(runId));
+    expect(derived.baseGitSha).toBe(baseSha);
+    expect(derived.baseGitRef).toBe("feature-x");
+    store.close();
+  });
+
   test("enqueue rejects an over-cap genesis payload", async () => {
     const store = freshStore();
     const sha = await seedWorkflow(store);

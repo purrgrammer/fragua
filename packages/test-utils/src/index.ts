@@ -1,3 +1,4 @@
+export { allModels, realPair } from "./catalog-helpers.ts";
 export {
   extractDeclarations,
   normalizeSource,

@@ -99,9 +99,9 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
     else if (p.status === "fail") failed += 1;
     else if (p.status === "canceled") canceled += 1;
 
-    totalCostUsd += p.costUsd;
-    totalInputTokens += p.inputTokens;
-    totalOutputTokens += p.outputTokens;
+    totalCostUsd += p.costUsd ?? 0;
+    totalInputTokens += p.inputTokens ?? 0;
+    totalOutputTokens += p.outputTokens ?? 0;
     totalCacheReadTokens += p.cacheReadTokens ?? 0;
     totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
 
