@@ -12,6 +12,9 @@ const realGetEnvApiKey = pi.getEnvApiKey;
 
 afterEach(() => {
   mock.restore();
+  // `mock.restore()` does not undo `mock.module` in bun — without this the
+  // patched findEnvKeys leaks into every later test file in the process.
+  mock.module("@earendil-works/pi-ai", () => pi);
 });
 
 describe("daemonEnvDeny (unknown/custom provider)", () => {

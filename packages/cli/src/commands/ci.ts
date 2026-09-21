@@ -130,8 +130,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
 
   const allowEnv = new Set(opts.allowEnv ?? []);
   // The global store's held providers extend the provider-cred rail to custom,
-  // store-only providers (`fragua providers add`) pi-ai can't name.
-  const storeProviders = listGlobalStoreProviders();
+  // store-only providers (`fragua providers add`) pi-ai can't name. Only the
+  // refusal scan consumes them, so an empty allow-set must not open the
+  // operator's live store at all.
+  const storeProviders = allowEnv.size > 0 ? listGlobalStoreProviders() : [];
   const unsafe = unsafeAllowEnvNames(allowEnv, storeProviders);
   if (unsafe.length > 0) {
     for (const name of unsafe) {

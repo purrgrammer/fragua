@@ -209,7 +209,7 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("unrelated bootstrap failure (exit != 127, no referenced var) gets NO env-strip note", async () => {
+  test("unrelated bootstrap failure (no referenced var) gets NO env-strip note", async () => {
     // The daemon always populates envDenyNames with provider names, so an
     // unrelated failure must not be blamed on the env-strip.
     const env = new WorktreeEnvironment({
@@ -230,7 +230,10 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("exit 127 with the env-strip active gets the command-not-found note", async () => {
+  test("a command-not-found bootstrap gets NO env-strip note", async () => {
+    // Exit 127 says a binary is missing from PATH. PATH is not secret-shaped,
+    // so the strip cannot have caused it — and under the daemon envDenyNames
+    // is never empty, so blaming the strip here would blame it on every typo.
     const env = new WorktreeEnvironment({
       repoRoot: repo,
       runId: "boot-fail-127",
@@ -244,9 +247,8 @@ describe("WorktreeEnvironment", () => {
     } catch (err) {
       error = err as Error;
     }
-    expect(error?.message).toContain("127");
-    expect(error?.message).toContain("note:");
-    expect(error?.message).toContain("bash.env-passthrough");
+    expect(error?.message).toContain("bootstrap command failed");
+    expect(error?.message).not.toContain("note:");
     await env.dispose();
   });
 

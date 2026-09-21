@@ -154,12 +154,11 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
         const cmd = this.bootstrap;
         const result = await this.local.exec(cmd, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
-          // The bootstrap ran under the bash env-strip. Only surface the strip as
-          // a suspect when the failure plausibly involves it — a stripped var
-          // named in the command, or a `command not found` (exit 127, the shape
-          // a stripped PATH-adjacent credential helper produces). An unrelated
-          // failure (network timeout, wrong cwd) must NOT get the note, since the
-          // daemon always populates envDenyNames with provider names.
+          // The bootstrap ran under the bash env-strip. Only surface the strip
+          // as a suspect when the command actually names a stripped var. The
+          // daemon always populates envDenyNames with provider names, so any
+          // looser gate fires on every unrelated failure (network timeout,
+          // wrong cwd, typo'd command) and misattributes it to the strip.
           const denied = this.envDenyNames ? [...this.envDenyNames] : [];
           const referenced = denied.filter((n) => cmd.includes(n));
           const hint = this.envPassthroughHint;
@@ -168,12 +167,6 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
             note =
               `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")}` +
               (hint ? ` — re-admit a non-credential var via ${hint}` : "") +
-              `)`;
-          } else if (result.exitCode === 127 && denied.length > 0) {
-            note =
-              `\n(note: exit 127 (command not found) with the bash env-strip active — it removed ` +
-              `provider-credential-shaped vars from the bootstrap env` +
-              (hint ? `; re-admit a non-credential var via ${hint}` : "") +
               `)`;
           }
           throw new Error(`bootstrap command failed (exit ${result.exitCode}): ${cmd}\n${result.stderr.trim()}${note}`);
