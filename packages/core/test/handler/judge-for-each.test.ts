@@ -361,3 +361,46 @@ describe("judge handler — for-each composite", () => {
     expect(msg.forEach?.kept).toEqual([2]);
   });
 });
+
+describe("judge handler — the review band", () => {
+  test("an item that fails keep but holds the band lands in review, not dropped", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS, sev: SEV },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
+      review: { rules: [{ question: "holds", min: 0.15, max: 0.6 }] },
+    });
+    // perItem answers holds at 0.9 / 0.2 / 0.9 — item 1 fails keep, holds the band.
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    const out = res.outputs as { kept: unknown[]; review: unknown[]; dropped: unknown[] };
+    expect(out.kept).toHaveLength(2);
+    expect(out.review).toHaveLength(1);
+    expect(out.dropped).toHaveLength(0);
+    expect((out.review[0] as { claim: string }).claim).toBe("unused import");
+    const msg = c.messages.find((m) => m.role === "judge_node");
+    if (msg === undefined || msg.role !== "judge_node") throw new Error("no judge message");
+    expect(msg.forEach?.kept).toEqual([0, 2]);
+    expect(msg.forEach?.review).toEqual([1]);
+    expect(msg.forEach?.reviewRules).toEqual([{ question: "holds", min: 0.15, max: 0.6 }]);
+  });
+
+  test("outside the band the item is still dropped", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS, sev: SEV },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
+      review: { rules: [{ question: "holds", min: 0.3, max: 0.6 }] },
+    });
+    const res = await h.handler(ctxWith(c, { read: { findings: FINDINGS } }, stubJudge(perItem, c)));
+    if (res.kind !== "transition") throw new Error(res.kind);
+    const out = res.outputs as { kept: unknown[]; review: unknown[]; dropped: unknown[] };
+    expect(out.kept).toHaveLength(2);
+    expect(out.review).toHaveLength(0);
+    expect(out.dropped).toHaveLength(1);
+  });
+});

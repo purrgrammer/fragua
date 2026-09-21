@@ -11,7 +11,7 @@
 // against it never sees a "not configured" answer at runtime.
 
 import type { JudgeJson, JudgeQuestion } from "@fragua/core";
-import { parseJudgeQuestions } from "@fragua/core";
+import { JUDGE_DEFAULT_MODEL, parseJudgeQuestions } from "@fragua/core";
 import { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "@fragua/core/handler";
 import { Type } from "@sinclair/typebox";
 import type { Tool } from "./types.ts";
@@ -90,7 +90,7 @@ export const judgeTool: Tool<JudgeToolArgs, JudgeToolData> = {
     }
     try {
       const res = await judge.ask(
-        { model: "jev-latest", state: args.state, questions },
+        { model: JUDGE_DEFAULT_MODEL, state: args.state, questions },
         opts.signal ?? new AbortController().signal,
       );
       ctx?.emit("cost.recorded", judgeCostPayload(judge.provider, res));

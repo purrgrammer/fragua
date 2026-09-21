@@ -165,6 +165,9 @@ export interface JudgeNodeMessage {
     chunks: number;
     kept?: number[];
     rules?: Array<{ question: string; min?: number; max?: number }>;
+    /** Indices sent to the `review` band, and the bounds that put them there. */
+    review?: number[];
+    reviewRules?: Array<{ question: string; min?: number; max?: number }>;
     labels?: string[];
     /** Per-item `composite:` values, aligned with the input list. */
     composites?: Array<Record<string, number>>;

@@ -136,3 +136,42 @@ steps:
     expect(() => parseWorkflow(FOR_EACH("", "    keep: {holds: {}}\n"))).toThrow(/at least one of min/);
   });
 });
+
+describe("judge parser — review band", () => {
+  const WF = (extra: string) => `
+name: wf
+steps:
+  read:
+    prompt: p
+    outputs:
+      findings:
+        type: array
+        items: {type: object, fields: {claim: {type: string}}}
+    next: judge
+  judge:
+    type: judge
+    for-each: \${{ outputs.read.findings }}
+    questions:
+      holds: {type: noul, instructions: Does \`item.claim\` hold?}
+${extra}    next: synth
+  synth:
+    prompt: p
+    next: exit
+`;
+
+  test("review parses beside keep and adds a third typed output", () => {
+    const g = parseWorkflow(WF("    keep: {holds: 0.7}\n    review: {holds: {min: 0.3, max: 0.7}}\n"));
+    const j = g.nodes["judge"]!;
+    expect(j.attrs.judge_review).toEqual({ rules: [{ question: "holds", min: 0.3, max: 0.7 }] });
+    expect(j.attrs.outputs!["review"]).toEqual(j.attrs.outputs!["kept"]!);
+  });
+
+  test("review without keep is a parse error", () => {
+    expect(() => parseWorkflow(WF("    review: {holds: {min: 0.3, max: 0.7}}\n"))).toThrow(/`review:` without `keep:`/);
+  });
+
+  test("no review declared leaves the outputs at kept / dropped", () => {
+    const g = parseWorkflow(WF("    keep: {holds: 0.7}\n"));
+    expect(g.nodes["judge"]!.attrs.outputs!["review"]).toBeUndefined();
+  });
+});

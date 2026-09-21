@@ -95,19 +95,23 @@ function ForEachBlocks({
   forEach: NonNullable<JudgeNodeMessage["forEach"]>;
 }): JSX.Element {
   const keptSet = forEach.kept === undefined ? undefined : new Set(forEach.kept);
+  const reviewSet = forEach.review === undefined ? undefined : new Set(forEach.review);
   const indices = Array.from({ length: forEach.count }, (_, i) => i);
-  const boundFor = (id: string): NoulThreshold | undefined => {
-    const rule = forEach.rules?.find((r) => r.question === id);
-    if (rule === undefined) return undefined;
-    return {
-      ...(rule.min !== undefined ? { min: rule.min } : {}),
-      ...(rule.max !== undefined ? { max: rule.max } : {}),
-    };
+  const boundFor = (id: string): NoulThreshold | undefined => ruleBound(forEach.rules, id);
+  const verdictOf = (i: number): "kept" | "review" | "dropped" | undefined => {
+    if (keptSet === undefined) return undefined;
+    if (keptSet.has(i)) return "kept";
+    return reviewSet?.has(i) === true ? "review" : "dropped";
+  };
+  const TONE: Record<"kept" | "review" | "dropped", string> = {
+    kept: "bg-sw-accent-success",
+    review: "bg-sw-accent-warn",
+    dropped: "bg-sw-accent-idle",
   };
   return (
     <>
       {indices.map((i) => {
-        const verdict = keptSet === undefined ? undefined : keptSet.has(i) ? "kept" : "dropped";
+        const verdict = verdictOf(i);
         return (
           <div
             key={i}
@@ -127,10 +131,7 @@ function ForEachBlocks({
               ) : null}
               {verdict !== undefined ? (
                 <>
-                  <span
-                    aria-hidden
-                    className={`size-1.5 rounded-full ${verdict === "kept" ? "bg-sw-accent-success" : "bg-sw-accent-idle"}`}
-                  />
+                  <span aria-hidden className={`size-1.5 rounded-full ${TONE[verdict]}`} />
                   <span>{verdict}</span>
                 </>
               ) : null}

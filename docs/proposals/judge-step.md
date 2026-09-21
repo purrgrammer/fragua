@@ -436,6 +436,48 @@ list: the llm step gathers (opens the cited code, emits it as data), the judge
 answers atomic questions per item, `keep` and the consumer's thresholds are the
 `if` statements — written in the workflow, not in an agent's prose.
 
+### 3.9 `review:` — the band between kept and dropped
+
+```yaml
+keep:   {present: 0.6, refuted: {max: 0.4}}
+review: {present: {min: 0.3, max: 0.6}}     # same grammar; requires `keep:`
+```
+
+An item that fails `keep` but holds every `review` rule lands in a third typed
+output, `review`, rather than `dropped`. The model's own docs put 0.3–0.7 in an
+"uncertain" band and route it to a person; a two-way keep collapses that band
+into a silent no, and nothing downstream can tell a 0.55 from a 0.05.
+
+- Order is keep, then review, then dropped. A rule that fails for a different
+  reason (a high `refuted` on a confidently-present finding) still drops,
+  because the band is authored on the question that is actually torn.
+- `review` carries the same item shape as `kept` / `dropped`, answers under
+  `judge`, so the consumer can settle an item from the evidence or list it as
+  uncertain. `review.yaml` and `pr_review.yaml` do the latter.
+- The equivalent for a gate is the `fail` edge, which is already a recoverable
+  landing: a `retry:` gate re-runs its target, so an uncertain gate read costs a
+  retry, not a lost finding. The asymmetry is deliberate — `keep` loses data
+  permanently, a gate does not.
+
+### 3.10 Reading the thresholds back — `fragua judge calibrate`
+
+The only method the vendor endorses for choosing a threshold is labelled
+examples plus the cost of a wrong action. Short of that, the distribution a
+gate actually sees is the next best evidence, and every judge answer is already
+in the event log:
+
+```
+fragua judge calibrate review
+  correctness_judge
+    present   keep  >= 0.6   n=  26  near bound 4 (15%)  uncertain 8 (31%)  range 0.20-0.94
+```
+
+Bounds are read from the graph each run executed, so editing a threshold
+compares new runs against the new number and old runs against the old one.
+`--margin` sets the flip-risk window (default 0.10). This is something a caller
+of the API cannot do for itself: the answers, the bounds and the runs are all
+in one store.
+
 ### 3.8 `composite:` — weights the workflow owns
 
 ```yaml
@@ -613,7 +655,7 @@ below are the cross-attribute rules a well-shaped graph can still break:
 | E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); a `keep` rule names something that is neither one of the judge's own `noul`s nor a `composite`. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
 | E050 | a `for-each` question references `` `item.<path>` `` into a field the producer's item type does not declare |
 | E051 | the iterated items carry a field named `judge`, which the kept / dropped answers would overwrite |
-| E052 | `composite:` named like a question or a fold field (`answers` / `kept` / `dropped` / `judge` / `item`); weights an undeclared question or a `choice` |
+| E052 | `composite:` named like a question or a fold field (`answers` / `kept` / `dropped` / `review` / `judge` / `item`); weights an undeclared question or a `choice` |
 | W022 | `item.<field>` outside backticks in a `for-each` question — never re-aimed, the model reads the words |
 | W020 | a routed `choice` with ≥ 3 options and neither `min-confidence` nor `min-probability` — the confidence axis is free and the author is discarding it (advice, per the docs' "thresholds scale with risk") |
 | W021 | literal `state:` text exceeds 16 KiB — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately |

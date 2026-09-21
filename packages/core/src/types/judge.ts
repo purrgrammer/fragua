@@ -53,7 +53,14 @@ export interface JudgeComposite {
 
 /** Field names a composite may not take: the question ids, and the names the
  * for-each fold owns. */
-export const JUDGE_COMPOSITE_RESERVED_NAMES: readonly string[] = ["answers", "kept", "dropped", "judge", "item"];
+export const JUDGE_COMPOSITE_RESERVED_NAMES: readonly string[] = [
+  "answers",
+  "kept",
+  "dropped",
+  "review",
+  "judge",
+  "item",
+];
 
 /** One `noul` threshold: the answer must reach `min` and/or stay under `max`.
  * Authored as `<id>: <min>` or `<id>: {min?, max?}`; at least one bound. */
@@ -76,6 +83,14 @@ export type JudgeDecide = { route: JudgeRouteDecision } | { outcome: JudgeOutcom
 /** `keep:` on a `for-each` judge — the per-item decision: an item stays in
  * `kept` when every threshold holds (all-of), same grammar as `decide.outcome`. */
 export interface JudgeKeep {
+  rules: JudgeThreshold[];
+}
+
+/** `review:` — the band between kept and dropped. An item that fails `keep`
+ * but holds here lands in `review` instead of `dropped`, so an answer the
+ * model reports as uncertain is set aside for a second look rather than
+ * silently lost. Same grammar as `keep`. */
+export interface JudgeReview {
   rules: JudgeThreshold[];
 }
 
@@ -148,7 +163,10 @@ export function planForEachChunks(input: JudgeChunkPlanInput): number[][] | { to
 /** The key the list travels under in a `for-each` request's state. */
 export const JUDGE_FOR_EACH_ITEMS_KEY = "items";
 
-export const JUDGE_DEFAULT_MODEL = "jev-latest";
+/** Pinned, not the `jev-latest` alias: an alias moves when a release ships,
+ * and every threshold a workflow authors is read against the answers of one
+ * version. Authors move deliberately with `model:` on the step. */
+export const JUDGE_DEFAULT_MODEL = "jev-1.13.0";
 export const JUDGE_DEFAULT_PROVIDER = "typesafe";
 export const JUDGE_DEFAULT_STATE_MAX_BYTES = 64 * 1024;
 export const JUDGE_HARD_STATE_MAX_BYTES = 1024 * 1024;
@@ -169,7 +187,7 @@ export function isJudgeIdentifier(s: string): boolean {
  * `keep:` is set. An item profile that is not a record sits under `item`. */
 export function deriveJudgeOutputs(
   questions: Record<string, JudgeQuestion>,
-  forEach?: { itemProfile: OutputProfile | undefined; keep: boolean },
+  forEach?: { itemProfile: OutputProfile | undefined; keep: boolean; review?: boolean },
   composites: readonly JudgeComposite[] = [],
 ): OutputsDecl {
   const perQuestion = deriveAnswerRecords(questions);
@@ -193,6 +211,7 @@ export function deriveJudgeOutputs(
   };
   decl["kept"] = { kind: "array", items: judged };
   decl["dropped"] = { kind: "array", items: judged };
+  if (forEach.review === true) decl["review"] = { kind: "array", items: judged };
   return decl;
 }
 

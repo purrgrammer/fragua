@@ -32,6 +32,16 @@ guarantee.
   `for-each-max-items` caps the list (default 200). Validator E049.
 - **Per-question thresholds.** `decide.outcome` and `keep` take a mapping of noul
   id → `<min>` or `{min, max}`; every rule must hold. A hazard gates with `max`.
+- **`review:` — the uncertainty band on a `for-each` judge.** `review: {<noul>:
+  {min, max}, …}` (same grammar as `keep:`) gives a third typed output beside
+  `kept` and `dropped`: an item that fails `keep` but holds the band lands in
+  `review` instead of being dropped, so an answer the model reports as unsure
+  is set aside for a second look rather than silently lost. Requires `keep:`.
+- **`fragua judge calibrate [workflow]`.** Reads every judge answer back out of
+  the store and reports, per gate, how many reads landed within a margin of the
+  authored bound and how many fell inside the model's uncertain band. Bounds
+  come from the graph each run executed, so editing a threshold does not
+  rewrite history. `--margin` sets the window (default 0.10).
 - **`composite:` on judge steps.** `composite: {<name>: {<question>: <weight>, …}}`
   declares weighted means over `noul` / `score` answers (each mapped to [0, 1]);
   every composite is a `number` output beside the answers, per item on a
@@ -58,6 +68,12 @@ guarantee.
   `judge` tool calls it made as their own row (calls, input tokens, recorded
   cost) instead of folding their tokens into the step's model buckets at the
   wrong rate; the step total still includes them.
+
+### Changed
+
+- **Judge steps pin `jev-1.13.0` by default** instead of the `jev-latest` alias.
+  An alias moves when a release ships, and every threshold a workflow authors is
+  read against one version's answers. Set `model:` on the step to move.
 
 ### Fixed
 

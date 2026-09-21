@@ -16,6 +16,7 @@ import {
   type JudgeJson,
   type JudgeKeep,
   type JudgeQuestion,
+  type JudgeReview,
   type JudgeState,
   type JudgeThreshold,
 } from "../types/judge.ts";
@@ -295,6 +296,11 @@ export function parseJudgeComposite(raw: unknown): JudgeComposite[] {
 /** `keep:` — the per-item thresholds, same grammar as `decide.outcome`. */
 export function parseJudgeKeep(raw: unknown): JudgeKeep {
   return { rules: parseJudgeThresholds(raw, "keep") };
+}
+
+/** `review:` — the uncertainty band, same grammar as `keep`. */
+export function parseJudgeReview(raw: unknown): JudgeReview {
+  return { rules: parseJudgeThresholds(raw, "review") };
 }
 
 export function parseJudgeForEachMaxItems(raw: unknown): number {

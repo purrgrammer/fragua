@@ -107,7 +107,9 @@ import {
 import {
   insertMessage,
   insertMessageOrIgnore,
+  type JudgeAnswerRow,
   selectActiveThreads,
+  selectJudgeMessages,
   selectMaxMessageOrdinal,
   selectMessageByDedup,
   selectMessages,
@@ -1124,6 +1126,12 @@ export class SqliteStore implements IEventStore {
 
   getStepAggregates(runId: string): StepAggregateRow[] {
     return queryStepAggregates(this.db, runId);
+  }
+
+  /** Every recorded `judge_node` message, optionally narrowed to one workflow
+   * by display name. Read-only history for `fragua judge calibrate`. */
+  getJudgeMessages(workflowName?: string): JudgeAnswerRow[] {
+    return selectJudgeMessages(this.db, workflowName);
   }
 
   getRunCostTotals(runId: string): RunCostTotalsRow {

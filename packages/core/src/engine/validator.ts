@@ -82,6 +82,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "judge_keep",
   "judge_for_each_max_items",
   "judge_composite",
+  "judge_review",
   "outputs",
   "branches",
   "concurrency",
@@ -871,19 +872,22 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           `judge "${n.id}" \`for-each\` references \`${forEach}\`, a \`${profile.kind}\` — for-each needs an array-typed output`,
         );
       }
-      const keep = n.attrs.judge_keep;
-      if (keep !== undefined) {
-        for (const { question: qid } of keep.rules) {
+      for (const [label, block] of [
+        ["keep", n.attrs.judge_keep],
+        ["review", n.attrs.judge_review],
+      ] as const) {
+        if (block === undefined) continue;
+        for (const { question: qid } of block.rules) {
           const t = thresholdable(qid);
           if (t === "missing") {
             err(
               "E049",
-              `judge "${n.id}" \`keep\` names question "${qid}", which is not declared in \`questions:\` (nor as a composite)`,
+              `judge "${n.id}" \`${label}\` names question "${qid}", which is not declared in \`questions:\` (nor as a composite)`,
             );
           } else if (t !== "ok") {
             err(
               "E049",
-              `judge "${n.id}" \`keep\` question "${qid}" is a \`${t}\` — only a \`noul\` or a \`composite\` thresholds an item in or out`,
+              `judge "${n.id}" \`${label}\` question "${qid}" is a \`${t}\` — only a \`noul\` or a \`composite\` thresholds an item in or out`,
             );
           }
         }

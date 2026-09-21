@@ -25,7 +25,9 @@ import {
   type JudgeJson,
   type JudgeKeep,
   type JudgeQuestion,
+  type JudgeReview,
   type JudgeState,
+  type JudgeThreshold,
   planForEachChunks,
   thresholdHolds,
 } from "../../types/judge.ts";
@@ -47,6 +49,8 @@ export interface JudgeConfig {
   /** `for-each:` — an `${{ outputs.X.f }}` reference to an array output. */
   forEach?: string;
   keep?: JudgeKeep;
+  /** The uncertainty band between `kept` and `dropped`. */
+  review?: JudgeReview;
   composites?: JudgeComposite[];
   forEachMaxItems?: number;
   /** Test seams: the provider budgets the chunk planner sizes against. */
@@ -221,7 +225,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     let forEachMeta: JudgeNodeMessage["forEach"];
     let compositeValues: Record<string, number> | undefined;
     if (items !== undefined) {
-      const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep, composites);
+      const folded = foldForEach(cfg.questions, response.answers, items, cfg.keep, cfg.review, composites);
       if ("error" in folded) return halt(`judge provider returned malformed answers — ${folded.error}`);
       outputs = folded.outputs;
       forEachMeta = {
@@ -229,7 +233,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
         chunks: plan.length,
         labels: items.map(itemLabel),
         ...(folded.kept !== undefined ? { kept: folded.kept } : {}),
+        ...(folded.review !== undefined ? { review: folded.review } : {}),
         ...(cfg.keep !== undefined ? { rules: cfg.keep.rules } : {}),
+        ...(cfg.review !== undefined ? { reviewRules: cfg.review.rules } : {}),
         ...(composites.length > 0 ? { composites: folded.composites } : {}),
       };
     } else {
@@ -506,12 +512,17 @@ function foldForEach(
   answers: Record<string, JudgeAnswer>,
   items: readonly JudgeJson[],
   keep: JudgeKeep | undefined,
+  review: JudgeReview | undefined,
   composites: readonly JudgeComposite[] = [],
-): { outputs: OutputsValue; kept?: number[]; composites: Array<Record<string, number>> } | { error: string } {
+):
+  | { outputs: OutputsValue; kept?: number[]; review?: number[]; composites: Array<Record<string, number>> }
+  | { error: string } {
   const perItem: OutputStructValue[] = [];
   const kept: OutputStructValue[] = [];
   const dropped: OutputStructValue[] = [];
+  const reviewing: OutputStructValue[] = [];
   const keptIdx: number[] = [];
+  const reviewIdx: number[] = [];
   const perItemComposites: Array<Record<string, number>> = [];
   for (let i = 0; i < items.length; i++) {
     const own: Record<string, JudgeAnswer> = {};
@@ -524,13 +535,23 @@ function foldForEach(
     perItem.push(folded.outputs);
     perItemComposites.push(folded.composites);
     if (keep === undefined) continue;
-    let pass = true;
-    for (const rule of keep.rules) {
-      const value = ruleValue(rule.question, own, folded.composites);
-      if (value === undefined) {
-        return { error: `item ${i}: keep question "${rule.question}" has no noul or composite value` };
+    const holdsAll = (rules: readonly JudgeThreshold[], path: string): boolean | { error: string } => {
+      for (const rule of rules) {
+        const value = ruleValue(rule.question, own, folded.composites);
+        if (value === undefined) {
+          return { error: `item ${i}: ${path} question "${rule.question}" has no noul or composite value` };
+        }
+        if (!thresholdHolds(rule, value)) return false;
       }
-      if (!thresholdHolds(rule, value)) pass = false;
+      return true;
+    };
+    const pass = holdsAll(keep.rules, "keep");
+    if (typeof pass !== "boolean") return pass;
+    let banded = false;
+    if (!pass && review !== undefined) {
+      const inBand = holdsAll(review.rules, "review");
+      if (typeof inBand !== "boolean") return inBand;
+      banded = inBand;
     }
     const item = items[i] as OutputStructValue;
     const fields: { [k: string]: OutputStructValue } =
@@ -539,6 +560,9 @@ function foldForEach(
     if (pass) {
       kept.push(fields);
       keptIdx.push(i);
+    } else if (banded) {
+      reviewing.push(fields);
+      reviewIdx.push(i);
     } else {
       dropped.push(fields);
     }
@@ -547,7 +571,13 @@ function foldForEach(
   if (keep === undefined) return { outputs, composites: perItemComposites };
   outputs["kept"] = kept;
   outputs["dropped"] = dropped;
-  return { outputs, kept: keptIdx, composites: perItemComposites };
+  if (review !== undefined) outputs["review"] = reviewing;
+  return {
+    outputs,
+    kept: keptIdx,
+    ...(review !== undefined ? { review: reviewIdx } : {}),
+    composites: perItemComposites,
+  };
 }
 
 /** A short handle for an item on the card: its `location` or `id` when it has

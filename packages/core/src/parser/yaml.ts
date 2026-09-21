@@ -112,6 +112,7 @@ import {
   parseJudgeForEachMaxItems,
   parseJudgeKeep,
   parseJudgeQuestions,
+  parseJudgeReview,
   parseJudgeState,
   parseJudgeStateMaxBytes,
 } from "./judge.ts";
@@ -196,6 +197,7 @@ const STEP_RESERVED = new Set([
   "state-max-bytes",
   "for-each",
   "keep",
+  "review",
   "for-each-max-items",
   "composite",
 ]);
@@ -533,6 +535,17 @@ function parseJudgeBlocks(
     attrs["judge_keep"] = lift("keep", keep.node, () => parseJudgeKeep(keep.raw));
   }
 
+  const review = block("review");
+  if (review.node !== undefined) {
+    if (keep.node === undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares \`review:\` without \`keep:\` — the review band sits between kept and dropped`,
+        ...locArr(locOf(review.node, lineCounter)),
+      );
+    }
+    attrs["judge_review"] = lift("review", review.node, () => parseJudgeReview(review.raw));
+  }
+
   const decide = block("decide");
   if (decide.node !== undefined) {
     if (forEach.node !== undefined) {
@@ -563,7 +576,11 @@ function parseJudgeBlocks(
   attrs["outputs"] =
     forEach.node === undefined
       ? deriveJudgeOutputs(parsedQuestions, undefined, composites)
-      : deriveJudgeOutputs(parsedQuestions, { itemProfile: undefined, keep: keep.node !== undefined }, composites);
+      : deriveJudgeOutputs(
+          parsedQuestions,
+          { itemProfile: undefined, keep: keep.node !== undefined, review: review.node !== undefined },
+          composites,
+        );
 
   const smb = block("state-max-bytes");
   attrs["judge_state_max_bytes"] = lift("state-max-bytes", smb.node, () => parseJudgeStateMaxBytes(smb.raw));
@@ -587,7 +604,7 @@ function attachForEachOutputs(nodes: Record<string, Node>): void {
     const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
     n.attrs.outputs = deriveJudgeOutputs(
       questions,
-      { itemProfile, keep: n.attrs.judge_keep !== undefined },
+      { itemProfile, keep: n.attrs.judge_keep !== undefined, review: n.attrs.judge_review !== undefined },
       n.attrs.judge_composite ?? [],
     );
   }

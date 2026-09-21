@@ -59,7 +59,7 @@ describe("judge tool", () => {
     );
     expect(out.is_error).toBeUndefined();
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.model).toBe("jev-latest");
+    expect(requests[0]!.model).toBe("jev-1.13.0");
     expect(Object.keys(requests[0]!.questions)).toEqual(["c1", "c2"]);
     expect(out.data?.answers).toEqual({ c1: { type: "noul", noul: 0.91 }, c2: { type: "noul", noul: 0.12 } });
     expect(out.data?.input_tokens).toBe(800);

@@ -237,7 +237,7 @@ describe("judge handler — happy paths", () => {
     expect(result.costUsd).toBeCloseTo(500 * JUDGE_USD_PER_INPUT_TOKEN, 12);
     expect(result.outputCostUsd).toBe(0);
 
-    expect(cap.requests[0]!.model).toBe("jev-latest");
+    expect(cap.requests[0]!.model).toBe("jev-1.13.0");
     expect(cap.requests[0]!.state).toEqual({ diff: "+1 -1", focus: "literal" });
     expect(cap.requests[0]!.questions).toEqual({ size: SIZE, ok: OK, depth: DEPTH });
 

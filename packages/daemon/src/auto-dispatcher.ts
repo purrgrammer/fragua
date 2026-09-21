@@ -250,6 +250,7 @@ function specForNode(
       if (attrs.judge_state !== undefined) judgeOpts.state = attrs.judge_state;
       if (attrs.judge_for_each !== undefined) judgeOpts.forEach = attrs.judge_for_each;
       if (attrs.judge_keep !== undefined) judgeOpts.keep = attrs.judge_keep;
+      if (attrs.judge_review !== undefined) judgeOpts.review = attrs.judge_review;
       if (attrs.judge_composite !== undefined) judgeOpts.composites = attrs.judge_composite;
       if (attrs.judge_for_each_max_items !== undefined) judgeOpts.forEachMaxItems = attrs.judge_for_each_max_items;
       if (attrs.judge_decide !== undefined) judgeOpts.decide = attrs.judge_decide;

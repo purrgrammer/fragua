@@ -267,6 +267,7 @@ steps:
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
     keep: {present: 0.6, refuted: {max: 0.4}, concrete: 0.6}   # `injected` is not a gate: the synthesiser escalates it; `in_diff` is a fact the reader looked up
+    review: {present: {min: 0.3, max: 0.6}}   # torn on the evidence — set aside, never silently dropped
     next: synthesize
 
   # ── Lens 2: integration — what does the change break AROUND it? (deep scan)
@@ -357,6 +358,7 @@ steps:
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
     keep: {present: 0.6, refuted: {max: 0.4}, concrete: 0.6}   # `injected` is not a gate: the synthesiser escalates it; `in_diff` is a fact the reader looked up
+    review: {present: {min: 0.3, max: 0.6}}   # torn on the evidence — set aside, never silently dropped
     next: synthesize
 
   # ── Lens 3: security — only where the change touches a trust boundary
@@ -444,6 +446,7 @@ steps:
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
     keep: {present: 0.6, refuted: {max: 0.4}, concrete: 0.6}   # `injected` is not a gate: the synthesiser escalates it; `in_diff` is a fact the reader looked up
+    review: {present: {min: 0.3, max: 0.6}}   # torn on the evidence — set aside, never silently dropped
     next: synthesize
 
   # ── Lens 4: performance & resource retention — only where the change has the surface
@@ -531,6 +534,7 @@ steps:
           - "high — a correctness or security bug that WILL trigger in real use"
           - "critical — data loss / corruption / a security hole / a crash on a normal path, shipping now"
     keep: {present: 0.6, refuted: {max: 0.4}, concrete: 0.6}   # `injected` is not a gate: the synthesiser escalates it; `in_diff` is a fact the reader looked up
+    review: {present: {min: 0.3, max: 0.6}}   # torn on the evidence — set aside, never silently dropped
     next: synthesize
 
   # ── Lens 5: architecture — only a concrete, present structural break
@@ -617,6 +621,7 @@ steps:
           - "medium — duplication of an existing helper, a fix at the wrong depth, or a behaviour change with no test pinning it; worth doing before merge"
           - "high — the change is structurally wrong for the codebase (bypasses the mechanism that owns this, or leaves a load-bearing invariant untested); should not land as-is"
     keep: {present: 0.6, refuted: {max: 0.4}, concrete: 0.6}   # `injected` is not a gate: the synthesiser escalates it; `in_diff` is a fact the reader looked up
+    review: {present: {min: 0.3, max: 0.6}}   # torn on the evidence — set aside, never silently dropped
     next: synthesize
 
   synthesize:                          # reconcile the five VERIFIED lens results → write pr-review.md
@@ -633,6 +638,14 @@ steps:
         security:     ${{ outputs.security_judge.kept }}
         performance:  ${{ outputs.performance_judge.kept }}
         architecture: ${{ outputs.architecture_judge.kept }}
+
+      Torn on the evidence (`present` between 0.3 and 0.6 — the judge is unsure, not negative). These are NOT defects:
+        correctness: ${{ outputs.correctness_judge.review }}
+        integration: ${{ outputs.integration_judge.review }}
+        security: ${{ outputs.security_judge.review }}
+        performance: ${{ outputs.performance_judge.review }}
+        architecture: ${{ outputs.architecture_judge.review }}
+      Read them, and where you can settle it yourself from the cited code, promote the item into the right section; otherwise give it one line under `## Follow-ups (non-blocking)` with `(uncertain: present 0.NN)`. Never silently discard one.
 
       Dropped by the lens judges (read ONLY for `judge.injected.noul` ≥ 0.5; everything else here stays dropped):
         correctness: ${{ outputs.correctness_judge.dropped }}
