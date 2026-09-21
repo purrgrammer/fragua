@@ -1961,6 +1961,63 @@ steps:
     r.store.close();
   });
 
+  // The clear (`pending_steer -> ""`) rides each llm branch's commit, so a
+  // branch queued BEHIND the semaphore commits after siblings have already
+  // cleared it. Pin that the steer still reaches it: `liveRouting` is the
+  // turn-start snapshot and folds only retry counts, so the committed clear
+  // must not leak back into a later cohort's branchRouting.
+  test("a pending steer reaches branches queued behind the concurrency limit", async () => {
+    const STEER_YAML = `name: fosteercap
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b, c, d], concurrency: 1, next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  c: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  d: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const ids = ["a", "b", "c", "d"];
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [], c: [], d: [] };
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    for (const id of ids) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+    enqueue(r, "fstc1", "begin");
+    r.store.appendIntent("fstc1", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    await drive(r, "fstc1");
+
+    expect(r.store.getState("fstc1")!.status).toBe("completed");
+    for (const id of ids) {
+      expect(seenSteering[id]).toEqual(["focus on the auth module"]);
+    }
+    r.store.close();
+  });
+
   // Regression (High): a MID-RUN operator steer that arrives while the run is
   // parked at a parallel node must reach EVERY branch handler's ctx.steering. On
   // resume the steer folds to `decision.steering` (not the pending_steer routing

@@ -925,6 +925,12 @@ export function buildRoutingPatch(args: {
   providerRetryDecision?: ProviderRetryDecision;
   goalGateRetargetTarget?: string;
   goalGateRetriesPatch?: number;
+  /** Did this turn's fact set actually come out carrying
+   * `fact.run_paused{reason:"operator"}`? Only then may the deferred-pause
+   * marker be cleared. Computed by the caller from the REWRITTEN facts,
+   * because the R3 swap has a condition (`facts.some(isSuccessContinuation)`)
+   * that cannot be re-derived from `result` + `decision` alone. */
+  operatorPauseApplied?: boolean;
 }): Record<string, unknown> | undefined {
   const {
     result,
@@ -1042,16 +1048,14 @@ export function buildRoutingPatch(args: {
   // sets `decision.shouldPauseAfterDispatch` when the marker is live, so the R3
   // swap in `rewriteTerminalFacts` emits `fact.run_paused`. Clear the marker
   // here — the twin of the steer clear above — once the pause has actually
-  // landed, so the run doesn't re-pause on resume. Only clear when the swap
-  // fired (transition result + operator pause): a halt or a non-transition turn
-  // leaves the marker for the next dispatch to honour. The marker lives in
-  // `effectiveRouting` (already in scope), so read it here rather than threading
-  // a param a future call site could forget to pass.
-  if (
-    readPauseAfterDispatch(effectiveRouting as Record<string, unknown>) &&
-    result.kind === "transition" &&
-    decision.shouldPauseAfterDispatch
-  ) {
+  // landed, so the run doesn't re-pause on resume.
+  //
+  // Gate on the OBSERVED pause fact, not on a re-derivation of the swap's
+  // condition. R3 additionally requires a success continuation in the fact set
+  // (a halt beats a pause and is left alone), so `transition &&
+  // shouldPauseAfterDispatch` is satisfied by turns that never paused — and
+  // clearing there swallows the operator's pause with nothing to show for it.
+  if (readPauseAfterDispatch(effectiveRouting as Record<string, unknown>) && args.operatorPauseApplied === true) {
     routingPatch = { ...(routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false };
   }
   return routingPatch;
@@ -1180,7 +1184,11 @@ export function planTransition(input: TransitionInput): TransitionPlan {
   });
 
   // Stage 7 — the routing patch.
+  const operatorPauseApplied = facts.some(
+    (f) => f.type === "fact.run_paused" && (f.payload as { reason?: string }).reason === "operator",
+  );
   const routingPatch = buildRoutingPatch({
+    operatorPauseApplied,
     result,
     decision,
     state,

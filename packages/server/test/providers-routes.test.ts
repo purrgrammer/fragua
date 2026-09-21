@@ -16,7 +16,38 @@ function mount(): { app: ReturnType<typeof providersRoutes>; store: SqliteStore 
   const app = providersRoutes({
     authStorage,
     modelRegistry,
-    defaultModels: defaultModelPerProvider as Record<string, string>,
+    defaultModels: defaultModelPerProvider,
+    testProvider: async () => ({ ok: false, error: "stub tester — not exercised in this suite" }),
+  });
+  return { app, store };
+}
+
+/** A registry backed by a store carrying one custom provider (absent
+ * from `defaultModelPerProvider`) so its models surface in `getAll()`. */
+function mountWithCustomProvider(): { app: ReturnType<typeof providersRoutes>; store: SqliteStore } {
+  const store = new SqliteStore();
+  store.upsertProviderConfig({
+    provider: "my-custom",
+    config: JSON.stringify({
+      baseUrl: "http://localhost:11434/v1",
+      api: "openai-completions",
+      models: [
+        {
+          id: "llama3.1:8b",
+          name: "llama3.1:8b",
+          api: "openai-completions",
+          contextWindow: 128_000,
+          maxTokens: 8_192,
+        },
+      ],
+    }),
+  });
+  const authStorage = AuthStorage.fromStore(store);
+  const modelRegistry = ModelRegistry.create(authStorage, store);
+  const app = providersRoutes({
+    authStorage,
+    modelRegistry,
+    defaultModels: defaultModelPerProvider,
     testProvider: async () => ({ ok: false, error: "stub tester — not exercised in this suite" }),
   });
   return { app, store };
@@ -29,6 +60,20 @@ async function post(app: ReturnType<typeof providersRoutes>, path: string, body:
     body: JSON.stringify(body),
   });
 }
+
+describe("GET /providers/:name — default_model", () => {
+  test("reports default_model: null for a provider absent from defaultModelPerProvider", async () => {
+    const { app, store } = mountWithCustomProvider();
+    try {
+      const res = await app.request("/providers/my-custom");
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { default_model: string | null };
+      expect(json.default_model).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+});
 
 describe("POST /providers/:name/credentials", () => {
   test("accepts {key} body and stores verbatim", async () => {

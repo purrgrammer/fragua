@@ -10,6 +10,7 @@ import { RunRow } from "../../src/components/RunRow.tsx";
 import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { summaryRow } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 function mount(client = createTestQueryClient(), path = "/runs") {
@@ -23,16 +24,7 @@ describe("RunsList", () => {
   it("renders a three-column header: Title / Workflow / Status (nothing else)", async () => {
     const client = createTestQueryClient();
     client.setQueryData(queries.runs.list().queryKey, [
-      {
-        runId: "r1",
-        workflow: "wf-A",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "success",
-        eventCount: 1,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
+      summaryRow({ runId: "r1", workflow: "wf-A", status: "success" }),
     ] satisfies RunSummary[]);
 
     const { container } = mount(client);
@@ -54,29 +46,25 @@ describe("RunsList", () => {
 
   it("renders one row per run with title link, workflow badge, and a status pill on the right", async () => {
     const rows: RunSummary[] = [
-      {
+      summaryRow({
         runId: "r1",
         title: "Summarise the weekly digest",
         workflow: "wf-A",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
         eventCount: 3,
         costUsd: 0.12,
         inputTokens: 3000,
         outputTokens: 1200,
         durationMs: 45_000,
-      },
-      {
+      }),
+      summaryRow({
         runId: "r2",
         title: "Draft release notes",
         workflow: "wf-B",
         startedAt: "2024-01-02T00:00:00Z",
         status: "running",
         eventCount: 1,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
+      }),
     ];
     const client = createTestQueryClient();
     client.setQueryData(queries.runs.list().queryKey, rows);
@@ -113,18 +101,7 @@ describe("RunsList", () => {
   });
 
   it("omits the workflow badge when the row has no workflow", async () => {
-    const rows: RunSummary[] = [
-      {
-        runId: "no-wf",
-        title: "Ad-hoc run",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "success",
-        eventCount: 1,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
-    ];
+    const rows: RunSummary[] = [summaryRow({ runId: "no-wf", title: "Ad-hoc run", status: "success" })];
     const client = createTestQueryClient();
     client.setQueryData(queries.runs.list().queryKey, rows);
 
@@ -190,11 +167,9 @@ describe("RunsList", () => {
 });
 
 function importedRow(overrides: Partial<RunSummary> = {}): RunSummary {
-  return {
+  return summaryRow({
     runId: "imp-1",
-    startedAt: "2024-01-01T00:00:00Z",
     status: "success",
-    runStatus: "completed",
     eventCount: 5,
     costUsd: 0.01,
     inputTokens: 100,
@@ -202,22 +177,20 @@ function importedRow(overrides: Partial<RunSummary> = {}): RunSummary {
     imported: true,
     title: "Imported run",
     ...overrides,
-  };
+  });
 }
 
 function normalRow(overrides: Partial<RunSummary> = {}): RunSummary {
-  return {
+  return summaryRow({
     runId: "norm-1",
-    startedAt: "2024-01-01T00:00:00Z",
     status: "success",
-    runStatus: "completed",
     eventCount: 5,
     costUsd: 0.01,
     inputTokens: 100,
     outputTokens: 50,
     title: "Normal run",
     ...overrides,
-  };
+  });
 }
 
 describe("RunRow — imported indicator", () => {

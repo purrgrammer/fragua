@@ -56,7 +56,7 @@ describe("RunConversation — tool_node row", () => {
         stdout: "1234\n",
       }),
     ];
-    const nodeStates: NodeState[] = [{ nodeId: "find_pr", iteration: 0, state: "completed", lastEventSeq: 1 }];
+    const nodeStates: NodeState[] = [{ nodeId: "find_pr", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 }];
 
     const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
     const q = within(container);
@@ -125,7 +125,7 @@ describe("RunConversation — tool_node row", () => {
     const toolStreams = new Map<string, { stdout: string; stderr: string }>([
       ["find_pr", { stdout: "fetching PRs…\n", stderr: "" }],
     ]);
-    const nodeStates: NodeState[] = [{ nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 1 }];
+    const nodeStates: NodeState[] = [{ nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 1, pass: 0 }];
     const { container } = renderWithClient(
       <RunConversation messages={[]} nodeStates={nodeStates} toolStreams={toolStreams} isLive />,
     );

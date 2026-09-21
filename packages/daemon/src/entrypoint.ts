@@ -5,9 +5,8 @@
 // executor loop. On SIGTERM/SIGINT: trip shutdownSignal; executor finishes
 // its current turn; supervisor exits; release lock.
 
-import { hostname as osHostname } from "node:os";
 import type * as coreHandler from "@fragua/core/handler";
-import { DAEMON_LOCK_TTL_MS, type IEventStore } from "@fragua/store";
+import { DAEMON_LOCK_TTL_MS, hostnameSafe, type IEventStore } from "@fragua/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
@@ -272,13 +271,5 @@ export class DaemonAlreadyRunningError extends Error {
   ) {
     super(`daemon already running: pid=${pid} host=${hostname}`);
     this.name = "DaemonAlreadyRunningError";
-  }
-}
-
-function hostnameSafe(): string {
-  try {
-    return osHostname();
-  } catch {
-    return "unknown-host";
   }
 }

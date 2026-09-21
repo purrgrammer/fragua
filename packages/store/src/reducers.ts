@@ -395,8 +395,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
  * event seqs. `title` is not in the log (the summariser writes it out-of-band),
  * so it derives to `null`; the UI falls back to the workflow name.
  */
-// contract: no-bump — comment-only edit (routing.input removal); the fold reads
-// no new field and the contract-surface hash is unchanged.
+// contract: no-bump — additive genesis-field read (`baseGitSha`/`baseGitRef`),
+// consumed only by this enqueue/import-time seed. The fold over facts is
+// unchanged and the run_started fact still overrides the base at provision.
 export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload, ts: number): RunState {
   return {
     runId,
@@ -416,8 +417,8 @@ export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload
     dispatchStartedAt: null,
     updatedAt: ts,
     title: null,
-    baseGitSha: null,
-    baseGitRef: null,
+    baseGitSha: payload.baseGitSha ?? null,
+    baseGitRef: payload.baseGitRef ?? null,
     finalGitSha: null,
     finalHeadRef: null,
     diffBaseSha: null,

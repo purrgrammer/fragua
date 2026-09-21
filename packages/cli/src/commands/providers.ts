@@ -15,7 +15,7 @@ export {
 } from "./providers-custom.ts";
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { AuthStorage, defaultModelPerProvider, getFraguaHome, ModelRegistry } from "@fragua/agent";
 import chalk from "chalk";
 import prompts from "prompts";

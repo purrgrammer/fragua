@@ -820,7 +820,7 @@ describe("buildRoutingPatch", () => {
   });
 
   describe("deferred pre-claim pause", () => {
-    test("clears internal.pause_after_dispatch once the operator pause lands (transition + shouldPauseAfterDispatch)", () => {
+    test("clears internal.pause_after_dispatch once the operator pause lands", () => {
       const patch = buildRoutingPatch({
         result: transition({ nextNode: "n2", outcomeStatus: "success" }),
         decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
@@ -829,6 +829,7 @@ describe("buildRoutingPatch", () => {
         graph: spine(),
         effectiveRouting: { "internal.pause_after_dispatch": true },
         budgetWarnedTags: [],
+        operatorPauseApplied: true,
       });
       expect(patch?.["internal.pause_after_dispatch"]).toBe(false);
     });
@@ -842,6 +843,54 @@ describe("buildRoutingPatch", () => {
         graph: spine(),
         effectiveRouting: { "internal.pause_after_dispatch": true },
         budgetWarnedTags: [],
+        operatorPauseApplied: false,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
+
+    test("keeps the marker when the swap did not fire despite transition + shouldPauseAfterDispatch", () => {
+      // R3 leaves a halt alone (terminal beats pause), so no fact.run_paused
+      // is emitted. Re-deriving the swap's condition from result+decision would
+      // clear the marker here and swallow the operator's pause; the run could
+      // then be resumed past a pause it never served.
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied: false,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
+
+    test("rewriteTerminalFacts does not swap a halt, so the marker survives the turn", () => {
+      const done: FactEvent = { type: "fact.node_completed", payload: { nodeId: "n1" } } as FactEvent;
+      const halted: FactEvent = {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error" },
+      } as FactEvent;
+      const facts = rewriteTerminalFacts({
+        facts: [done, halted],
+        result: transition({ nextNode: "n2" }),
+        state: mkState("n1"),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+      });
+      const operatorPauseApplied = facts.some(
+        (f) => f.type === "fact.run_paused" && (f.payload as { reason?: string }).reason === "operator",
+      );
+      expect(operatorPauseApplied).toBe(false);
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied,
       });
       expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
     });

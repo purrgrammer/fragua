@@ -4,9 +4,9 @@
 # the inbox, where the per-bump rationale lives in the run transcript.
 #
 # Shape:
-#   update → review → typecheck → ci → exit          (green ⇒ done, uncommitted)
-#               ↑retry            ↓fail   ↓fail
-#               update             fix ←───┘ → typecheck
+#   update → changed? → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
+#               ↓none      ↑retry            ↓fail   ↓fail
+#              exit        update             fix ←───┘ → typecheck
 #
 # Principles:
 #   - `update` touches MANIFESTS ONLY (package.json + lockfile). Adapting source
@@ -17,8 +17,10 @@
 #     reasoning. REJECT is a goal-gate retarget back to `update`.
 #   - `update` + `fix` share `thread: bump` so the fixer sees WHICH deps moved
 #     and the stated breaking changes; the type/CI gates re-derive from the env.
-#   - "Nothing in scope to update" is a graceful no-op → route to `exit`, not a
-#     halt — this workflow is meant to be run on a cadence.
+#   - "Nothing in scope to update" is a graceful no-op → `exit`, not a halt —
+#     this workflow is meant to be run on a cadence. Whether anything moved is
+#     read off the worktree by the `changed` tool step (`git status`), never
+#     reported by the model that did the work.
 #
 #   bun run fragua run dependencies
 #   bun run fragua run dependencies --input scope=patch
@@ -58,10 +60,15 @@ steps:
 
       Manifests and lockfile only — do NOT edit source. Leave any compile/test breakage for the downstream steps.
 
-      End with a SUMMARY block — one line per bump: `<pkg> <old>→<new> (patch|minor|major) — <one-line rationale>` — then the total count. Then call `route` exactly once: `updated` if you bumped anything, `none` if nothing was in scope.
-    routes:
-      updated: {to: review, label: "Bumps applied"}
-      none:    {to: exit,   label: "Nothing to update"}
+      End with a SUMMARY block — one line per bump: `<pkg> <old>→<new> (patch|minor|major) — <one-line rationale>` — then the total count (`0 bumps` when nothing was in scope).
+    next: changed
+
+  changed:                             # did `update` move anything? exit 0 ⇒ yes → review; exit 1 ⇒ no → graceful exit
+    type: tool
+    run: test -n "$(git status --porcelain)"
+    on:
+      success: review
+      fail: exit
 
   review:
     type: llm

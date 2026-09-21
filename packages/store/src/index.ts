@@ -20,6 +20,7 @@ export {
   workflowSourcePath,
   writeTar,
 } from "./bundle.ts";
+export { hostnameSafe } from "./hostname.ts";
 export type { MetricsSnapshot } from "./metrics.ts";
 export { Metrics } from "./metrics.ts";
 export {

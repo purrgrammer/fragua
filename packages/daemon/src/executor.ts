@@ -665,8 +665,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // idempotent but we avoid the extra lookup.
     if (opts.provisioner && runEnv === undefined) {
       try {
-        const provisionOpts: { cwd?: string } = {};
+        const provisionOpts: { cwd?: string; baseRef?: string } = {};
         if (state.cwd != null) provisionOpts.cwd = state.cwd;
+        if (state.baseGitSha != null) provisionOpts.baseRef = state.baseGitSha;
         // `runEnv` is a per-runOne-pass local, so every resume re-enters with it
         // undefined and calls `ensure` again — idempotent on the provisioner, but
         // the daemon event must NOT re-fire on a cache hit or a paused→resumed
@@ -703,8 +704,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (needsStart) {
       const start = routingString(state.routing, "start_node") ?? "start";
-      const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
-      const baseGitRef = opts.provisioner?.baseGitRef(runId) ?? undefined;
+      // Prefer the pinned base (seeded from the genesis payload onto run_state)
+      // over the provisioner's live read — the provisioner's `baseGitRef` reads
+      // the source repo's symbolic-ref, which would clobber a pinned branch/tag.
+      const baseGitSha = state.baseGitSha ?? opts.provisioner?.baseGitSha(runId) ?? undefined;
+      const baseGitRef = state.baseGitRef ?? opts.provisioner?.baseGitRef(runId) ?? undefined;
       const startFacts: FactEvent[] = [
         {
           type: "fact.run_started",
@@ -1812,6 +1816,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // closure: a correction aimed at a scan step gets re-applied by the verify
     // step that was supposed to JUDGE its output. The turn-start value doubles as
     // the region snapshot, so entries see the same notes whatever the settle order.
+    //
+    // `internal.pending_steer` is deliberately NOT stripped the same way: a
+    // steer is run-scoped, not gate-scoped, and on the linear path it reaches
+    // every llm node until the clear commits. Deeper sub-nodes seeing it
+    // matches that, so the asymmetry with operator notes is the intent.
     const branchEntries = new Set(branches);
     const routingForBranch = (nodeId: string): Readonly<Record<string, unknown>> => {
       if (branchEntries.has(nodeId)) return liveRouting;

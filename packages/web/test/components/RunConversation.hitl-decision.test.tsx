@@ -26,7 +26,7 @@ describe("RunConversation — HITL decision banner", () => {
 
   it("renders the decision banner inside the matching node section", () => {
     const messages: RunMessageRow[] = [userRow(1, "review", "Please review the diff.")];
-    const nodeStates: NodeState[] = [{ nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 2 }];
+    const nodeStates: NodeState[] = [{ nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 2, pass: 0 }];
 
     const { container } = renderWithClient(
       <RunConversation
@@ -66,7 +66,9 @@ describe("RunConversation — HITL decision banner", () => {
   });
 
   it("synthesises an orphan section when the decided node produced no messages", () => {
-    const nodeStates: NodeState[] = [{ nodeId: "approve_step", iteration: 0, state: "completed", lastEventSeq: 3 }];
+    const nodeStates: NodeState[] = [
+      { nodeId: "approve_step", iteration: 0, state: "completed", lastEventSeq: 3, pass: 0 },
+    ];
 
     const { container } = renderWithClient(
       <RunConversation
@@ -111,8 +113,8 @@ describe("RunConversation — HITL decision banner", () => {
   it("places each decision banner in its own node section", () => {
     const messages: RunMessageRow[] = [userRow(1, "fetch", "Fetching."), userRow(2, "review", "Here is the data.")];
     const nodeStates: NodeState[] = [
-      { nodeId: "fetch", iteration: 0, state: "completed", lastEventSeq: 1 },
-      { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3 },
+      { nodeId: "fetch", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 },
+      { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3, pass: 0 },
     ];
 
     const { container } = renderWithClient(
@@ -136,9 +138,9 @@ describe("RunConversation — HITL decision banner", () => {
     // after apply (the tail), which is where the old orphan block dumped it.
     const messages: RunMessageRow[] = [userRow(1, "verify", "Checks pass."), userRow(2, "apply", "Applying…")];
     const nodeStates: NodeState[] = [
-      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10 },
-      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20 },
-      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30 },
+      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10, pass: 0 },
+      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20, pass: 0 },
+      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30, pass: 0 },
     ];
 
     const { container } = renderWithClient(
@@ -175,9 +177,9 @@ describe("RunConversation — HITL decision banner", () => {
     const messages: RunMessageRow[] = [userRow(1, "verify", "Checks pass."), userRow(2, "apply", "Applying…")];
     // Alphabetical order, exactly as deriveNodeStates returns it.
     const nodeStates: NodeState[] = [
-      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30 },
-      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20 },
-      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10 },
+      { nodeId: "apply", iteration: 0, state: "completed", lastEventSeq: 30, pass: 0 },
+      { nodeId: "signoff", iteration: 0, state: "completed", lastEventSeq: 20, pass: 0 },
+      { nodeId: "verify", iteration: 0, state: "completed", lastEventSeq: 10, pass: 0 },
     ];
 
     const { container } = renderWithClient(
