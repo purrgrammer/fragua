@@ -33,6 +33,8 @@ describe("intent plane — build* (validate + construct)", () => {
     expect(plane.buildSteer({ text: "" }).ok).toBe(false);
     expect(plane.buildSteer({}).ok).toBe(false);
     expect(plane.buildSteer({ text: "x", extra: 1 }).ok).toBe(false); // additionalProperties
+    expect(plane.buildSteer({ text: "x".repeat(2000) }).ok).toBe(true); // at the bound
+    expect(plane.buildSteer({ text: "x".repeat(2001) }).ok).toBe(false); // over maxLength
   });
 
   test("pause: empty body, constructs intent.pause_requested", () => {

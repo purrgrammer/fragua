@@ -12,6 +12,7 @@ import * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import type { SnapshotResult } from "../src/snapshotter.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
 import { enqueue, registerTerminalEcho, rig, type TestRig } from "./helpers.ts";
 
@@ -274,6 +275,59 @@ describe("executor + worktree provisioner", () => {
 
     // Env cached — a resume would reuse it.
     expect(provisioner.envFor("run-paused")?.cwd()).toBe("/fake/run-paused");
+
+    r.store.close();
+  });
+
+  test("resume does not re-emit daemon.worktree_provisioned when the env is already provisioned", async () => {
+    // A resume re-enters runOne with a fresh `runEnv` local, so it calls
+    // `ensure` again (idempotent — returns the cached env). But the daemon event
+    // must NOT re-fire: a paused→resumed loop otherwise floods daemon_events with
+    // worktree_provisioned rows (the production symptom that spun the daemon).
+    const r = rig();
+    r.dispatcher.register(
+      r.workflowSha,
+      "start",
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
+    );
+    enqueue(r, "run-reprov", "start");
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`));
+    const ctrl = new AbortController();
+    const runOnce = async () => {
+      r.store.claimNextRun(4);
+      await runOne("run-reprov", {
+        store: r.store,
+        dispatcher: r.dispatcher,
+        registry: new AbortRegistry(),
+        tools: r.tools,
+        llmCall: r.llmCall,
+        maxConcurrentRuns: 4,
+        shutdownSignal: ctrl.signal,
+        maxTurnsForTesting: 10,
+        provisioner,
+      });
+    };
+
+    await runOnce();
+    expect(r.store.getState("run-reprov")?.status).toBe("paused_human");
+
+    // Resume the run a few times (each a fresh runOne pass, re-provisioning).
+    for (let i = 0; i < 3; i++) {
+      r.store.appendIntent("run-reprov", { type: "intent.resume", payload: {} });
+      wakePending(r.store);
+      await runOnce();
+    }
+
+    // ensure was called on every pass (idempotent), but the daemon event fired
+    // exactly ONCE — on the genuine first provision.
+    expect(provisioner.ensureCalls.length).toBeGreaterThan(1);
+    const provisioned = r.store
+      .getDaemonEvents()
+      .filter(
+        (e) => e.type === "daemon.worktree_provisioned" && (e.payload as { runId?: string }).runId === "run-reprov",
+      );
+    expect(provisioned.length).toBe(1);
 
     r.store.close();
   });

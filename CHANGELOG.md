@@ -68,6 +68,13 @@ guarantee.
   locale- or ICU-version-dependent order made the cache prefix differ between
   machines for the same project.
 
+- Steer text (`POST /runs/:id/steer`) is now bounded at 2000 code points, so an
+  over-long ASCII steer is rejected with a clean validation error at the plane
+  boundary rather than failing deep in the store write path. A steer whose
+  multi-byte encoding still exceeds the event-payload cap surfaces as a `413`
+  from the store, and a steer that passes both limits is now stashed for
+  delivery without silent truncation.
+
 ### Fixed
 
 - Accepting a run whose tail renamed or deleted tracked files no longer leaves
@@ -83,6 +90,24 @@ guarantee.
   crashes stop the harness with a non-zero exit and a clear message. Ctrl-C is
   bounded: the daemon gets SIGTERM, and if it hasn't stopped within 5s it is
   SIGKILLed, so a hung daemon can no longer hang shutdown forever.
+- A budget raise + resume on a run paused for budget at a `parallel` step no
+  longer loops. The fan-out dispatch now lands the operator's cap raise in
+  routing and marks the resume intent applied on the same commit — even when the
+  budget check re-trips on the wake turn — so the wake-pending sweeper stops
+  re-waking the run, and a sufficient raise lets the fan-out proceed. A resume
+  also no longer re-emits `daemon.worktree_provisioned` when the run's worktree
+  already exists.
+- Operator intents sent while a run is still `queued` (before the executor
+  claims it) are no longer silently discarded on the run-start turn. A pre-claim
+  budget/priority/retry-cap raise now lands in the run's routing before the
+  first node dispatches, and a pre-claim steer is delivered to the first `llm`
+  step—injected at the head of its first user turn—rather than dropped, even
+  when it co-arrives with a later cap raise or when the first node is not an
+  `llm` step (it carries forward to the first one that is). A pre-claim steer
+  paired with a pre-claim pause now honours both — the steer reaches the handler
+  and the run still pauses after that dispatch — and a steer carried into a
+  `parallel` node reaches every branch handler rather than only the first to
+  commit.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`

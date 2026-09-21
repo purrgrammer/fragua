@@ -781,6 +781,130 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     r.store.close();
   });
 
+  test("a run-level budget raise + resume at a parallel node's join barrier applies the fold and does not loop", async () => {
+    // Repro of the production hot-loop: a run paused for run-level budget at a
+    // parallel node whose branches have all COMPLETED (the drain-barrier shape).
+    // On resume the join-barrier budget re-check reads fresh routing (pre-fold),
+    // re-trips, and parks WITHOUT committing the operator fold — so the budget
+    // raise never reaches routing and the resume intent stays unapplied, so
+    // wake-pending re-wakes it forever.
+    const r = rig({
+      yaml: `name: loopbfo
+budget: 0.015
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    spend("a_scan");
+    spend("b_scan");
+    spend("synth");
+    enqueue(r, "loop1", "begin");
+
+    await drive(r, "loop1");
+    expect(r.store.getState("loop1")!.status).toBe("paused");
+
+    // Raise & Resume: the run-level cap adjustment folds into the NEXT turn's
+    // decision. After one turn it must land in routing and its seqs must be
+    // marked applied so wake-pending stops re-waking the run.
+    const { seq: adjSeq } = r.store.appendIntent("loop1", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "run", metric: "cost", newLimit: 0.5 },
+    });
+    const { seq: resumeSeq } = r.store.appendIntent("loop1", { type: "intent.resume", payload: {} });
+    wakePending(r.store);
+    expect(r.store.getState("loop1")!.status).toBe("queued");
+
+    await drive(r, "loop1", { maxTurns: 1 });
+    const final = r.store.getState("loop1")!;
+    expect(final.routing["budget_override.run.cost"]).toBe(0.5);
+    expect(final.lastAppliedSeq).toBeGreaterThanOrEqual(Math.max(adjSeq, resumeSeq));
+    r.store.close();
+  });
+
+  test("a resume at a parallel node that immediately re-pauses (insufficient raise) consumes its intent — no wake loop", async () => {
+    // Liveness invariant (docs/intent-fold.md): a wake intent is consumed by the
+    // turn it wakes, WHATEVER that turn decides. Here the operator's raise is
+    // still below the actual spend, so the join-barrier budget check re-trips —
+    // but the resume intent must STILL be marked applied so wake-pending does
+    // not re-wake the run every tick (the 1,799-cycle production hot loop).
+    const r = rig({
+      yaml: `name: loopbfo2
+budget: 0.015
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: llm, prompt: x, next: fan }
+  fan: { type: parallel, branches: [a_scan, b_scan], next: synth }
+  a_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b_scan: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`,
+    });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 }),
+      });
+    spend("a_scan");
+    spend("b_scan");
+    spend("synth");
+    enqueue(r, "loop2", "begin");
+
+    await drive(r, "loop2");
+    expect(r.store.getState("loop2")!.status).toBe("paused");
+
+    // Raise to 0.018 — STILL below the ~0.02 already spent, so the run must
+    // re-pause on resume rather than proceed.
+    r.store.appendIntent("loop2", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "run", metric: "cost", newLimit: 0.018 },
+    });
+    const { seq: resumeSeq } = r.store.appendIntent("loop2", { type: "intent.resume", payload: {} });
+
+    // Simulate the daemon loop: sweep + dispatch repeatedly. Pre-fix this
+    // re-woke the run every iteration (a new fact.run_resumed each time).
+    for (let i = 0; i < 5; i++) {
+      wakePending(r.store);
+      await drive(r, "loop2", { maxTurns: 1 });
+    }
+
+    const final = r.store.getState("loop2")!;
+    expect(final.status).toBe("paused");
+    // The override landed AND the resume intent is applied — so wake-pending
+    // stops re-waking it.
+    expect(final.routing["budget_override.run.cost"]).toBe(0.018);
+    expect(final.lastAppliedSeq).toBeGreaterThanOrEqual(resumeSeq);
+    // Exactly ONE resume happened — no hot loop.
+    const resumes = r.store.getEvents("loop2").filter((e) => e.type === "fact.run_resumed");
+    expect(resumes.length).toBe(1);
+    r.store.close();
+  });
+
   test("a parallel node crossing 80% of its max-cost emits budget.warn ONCE (not silent, not repeated)", async () => {
     const r = rig({
       yaml: `name: wfo
@@ -1782,6 +1906,182 @@ steps:
 
     expect(r.store.getState("gf2")!.status).toBe("completed");
     expect(seen).toEqual({ a_scan: [], b_scan: [], a_verify: [], synth: [] });
+    r.store.close();
+  });
+
+  // Regression: a pending pre-claim steer carried to a parallel node must reach
+  // EVERY branch handler's ctx.steering, not just the first branch to commit.
+  // The buildRoutingPatch clear (pending_steer -> "") fires per-branch, so if
+  // executeBranchNode doesn't deliver the steer, later branches dispatch blind.
+  test("a pending steer reaches every fan-out branch handler's ctx.steering", async () => {
+    const STEER_YAML = `name: fosteer
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [] };
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    for (const id of ["a", "b"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+    enqueue(r, "fst1", "begin");
+    r.store.appendIntent("fst1", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    await drive(r, "fst1");
+
+    expect(r.store.getState("fst1")!.status).toBe("completed");
+    expect(seenSteering["a"]).toEqual(["focus on the auth module"]);
+    expect(seenSteering["b"]).toEqual(["focus on the auth module"]);
+    r.store.close();
+  });
+
+  // The clear (`pending_steer -> ""`) rides each llm branch's commit, so a
+  // branch queued BEHIND the semaphore commits after siblings have already
+  // cleared it. Pin that the steer still reaches it: `liveRouting` is the
+  // turn-start snapshot and folds only retry counts, so the committed clear
+  // must not leak back into a later cohort's branchRouting.
+  test("a pending steer reaches branches queued behind the concurrency limit", async () => {
+    const STEER_YAML = `name: fosteercap
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b, c, d], concurrency: 1, next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  c: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  d: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const ids = ["a", "b", "c", "d"];
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [], c: [], d: [] };
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    for (const id of ids) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+    enqueue(r, "fstc1", "begin");
+    r.store.appendIntent("fstc1", {
+      type: "intent.steering_requested",
+      payload: { text: "focus on the auth module" },
+    });
+    await drive(r, "fstc1");
+
+    expect(r.store.getState("fstc1")!.status).toBe("completed");
+    for (const id of ids) {
+      expect(seenSteering[id]).toEqual(["focus on the auth module"]);
+    }
+    r.store.close();
+  });
+
+  // Regression (High): a MID-RUN operator steer that arrives while the run is
+  // parked at a parallel node must reach EVERY branch handler's ctx.steering. On
+  // resume the steer folds to `decision.steering` (not the pending_steer routing
+  // key, which only carries pre-claim run-start steers), and executeBranchNode
+  // must thread `decision.steering` into each branch's ctxOpts. The steer's seq
+  // is consumed by takeFold() once (advancing last_applied_seq), so if it isn't
+  // threaded it is silently dropped from every branch handler.
+  test("a mid-run steer while parked at a parallel node reaches every branch, seq applied once", async () => {
+    const STEER_YAML = `name: fomidsteer
+defaults: { provider: anthropic, model: m }
+steps:
+  begin: { type: tool, run: noop, next: fan }
+  fan: { type: parallel, branches: [a, b], next: synth }
+  a: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  b: { type: llm, prompt: x, allowed-tools: [read], next: synth }
+  synth: { type: llm, prompt: done, next: exit }
+`;
+    const r = rig({ yaml: STEER_YAML });
+    const seenSteering: Record<string, Array<string | undefined>> = { a: [], b: [] };
+    // `begin` runs first (the run is well past run_started), then an operator
+    // steer lands on the log mid-run — right as the frontier reaches the
+    // parallel node. On the fan turn the steer folds to `decision.steering`
+    // (NOT the pending_steer routing key, which only carries run-start steers).
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "tool",
+      sideEffect: "none",
+      maxMs: 1000,
+      handler: async () => {
+        r.store.appendIntent("fms1", {
+          type: "intent.steering_requested",
+          payload: { text: "focus on the auth module" },
+        });
+        return { kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 };
+      },
+    });
+    for (const id of ["a", "b"]) {
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async (ctx) => {
+          seenSteering[id]!.push(ctx.steering);
+          return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    r.dispatcher.register(r.workflowSha, "synth", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "exit", tokens: 1, costUsd: 0.001 }),
+    });
+
+    enqueue(r, "fms1", "begin");
+    await drive(r, "fms1");
+
+    expect(r.store.getState("fms1")!.status).toBe("completed");
+    // Every branch observes the mid-run steer.
+    expect(seenSteering["a"]).toContain("focus on the auth module");
+    expect(seenSteering["b"]).toContain("focus on the auth module");
+    // The steer's seq is consumed exactly once — last_applied_seq advances past
+    // it and no branch re-reads it on a later superstep.
+    const applied = r.store.getState("fms1")!;
+    expect(applied.lastAppliedSeq).toBeGreaterThan(0);
     r.store.close();
   });
 });

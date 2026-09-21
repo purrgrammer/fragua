@@ -101,6 +101,26 @@ export const PRIORITY_KEY = "priority";
  * {@link truncateOperatorNote}); the full text stays on the intent for audit. */
 export const OPERATOR_NOTES_KEY = "internal.operator_notes";
 
+/** A pre-claim steer (`intent.steering_requested` queued while the run was
+ * `queued`) awaiting delivery to the first llm step. Written into the run-start
+ * routing patch instead of being held back on the intent log: `last_applied_seq`
+ * is a watermark, so a steer at a lower seq than a co-arriving non-steer
+ * pre-claim intent (e.g. `budget_adjusted`) cannot be left unapplied while the
+ * later intent advances. Threaded through routing (twin of
+ * {@link OPERATOR_NOTES_KEY}), the executor surfaces it as `ctx.steering` on each
+ * dispatch and the transition planner clears it once an llm step consumes it
+ * (completes with a success outcome). Byte-truncated at write time. */
+export const PENDING_STEER_KEY = "internal.pending_steer";
+
+/** A deferred operator pause carried across the `run_started` boundary. When a
+ * pre-claim `intent.pause_requested` co-arrives with a `intent.steering_requested`
+ * the fold returns `shouldPauseAfterDispatch` (R3): the steer is stashed and the
+ * run must pause after the first dispatch. `run_started` advances past both
+ * intents, so this marker is the only carrier of the deferred pause into the
+ * next turn — the first running-turn dispatch reads it (twin of how later turns
+ * consult `decision.shouldPauseAfterDispatch`) and clears it. */
+export const PAUSE_AFTER_DISPATCH_KEY = "internal.pause_after_dispatch";
+
 // ── Value-checked union + documentary schema ─────────────────────────────────
 
 /** The goal-gate outcome union. A value-checked TypeBox union exercised by
@@ -126,7 +146,14 @@ function isOutcomeStatus(v: unknown): v is OutcomeStatus {
 // the writer is allowed to spread into `run_state.routing`.
 
 /** The value shape a routing-key family expects. */
-type RoutingValueKind = "number" | "string" | "string-array" | "object" | "outcome-status" | "operator-notes";
+type RoutingValueKind =
+  | "number"
+  | "string"
+  | "boolean"
+  | "string-array"
+  | "object"
+  | "outcome-status"
+  | "operator-notes";
 
 const BUDGET_SCOPES = ["run", "node"] as const;
 const BUDGET_METRICS = ["cost", "tokens"] as const;
@@ -153,6 +180,8 @@ const EXACT_ROUTING_KINDS = new Map<string, RoutingValueKind>([
   [GRAPH_RUN_ID_KEY, "string"],
   [PRIORITY_KEY, "number"],
   [OPERATOR_NOTES_KEY, "operator-notes"],
+  [PENDING_STEER_KEY, "string"],
+  [PAUSE_AFTER_DISPATCH_KEY, "boolean"],
 ]);
 
 /** Resolve a routing key to its expected value kind, or `undefined` when the key
@@ -177,6 +206,8 @@ function matchesRoutingKind(value: unknown, kind: RoutingValueKind): boolean {
       return typeof value === "number" && Number.isFinite(value);
     case "string":
       return typeof value === "string";
+    case "boolean":
+      return typeof value === "boolean";
     case "string-array":
       return Array.isArray(value) && value.every((e) => typeof e === "string");
     case "object":
@@ -250,6 +281,8 @@ export const RoutingStruct = Type.Object({
   timer: Type.Object({ autoResumeAt: Type.Optional(Type.Number()) }),
   context: Type.Object({ goal: Type.Optional(Type.String()), runId: Type.Optional(Type.String()) }),
   operatorNotes: Type.Array(Type.Object({ gateNodeId: Type.String(), route: Type.String(), note: Type.String() })),
+  pendingSteer: Type.Optional(Type.String()),
+  pauseAfterDispatch: Type.Optional(Type.Boolean()),
 });
 export type RoutingStruct = Static<typeof RoutingStruct>;
 
@@ -456,6 +489,22 @@ export function readOperatorNotes(routing: Record<string, unknown>): OperatorNot
   return v.filter(isOperatorNote).filter((n) => n.note.length > 0);
 }
 
+/** Read the pending pre-claim steer awaiting delivery to the first llm step
+ * ({@link PENDING_STEER_KEY}). Degrades a non-string or an empty string (the
+ * cleared sentinel a consuming llm step writes) to undefined, so a tampered
+ * bundle or a consumed key reads as "no steer" rather than delivering junk. */
+export function readPendingSteer(routing: Record<string, unknown>): string | undefined {
+  const v = routing[PENDING_STEER_KEY];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+/** Read the deferred-pause marker ({@link PAUSE_AFTER_DISPATCH_KEY}). Any value
+ * other than a literal `true` reads as "no deferred pause", so a cleared (`false`
+ * / absent) or tampered marker never manufactures a pause. */
+export function readPauseAfterDispatch(routing: Record<string, unknown>): boolean {
+  return routing[PAUSE_AFTER_DISPATCH_KEY] === true;
+}
+
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 // Byte budgets, not char: the routing column's CHECK is UTF-8 `length < 8192`,
@@ -463,30 +512,59 @@ const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 export const OPERATOR_NOTE_MAX_BYTES = 2000;
 export const OPERATOR_NOTES_MAX_BYTES = 4096;
 
+// Byte budget for a pending steer written into routing. Sized to exceed the
+// intent-payload cap (`MAX_EVENT_PAYLOAD_BYTES` = 4 KiB) so that any steer which
+// survived `appendIntent` is stored verbatim rather than silently halved: the
+// `SteerText` schema bounds by code points, so a valid multi-byte steer can be
+// ~4 KiB, and a byte budget below that would truncate a control-plane message
+// the operator got a 2xx for. 8000 covers 4-byte codepoints across the cap.
+export const PENDING_STEER_MAX_BYTES = 8000;
+
 const TRUNCATION_MARKER = " [truncated]";
 
-/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary. Defaults to
- * {@link OPERATOR_NOTE_MAX_BYTES}; {@link capOperatorNotes} passes a tighter
- * budget when the routing column can't seat a full-size note. The marker is
- * dropped when the budget is too small to be worth spending on it.
+/** Truncate `text` to at most `maxBytes` UTF-8 bytes on a codepoint boundary —
+ * a domain-free primitive with no marker and no default. Returns the input
+ * unchanged when it already fits, and `""` when the budget can't seat a single
+ * codepoint. Callers that want the operator-note policy (default budget +
+ * ` [truncated]` marker) go through {@link truncateOperatorNote}; the steer
+ * write path calls this directly so a future note-only policy split can't
+ * silently reshape a control-plane steer.
  *
- * The loop is O(n²) in the note length. That is bounded, not overlooked: a note
- * only reaches here off `intent.human_input`, and `appendIntent` rejects any
- * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `note` is always a
+ * The loop is O(n²) in the input length. That is bounded, not overlooked: every
+ * caller feeds a value off an `intent.*` payload, and `appendIntent` rejects any
+ * payload at or above `MAX_EVENT_PAYLOAD_BYTES` (4 KiB), so `text` is always a
  * few thousand bytes. Do not call this on unbounded input. */
+export function utf8Truncate(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (utf8Bytes(text) <= maxBytes) return text;
+  let end = text.length;
+  while (end > 0 && utf8Bytes(text.slice(0, end)) > maxBytes) end--;
+  if (end > 0 && end < text.length) {
+    const code = text.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff)
+      end--; // don't split a surrogate pair
+    else if (code >= 0xdc00 && code <= 0xdfff) {
+      // A low surrogate is only well-formed behind a high one; a lone low
+      // surrogate on the boundary would encode as U+FFFD, so drop it instead.
+      const prev = end >= 2 ? text.charCodeAt(end - 2) : 0;
+      if (!(prev >= 0xd800 && prev <= 0xdbff)) end--;
+    }
+  }
+  if (end === 0) return "";
+  return text.slice(0, end);
+}
+
+/** Truncate to `maxBytes` UTF-8 bytes on a codepoint boundary, appending a
+ * ` [truncated]` marker. Defaults to {@link OPERATOR_NOTE_MAX_BYTES};
+ * {@link capOperatorNotes} passes a tighter budget when the routing column can't
+ * seat a full-size note. The marker is dropped when the budget is too small to
+ * be worth spending on it. Built on {@link utf8Truncate}. */
 export function truncateOperatorNote(note: string, maxBytes: number = OPERATOR_NOTE_MAX_BYTES): string {
   if (utf8Bytes(note) <= maxBytes) return note;
   const marker = maxBytes > utf8Bytes(TRUNCATION_MARKER) * 2 ? TRUNCATION_MARKER : "";
-  const budget = maxBytes - utf8Bytes(marker);
-  if (budget <= 0) return "";
-  let end = note.length;
-  while (end > 0 && utf8Bytes(note.slice(0, end)) > budget) end--;
-  if (end > 0 && end < note.length) {
-    const code = note.charCodeAt(end - 1);
-    if (code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
-  }
-  if (end === 0) return "";
-  return note.slice(0, end) + marker;
+  const truncated = utf8Truncate(note, maxBytes - utf8Bytes(marker));
+  if (truncated === "") return "";
+  return truncated + marker;
 }
 
 /** Bound the serialized array to `maxBytes`, dropping oldest first. Defaults to

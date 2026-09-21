@@ -13,11 +13,16 @@ import { type Static, Type } from "@sinclair/typebox";
 
 const Note = Type.Optional(Type.String());
 const NonEmpty = Type.String({ minLength: 1 });
+// Steer text is bounded so an oversized redirect fails as a clean validation
+// error (400) rather than a 413 deep in the store write path. The bound is well
+// under the 4 KiB event-payload cap; the prepend surfaces it at the head of the
+// first llm prompt, so an unbounded steer is also a prompt-injection lever.
+const SteerText = Type.String({ minLength: 1, maxLength: 2000 });
 const PositiveFinite = Type.Number({ exclusiveMinimum: 0 });
 
 const opts = { additionalProperties: false } as const;
 
-export const SteerBody = Type.Object({ text: NonEmpty }, opts);
+export const SteerBody = Type.Object({ text: SteerText }, opts);
 export const PauseBody = Type.Object({}, opts);
 export const CancelBody = Type.Object({ reason: Note }, opts);
 export const HumanBody = Type.Object({ route: NonEmpty, note: Note }, opts);
