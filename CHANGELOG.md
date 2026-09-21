@@ -40,6 +40,15 @@ guarantee.
 - **`min-probability` on `decide.route`.** Floors the chosen option's own
   probability, beside (or instead of) `min-confidence`; `below` is taken when any
   declared floor fails.
+- **Harness-level judge uses, config-gated.** A `judge:` section in
+  `config.yaml`: `skill-suggestion: true` asks the judge, once per llm step,
+  which of the node's visible skills the prompt calls for and appends one
+  "Relevant to this step: <skill>" line to the system prompt (the catalogue
+  itself is unchanged); `tool-guard: flag | block` judges every `bash` /
+  `write` / `edit` / MCP call for destructive, off-task or exfiltrating intent
+  before it runs — `flag` annotates the result and warns, `block` refuses the
+  call with a tool error. Both default off and are inert without a
+  credentialed judge provider; their spend lands on the calling step.
 - **`judge` agent tool.** The same primitives inside any `llm` step:
   `judge({ state, questions })` asks a batch of typed questions over evidence
   the agent has gathered and returns the answers with probabilities; cost lands

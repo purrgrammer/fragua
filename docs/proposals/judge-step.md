@@ -1005,6 +1005,34 @@ resolved model id, so a later pin can be made against measured behaviour.
 Composite scoring (weighted sums of normalised scores) stays outside the DSL;
 a workflow that needs it composes in a `tool` step.
 
+## 8.6 Harness-level uses — the judge inside the agent loop
+
+Two of the three harness uses the docs suggest ship behind config, both inert
+without a judge client and both keeping policy in code (fixed questions,
+constant thresholds, raw probabilities on the events):
+
+- **Skill suggestion** (`judge.skill-suggestion: true`). TypeSafe's cookbook
+  ranks a large roster in one skim call and re-reads the top three in a
+  second; fragua's rosters are small (tens of skills) so one call does both
+  jobs: a `choice` over the node's visible skills plus `none`, and a
+  `needs_skill` noul. A winner needs `needs_skill ≥ 0.5` and its own
+  probability ≥ 0.4; it becomes one line at the *end* of the system prompt,
+  after the catalogue, so the cached prefix is untouched. Cost and verdict are
+  emitted after `llm.start` so the step's cost window owns them
+  (`agent.info {kind: skill_suggestion}`).
+- **Tool guard** (`judge.tool-guard: flag | block`). Before `bash`, `write`,
+  `edit` or any MCP tool runs, three nouls over `{step, call}`:
+  `destructive`, `off_task`, `exfiltrates`, each flagged at ≥ 0.5. `flag`
+  appends the flags to the tool result and emits `agent.warning
+  {kind: tool_guard}`; `block` throws a tool error the model reads and never
+  runs the call. A provider failure degrades to a warning and the call
+  proceeds — the guard is never an outage. This is the guardrails cookbook
+  applied to actions instead of messages, and the same flag-first policy the
+  workflows took for injection.
+- **Context selection** stays out. The summariser already owns compression
+  and no measured failure names what a judge would pick better; a door, not
+  a gap.
+
 ## 9. Doors — deferred, sound
 
 - **Thread-as-state.** `${{ thread.<id>.last }}` / `.all` tokens exposing a
@@ -1013,6 +1041,8 @@ a workflow that needs it composes in a `tool` step.
   bounded.
 - **`score` routing.** `decide.route: {question: <score>, levels: {0: a, 1: b, 2: c}}` —
   cheap once `choice` routing exists; not needed for the first workflows.
+- **Judge-picked context.** Selecting `context-files` or thread turns by
+  relevance judgments (the RAG-passage cookbook) — see §8.6 for why it waits.
 - **Yield-form escalation.** A judge that itself yields `paused_human` with the
   distribution as the operator's options, for graphs that don't want a
   separate `human` step. Only if the route form proves too verbose.

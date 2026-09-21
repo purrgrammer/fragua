@@ -28,6 +28,15 @@ describe("loadConfig", () => {
     await writeFile(join(scratch, ".fragua/config.yaml"), body, "utf8");
   }
 
+  test("judge: skill-suggestion and tool-guard parse; an unknown guard mode is dropped", async () => {
+    await write("judge:\n  skill-suggestion: true\n  tool-guard: flag\n");
+    const cfg = await loadConfig(scratch, { homeDir: scratchHome });
+    expect(cfg.judge).toEqual({ "skill-suggestion": true, "tool-guard": "flag" });
+    await write("judge:\n  tool-guard: maybe\n");
+    const bad = await loadConfig(scratch, { homeDir: scratchHome });
+    expect(bad.judge?.["tool-guard"]).toBeUndefined();
+  });
+
   async function writeGlobal(body: string): Promise<void> {
     await mkdir(join(scratchHome, ".fragua"), { recursive: true });
     await writeFile(join(scratchHome, ".fragua/config.yaml"), body, "utf8");

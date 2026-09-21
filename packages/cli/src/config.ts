@@ -73,6 +73,22 @@ const Timeouts = Type.Object(
   { additionalProperties: false },
 );
 
+// Harness-level System One uses. Both need a credentialed judge provider
+// (`fragua providers add typesafe`) and are inert without one.
+const Judge = Type.Object(
+  {
+    // One judge call per llm step ranks the node's visible skills against
+    // its prompt; a clear winner becomes one line at the end of the system
+    // prompt. Default false.
+    "skill-suggestion": Type.Optional(Type.Boolean()),
+    // Judge every bash / write / edit / MCP call before it runs: `flag`
+    // annotates the tool result and warns, `block` refuses the call with a
+    // tool error. Default `off`.
+    "tool-guard": Type.Optional(Type.Union([Type.Literal("off"), Type.Literal("flag"), Type.Literal("block")])),
+  },
+  { additionalProperties: false },
+);
+
 const Web = Type.Object(
   {
     // Default TCP port for the harness / serve HTTP. CLI `--port` wins
@@ -151,6 +167,7 @@ export const FraguaConfigSchema = Type.Object(
     "max-leaked-handlers": Type.Optional(Type.Integer({ minimum: 1 })),
     "blob-gc": Type.Optional(BlobGc),
     skills: Type.Optional(Skills),
+    judge: Type.Optional(Judge),
     timeouts: Type.Optional(Timeouts),
     web: Type.Optional(Web),
   },

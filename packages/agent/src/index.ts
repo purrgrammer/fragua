@@ -2,6 +2,7 @@ export * from "./backend.ts";
 export * from "./credentials/index.ts";
 export * from "./event-bridge.ts";
 export * from "./handler-bridge.ts";
+export * from "./judge-assist.ts";
 export * from "./message-store.ts";
 export * from "./mock.ts";
 export type { SteerableAgent } from "./steering-registry.ts";
