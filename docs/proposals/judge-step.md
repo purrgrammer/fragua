@@ -1061,10 +1061,14 @@ could have matched by keyword).
 The second probe also surfaced a pre-existing defect the suggestion made
 visible: inside a worktree the `skill` tool refuses a project-scope skill
 with a path-escape error (`.agents/skills/design/SKILL.md` resolves outside
-the run's cwd), so the suggested skill could not load (#109). Fixed here: the
-`skill` tool reads catalogue files where discovery found them, on the
-daemon's filesystem, not through the run env's path gate. Both assists stay
-off unless a config turns them on; this repo's config shows the keys commented.
+the run's cwd), so the suggested skill could not load (#109). Fixed here: a
+project skill is read by its path relative to the project it was discovered
+under, which lands inside the run's own checkout (a worktree that edits a
+skill sees the edit); user-scope skills and a tree that lacks the file fall
+back to the discovery path. Re-run with the fix: `design` 0.92 / needs 0.80,
+the agent called `skill design`, and the 33 KiB body loaded. Both assists
+stay off unless an operator turns them on; this repo's config ships the keys
+commented out.
 
 ## 9. Doors — deferred, sound
 
