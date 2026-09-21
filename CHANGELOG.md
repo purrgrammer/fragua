@@ -12,7 +12,7 @@ guarantee.
 
 - **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
   the providers and models added in that range — including the `radius`
-  provider and the `max` thinking level — and pick up updated cost/context
+  provider — and pick up updated cost/context
   metadata for existing models. Model ids already referenced by the built-in
   workflows continue to resolve; no default model choices changed. `radius` is
   a purely dynamic provider with no static catalog default, so `--provider
