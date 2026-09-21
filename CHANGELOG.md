@@ -40,8 +40,8 @@ guarantee.
 - **`min-probability` on `decide.route`.** Floors the chosen option's own
   probability, beside (or instead of) `min-confidence`; `below` is taken when any
   declared floor fails.
-- **Harness-level judge uses, config-gated.** A `judge:` section in
-  `config.yaml`: `skill-suggestion: true` asks the judge, once per llm step,
+- **Harness-level judge uses, opt-in.** Nothing here is on unless a `judge:`
+  section in `config.yaml` turns it on. `skill-suggestion: true` asks the judge, once per llm step,
   which of the node's visible skills the prompt calls for and appends one
   "Relevant to this step: <skill>" line to the system prompt (the catalogue
   itself is unchanged); `tool-guard: flag | block` judges every `bash` /
@@ -69,6 +69,12 @@ guarantee.
   wrong rate; the step total still includes them.
 
 ### Fixed
+
+- **`skill` tool inside a worktree.** Loading a project-scope skill failed with
+  a path-escape error because the catalogue's path points at the project root.
+  The tool now reads the run's own copy when its tree carries one (so a
+  worktree sees skill edits it made) and falls back to the discovery path
+  otherwise.
 - `review` on a merged PR now diffs the PR's own change (its head over the point
   it forked from the base) instead of `origin/main..HEAD`, which ran backwards
   once the PR had merged; the worktree lands on the merge commit.

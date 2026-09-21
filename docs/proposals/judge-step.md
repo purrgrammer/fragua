@@ -1061,8 +1061,10 @@ could have matched by keyword).
 The second probe also surfaced a pre-existing defect the suggestion made
 visible: inside a worktree the `skill` tool refuses a project-scope skill
 with a path-escape error (`.agents/skills/design/SKILL.md` resolves outside
-the run's cwd), so the suggested skill could not load — #109. Until it is
-fixed the repo's config leaves `skill-suggestion` off; `tool-guard: flag` is on.
+the run's cwd), so the suggested skill could not load (#109). Fixed here: the
+`skill` tool reads catalogue files where discovery found them, on the
+daemon's filesystem, not through the run env's path gate. Both assists stay
+off unless a config turns them on; this repo's config shows the keys commented.
 
 ## 9. Doors — deferred, sound
 

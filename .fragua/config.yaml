@@ -13,10 +13,10 @@ name: fragua
 # stack (bun / pnpm / pip / cargo / …).
 bootstrap: bun install --frozen-lockfile
 
-# Harness-level System One uses (need `fragua providers add typesafe`).
-# tool-guard: flag annotates suspicious bash/write/edit/MCP calls.
-# skill-suggestion stays off until the `skill` tool can load a project
-# skill inside a worktree.
-judge:
-  skill-suggestion: false
-  tool-guard: flag
+# Harness-level System One uses, all opt-in (need `fragua providers add
+# typesafe`). skill-suggestion: one judge call per llm step names the skill
+# the prompt calls for. tool-guard: `flag` annotates suspicious
+# bash/write/edit/MCP calls, `block` refuses them.
+# judge:
+#   skill-suggestion: true
+#   tool-guard: flag
