@@ -104,6 +104,14 @@ guarantee.
 
 ### Added
 
+- **`fragua run --base <ref>` pins the worktree base.** A run can now pin the git
+  ref (branch, tag, or sha) its worktree is provisioned from. The ref is resolved
+  to a commit sha at enqueue and stored on the run, so the worktree is built from
+  that sha regardless of where the enqueuing checkout's HEAD moves afterward — no
+  need to keep a branch checked out until the daemon provisions. An unresolvable
+  ref is rejected before the run is minted; the resolved sha is printed in the
+  enqueue output and shown by `fragua runs status`. Without `--base`, the base
+  still defaults to the cwd's HEAD at provision time.
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context
   Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
   is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a

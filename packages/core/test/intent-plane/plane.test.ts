@@ -384,6 +384,23 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.params.scheduleId).toBe("sch-1");
   });
 
+  test("pinned base: baseGitSha + baseGitRef pass through onto enqueue params", () => {
+    const { plane } = rig();
+    const sha = "a".repeat(40);
+    const r = plane.buildEnqueue({ workflowSha: "sha1", baseGitSha: sha, baseGitRef: "feature-x" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.baseGitSha).toBe(sha);
+    expect(r.params.baseGitRef).toBe("feature-x");
+  });
+
+  test("no pinned base → params omit baseGitSha/baseGitRef", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.baseGitSha).toBeUndefined();
+    expect(r.params.baseGitRef).toBeUndefined();
+  });
+
   test("no inputDecls → no input validation (dispatcher path)", () => {
     const { plane } = rig();
     // A workflow with required inputs but no decls passed: enqueue succeeds.

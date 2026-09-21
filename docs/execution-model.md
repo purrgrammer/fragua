@@ -14,6 +14,8 @@ When fragua starts a run against a git repository it provisions a **git linked w
 
 `<run.cwd>` is the project root the run was enqueued from. The worktree is a detached-HEAD checkout of the branch HEAD at provision time — a full git checkout in its own directory, sharing the object database with the main repo but with its own index and working tree.
 
+**Pinning the base with `--base`.** By default the worktree checks out whatever HEAD the run cwd is on *at provision time* — so an operator enqueuing a fix for branch X must keep X checked out until the daemon provisions, or the run silently builds on the wrong HEAD. `fragua run <workflow> --base <ref>` removes that race: the CLI resolves `<ref>` (a branch, tag, or sha) to a commit sha **at enqueue** via `git -C <cwd> rev-parse --verify <ref>^{commit}`, records it on the run (`run_state.base_git_sha` / `base_git_ref`, carried on the genesis `intent.run_enqueued` event), and the provisioner honours it with `git worktree add --detach <worktreePath> <sha>`. An unresolvable `<ref>` is rejected at enqueue — no run is minted. The pinned sha is independent of the cwd's live HEAD, so the operator's checkout is free to move on immediately after enqueue.
+
 **All step execution is rooted at this worktree path.** There is no separate "agent sandbox" or "tool directory" — the three execution surfaces a workflow author touches all resolve to the same cwd:
 
 | Surface | How cwd is set | Source |
@@ -77,7 +79,7 @@ order, `allowed_tools` order, or server response order.
 
 | Phase | What happens |
 |---|---|
-| **Provision** | `git worktree add --detach <worktreePath>` from the repo root. Bootstrap command runs inside the fresh worktree if configured. |
+| **Provision** | `git worktree add --detach <worktreePath> [<pinned-base-sha>]` from the repo root — the pinned base sha when the run was enqueued with `--base`, else the cwd's live HEAD. Bootstrap command runs inside the fresh worktree if configured. |
 | **Run** | All nodes execute. The worktree persists across HITL pauses and daemon restarts — a resumed run reuses the same worktree. |
 | **Terminal snapshot** | When the run reaches a terminal status, fragua captures the worktree's full state (committed + uncommitted) into `refs/fragua/snapshots/<run_id>` before removing the worktree directory. |
 | **Dispose** | `git worktree remove --force <worktreePath>`. Dispose only runs after the terminal snapshot fact lands successfully — work is never discarded silently. |
