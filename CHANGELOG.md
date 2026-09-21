@@ -50,6 +50,9 @@ guarantee.
 
 ### Fixed
 
+- A budget, priority, max-retries, goal-gate, or max-loops raise sent to a
+  running run no longer aborts the step in flight; the new ceiling applies at
+  the next step boundary. "Raise & Resume" no longer costs one wasted LLM call.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`
@@ -434,7 +437,7 @@ guarantee.
   crash or pause mid-fan-out resumes by re-dispatching only the unfinished
   sub-nodes and replay reproduces the run. Budget is re-checked at each sub-node
   completion; a branch that repeatedly fails or overruns the per-branch timeout
-  pauses the run, naming it. See `docs/proposals/fan-out-nodes.md`.
+  pauses the run, naming it. See `docs/proposals/archive/fan-out-nodes.md`.
 - Custom model entries and per-model overrides in `provider_config` accept
   `thinkingLevelMap`, mapping pi thinking levels (`off`–`xhigh`) to
   provider-specific values (`null` marks a level unsupported). Anthropic-style
@@ -735,11 +738,6 @@ back down as a portable `.fragua` bundle for local inspection and aggregation.
   credentials), so the embedded-executor store is shareable.
 - `non_retryable` is now a retry-policy hint rather than a goal-gate gate
   ([core, agent]).
-
-### Fixed
-
-- Nightly property-test suite: raised the per-test timeout to fit PBT scaling and
-  deflaked timer-fragile tests (#4).
 
 [0.8.0]: https://github.com/purrgrammer/fragua/compare/v0.7.0...v0.8.0
 [0.5.0]: https://github.com/purrgrammer/fragua/compare/v0.4.0...v0.5.0

@@ -53,6 +53,7 @@ export {
   type PauseReason,
   type QuarantineReason,
   type RawEvent,
+  RUN_STATE_FACT_TYPES,
   RUN_STATUSES,
   type RunEnqueuedPayload,
   type RunStatus,
@@ -63,6 +64,7 @@ export {
   type SnapshotStat,
   STATUS_TO_UI,
   TERMINAL_FACT_TYPES,
+  TERMINAL_RUN_FACT_TYPES,
   type UiStatus,
   VALID_WRITERS,
 } from "./events.ts";

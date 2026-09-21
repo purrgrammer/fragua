@@ -35,7 +35,7 @@ finish). M automates exactly that.
 is the M discriminator vs A's `branch:`), with the sink declared by the node's
 ordinary `next:` (no new `join:` key). The IR stamps `unit: "run"`, which is
 where the durability line lives — same surface as A, completely different
-executor path. Full DSL/IR rules: [fan-out-nodes.md](fan-out-nodes.md) § DSL & IR.
+executor path. Full DSL/IR rules: [fan-out-nodes.md](archive/fan-out-nodes.md) § DSL & IR.
 
 - **Spawn:** the executor emits N `intent.run_enqueued` for child runs of
   workflow W over an author-declared parameter sweep, each tagged with

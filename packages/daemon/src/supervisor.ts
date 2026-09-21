@@ -41,13 +41,19 @@ const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 
 // Intent types the supervisor must never trip an in-flight handler on:
-// the synthetic queue marker plus the wake drivers that resume a paused /
-// quarantined run (see the filter in the tick loop for the full rationale).
-const NON_TRIPPING_INTENTS: ReadonlySet<string> = new Set([
+// the synthetic queue marker, the wake drivers that resume a paused /
+// quarantined run, and the cap raises (see the filter in the tick loop for
+// the full rationale).
+export const NON_TRIPPING_INTENTS: ReadonlySet<string> = new Set([
   "intent.run_enqueued",
   "intent.resume",
   "intent.human_input",
   "intent.unquarantine",
+  "intent.budget_adjusted",
+  "intent.priority_adjusted",
+  "intent.max_retries_adjusted",
+  "intent.goal_gate_adjusted",
+  "intent.max_loops_adjusted",
 ]);
 
 export function startSupervisor(opts: SupervisorOpts): {
@@ -102,6 +108,14 @@ export function startSupervisor(opts: SupervisorOpts): {
         //    trips the controller on it, killing the in-flight call (cause:
         //    "aborted", tokens=0) and forcing a spurious `resumeOf:"fresh"`
         //    respawn on every clean resume.
+        //  - cap raises (`budget_adjusted`, `priority_adjusted`,
+        //    `max_retries_adjusted`, `goal_gate_adjusted`, `max_loops_adjusted`)
+        //    — fold-only: the executor consumes them into `routingDelta` at
+        //    dispatch and only advances the applied watermark when the turn
+        //    commits, so they sit unapplied for the whole handler. Raising a
+        //    ceiling never needs the in-flight call killed; the raised value
+        //    takes effect at the next turn boundary. Without this filter every
+        //    "Raise & Resume" burned one aborted LLM call.
         const operatorIntents = fresh.filter((e) => !NON_TRIPPING_INTENTS.has(e.type));
         const hasNonSteer = operatorIntents.some((e) => e.type !== "intent.steering_requested");
         lastIntentSeq.set(runId, newest);
