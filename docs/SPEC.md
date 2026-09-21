@@ -192,7 +192,7 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`).
 
-**Route case** — when the source node declares `routes:`, it is a *routing node*. For an `llm` node the backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. For a `judge` node the route is the `choice` answer named by `decide.route` (or its `below:` landing under the confidence floor) — no tool, no turn. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
+**Route case** — when the source node declares `routes:`, it is a *routing node*. For an `llm` node the backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. For a `judge` node the route is the `choice` answer named by `decide.route` (or its `below:` landing when a declared `min-confidence` / `min-probability` floor fails) — no tool, no turn. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 

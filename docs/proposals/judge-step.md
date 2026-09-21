@@ -1,6 +1,6 @@
 ---
 title: Judge steps — deterministic typed judgments (classify / score / verify / route) without an agent turn
-summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E049 / W020–W021. A `for-each:` judge asks every question once per item of an array output in one call and splits the list into typed `kept` / `dropped` with a `keep:` threshold (§3.7)."
+summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence and/or probability floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E052 / W020–W022. A `for-each:` judge asks every question once per item of an array output in one call and splits the list into typed `kept` / `dropped` with a `keep:` threshold (§3.7)."
 status: proposal
 maturity: draft
 last-reviewed: 2026-09-17
@@ -468,6 +468,13 @@ What it does **not** do: pick a winner across items (sort in the consumer, the
 values are there), or replace an "any serious violation" rule — that is a
 separate `max` threshold on the hazard noul, as the docs advise.
 
+Live: a literal-state gate with `composite: {quality: {schema_ok: 2, depth: 1}}`
+and `decide.outcome: {quality: 0.6, shouting: {max: 0.4}}` recorded
+`quality` 0.89 (schema_ok 0.98, depth 2.7 of 3) and passed; a second judge
+with `decide.route: {question: area, min-probability: 0.5, below: unsure}`
+routed `web` at probability 1.0. Both records carry the values the card
+shows; $0.00004 for the run.
+
 ### 3.6 Cost, observability, the message row
 
 - **Cost.** `costUsd = usage.input_tokens × 0.042 / 1e6`; output tokens are
@@ -603,7 +610,7 @@ below are the cross-attribute rules a well-shaped graph can still break:
 |---|---|
 | E047 | `decide.route`: names an undeclared question or a non-`choice`; `decide.route` without `routes:` (or `routes:` on a judge without `decide.route`); an option with no route; a route that is neither an option nor `below`; `below` not in `routes:` |
 | E048 | `decide.outcome`: names something that is neither a `noul` question nor a `composite`; `decide.outcome` together with `routes:` |
-| E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); `keep.question` is not one of the judge's own `noul`s. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
+| E049 | `for-each:` does not resolve to an array-typed `${{ outputs.X.f }}` (missing step, undeclared field, a scalar / record); a `keep` rule names something that is neither one of the judge's own `noul`s nor a `composite`. Shape errors (`decide:` with `for-each:`, `keep:` without it, a reference that is not exactly one token) are parse errors |
 | E050 | a `for-each` question references `` `item.<path>` `` into a field the producer's item type does not declare |
 | E051 | the iterated items carry a field named `judge`, which the kept / dropped answers would overwrite |
 | E052 | `composite:` named like a question or a fold field (`answers` / `kept` / `dropped` / `judge` / `item`); weights an undeclared question or a `choice` |
@@ -1054,7 +1061,8 @@ could have matched by keyword).
 The second probe also surfaced a pre-existing defect the suggestion made
 visible: inside a worktree the `skill` tool refuses a project-scope skill
 with a path-escape error (`.agents/skills/design/SKILL.md` resolves outside
-the run's cwd), so the suggested skill could not load. Tracked separately.
+the run's cwd), so the suggested skill could not load — #109. Until it is
+fixed the repo's config leaves `skill-suggestion` off; `tool-guard: flag` is on.
 
 ## 9. Doors — deferred, sound
 

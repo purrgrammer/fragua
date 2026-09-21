@@ -154,6 +154,38 @@ describe("parseWorkflow — judge steps", () => {
     expect(convertIr(JSON.parse(json), CURRENT_IR_VERSION).version).toBe(CURRENT_IR_VERSION);
   });
 
+  test("composite and min-probability survive the IR round-trip", () => {
+    const g = parseWorkflow(`
+name: wf
+steps:
+  gate:
+    type: judge
+    state: hi
+    questions:
+      ok: {type: noul, instructions: ok?}
+      depth: {type: score, instructions: deep?, criteria: [a, b, c]}
+    composite:
+      quality: {ok: 2, depth: 1}
+    decide:
+      outcome: {quality: 0.6}
+    next: pick
+  pick:
+    type: judge
+    state: hi
+    questions:
+      area: {type: choice, instructions: which?, criteria: {web: w, cli: c}}
+    decide:
+      route: {question: area, min-confidence: 0.6, min-probability: 0.5, below: unsure}
+    routes: {web: exit, cli: exit, unsure: exit}
+`);
+    const back = deserializeGraph(serializeGraph(g));
+    expect(back.nodes["gate"]!.attrs.judge_composite).toEqual([{ name: "quality", weights: { ok: 2, depth: 1 } }]);
+    expect(back.nodes["gate"]!.attrs.outputs!["quality"]).toEqual({ kind: "number" });
+    expect(back.nodes["pick"]!.attrs.judge_decide).toEqual({
+      route: { question: "area", min_confidence: 0.6, min_probability: 0.5, below: "unsure" },
+    });
+  });
+
   test("state-max-bytes overrides the default; out-of-range is rejected", () => {
     const ok = parseWorkflow(VERIFY.replace("    decide:", "    state-max-bytes: 4096\n    decide:"));
     expect(ok.nodes["verify"]!.attrs.judge_state_max_bytes).toBe(4096);
