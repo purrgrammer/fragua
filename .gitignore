@@ -5,6 +5,7 @@
 /.fragua/blobs/
 /.fragua/fragua.db*
 /.fragua/serve.json
+/.fragua/scratch/
 
 # Legacy swarm runtime dir (pre-rename leftover; never tracked)
 /.swarm/

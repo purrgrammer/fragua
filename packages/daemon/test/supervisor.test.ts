@@ -405,6 +405,38 @@ describe("supervisor — intent-aware abort policy", () => {
   // A resume that arrives in the SAME batch as a genuine mid-flight control
   // (cancel) must still trip — the cancel is real and the run is going down.
   // Guards against the filter swallowing a co-arriving abort.
+  test.each([
+    ["intent.budget_adjusted", { scope: "run", metric: "cost", newLimit: 10 }],
+    ["intent.priority_adjusted", { newPriority: 5 }],
+    ["intent.max_retries_adjusted", { nodeId: "impl", newLimit: 3 }],
+    ["intent.goal_gate_adjusted", { newLimit: 3 }],
+    ["intent.max_loops_adjusted", { newLimit: 500 }],
+  ] as const)("cap raise %s does not trip the controller", async (type, payload) => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r-cap", "sha");
+    const ctrl = new AbortController();
+    registry.register("r-cap", ctrl);
+    store.appendIntent("r-cap", { type, payload } as Parameters<typeof store.appendIntent>[1]);
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
   test("resume + cancel batch still trips on the cancel", async () => {
     const registry = new AbortRegistry();
     const store = makeRunningStore("r-mix", "sha");

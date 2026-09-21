@@ -78,8 +78,10 @@ export {
   AUTO_WAKE_PAUSE_REASONS,
   isSettled,
   isTerminal,
+  RUN_STATE_FACT_TYPES,
   RUN_STATUSES,
   SETTLED_STATUSES,
+  TERMINAL_RUN_FACT_TYPES,
 } from "@fragua/types";
 export type {
   AnalyticsWindow,
