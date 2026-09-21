@@ -4,7 +4,7 @@
 // must not propagate out of daemonEnvDeny and crash daemon startup.
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import * as pi from "@earendil-works/pi-ai";
+import * as pi from "@earendil-works/pi-ai/compat";
 
 const realFindEnvKeys = pi.findEnvKeys;
 const realGetProviders = pi.getProviders;
@@ -14,12 +14,12 @@ afterEach(() => {
   mock.restore();
   // `mock.restore()` does not undo `mock.module` in bun — without this the
   // patched findEnvKeys leaks into every later test file in the process.
-  mock.module("@earendil-works/pi-ai", () => pi);
+  mock.module("@earendil-works/pi-ai/compat", () => pi);
 });
 
 describe("daemonEnvDeny (unknown/custom provider)", () => {
   test("(unknown-provider) a findEnvKeys throw does not propagate out of daemonEnvDeny", async () => {
-    mock.module("@earendil-works/pi-ai", () => ({
+    mock.module("@earendil-works/pi-ai/compat", () => ({
       ...pi,
       getProviders: realGetProviders,
       getEnvApiKey: realGetEnvApiKey,

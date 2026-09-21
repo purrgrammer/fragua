@@ -119,6 +119,11 @@ export interface ProvisionOpts {
    * outside the daemon's home repo (multi-project model). When
    * omitted, the provisioner uses its constructor default. */
   cwd?: string;
+  /** Pinned base commit sha (from `fragua run --base <ref>`, resolved at
+   * enqueue). When set, the worktree is provisioned detached at this sha
+   * (`git worktree add --detach <path> <sha>`) instead of the cwd's live
+   * HEAD. Omitted = default (cwd HEAD at provision time). */
+  baseRef?: string;
 }
 
 export interface Provisioner {
@@ -298,6 +303,7 @@ export class WorktreeProvisioner implements Provisioner {
       worktreesDir: this.worktreesDir,
       keepAfterDispose: this.keepAfterDispose,
     };
+    if (provisionOpts.baseRef !== undefined) opts.baseRef = provisionOpts.baseRef;
     if (bootstrap !== undefined) opts.bootstrap = bootstrap;
     if (bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;

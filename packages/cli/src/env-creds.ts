@@ -21,7 +21,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai";
+import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai/compat";
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 import chalk from "chalk";

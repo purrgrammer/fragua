@@ -304,6 +304,42 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  // Pinned base (`fragua run --base <ref>`): the worktree is provisioned
+  // detached at the pinned sha even when the cwd's live HEAD has since moved.
+  test("pinned baseRef → worktree HEAD is the pinned sha, not the cwd's live HEAD", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-base-"));
+    try {
+      const git = (args: string[]) => {
+        const r = Bun.spawnSync({
+          cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+          cwd: repo,
+        });
+        if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed (exit ${r.exitCode})`);
+        return r.stdout.toString().trim();
+      };
+      git(["init", "-q"]);
+      git(["commit", "--allow-empty", "-m", "base", "-q"]);
+      const pinnedSha = git(["rev-parse", "HEAD"]);
+      // Advance the cwd's HEAD past the pinned commit.
+      git(["commit", "--allow-empty", "-m", "later", "-q"]);
+      const liveHead = git(["rev-parse", "HEAD"]);
+      expect(liveHead).not.toBe(pinnedSha);
+
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-pin", { cwd: repo, baseRef: pinnedSha });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      const worktreeHead = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: env.cwd() })
+        .stdout.toString()
+        .trim();
+      expect(worktreeHead).toBe(pinnedSha);
+      expect(p.baseGitSha("r-pin")).toBe(pinnedSha);
+
+      await p.dispose("r-pin");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {

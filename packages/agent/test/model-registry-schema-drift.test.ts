@@ -33,4 +33,11 @@ describe("model-registry schema drift", () => {
       ).toBe(true);
     }
   });
+
+  // pi-ai 0.80.x added the `max` thinking level; the mirrored schema must
+  // accept it verbatim so a per-model override can pin it.
+  test("the mirrored schema accepts the `max` thinking level", () => {
+    const wrapped = { modelOverrides: { "any-model": { thinkingLevelMap: { max: "max" } } } };
+    expect(Value.Check(ProviderConfigSchema, wrapped)).toBe(true);
+  });
 });

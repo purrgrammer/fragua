@@ -22,6 +22,12 @@ guarantee.
   `*_API_KEY` too, pointing at `fragua providers add <provider>`. See
   [`docs/execution-model.md`](docs/execution-model.md) §2c.
 
+- **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
+  the providers and models added in that range — including the `radius`
+  provider — and pick up updated cost/context metadata for existing models.
+  Model ids already referenced by the built-in workflows continue to resolve; no default model choices changed. `radius` is
+  a purely dynamic provider with no static catalog default, so `--provider
+  radius` without an explicit `--model` has no built-in fallback.
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
@@ -109,6 +115,14 @@ guarantee.
 
 ### Added
 
+- **`fragua run --base <ref>` pins the worktree base.** A run can now pin the git
+  ref (branch, tag, or sha) its worktree is provisioned from. The ref is resolved
+  to a commit sha at enqueue and stored on the run, so the worktree is built from
+  that sha regardless of where the enqueuing checkout's HEAD moves afterward — no
+  need to keep a branch checked out until the daemon provisions. An unresolvable
+  ref is rejected before the run is minted; the resolved sha is printed in the
+  enqueue output and shown by `fragua runs status`. Without `--base`, the base
+  still defaults to the cwd's HEAD at provision time.
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context
   Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
   is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a
