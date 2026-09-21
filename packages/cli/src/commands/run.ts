@@ -18,8 +18,8 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { defaultGitExec, resolveBaseRef } from "@fragua/workspace";
 import chalk from "chalk";
-import { resolveBaseRef } from "../git-base.ts";
 import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
 import { followRun } from "../run-follow.ts";
@@ -111,7 +111,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
     let base: { sha: string; ref: string } | undefined;
     if (opts.base !== undefined) {
-      const resolved = await resolveBaseRef(cwd, opts.base);
+      const resolved = await resolveBaseRef(defaultGitExec, cwd, opts.base);
       if (!resolved.ok) {
         console.error(chalk.red(`run: ${resolved.error}`));
         return 1;

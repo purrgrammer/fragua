@@ -5,7 +5,14 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyAccept, applyDiscard, defaultGitExec, type GitExec, type RunActionGate } from "../src/run-actions.ts";
+import {
+  applyAccept,
+  applyDiscard,
+  defaultGitExec,
+  type GitExec,
+  type RunActionGate,
+  resolveBaseRef,
+} from "../src/run-actions.ts";
 
 // Each test spawns multiple real git subprocesses (worktree add/remove,
 // commits, stash, cherry-pick). In bun's test runner the overhead is 3–5×
@@ -435,5 +442,39 @@ describe("run-action gate (folded into accept/discard)", () => {
     const r = await applyDiscard(git, { ...gate(cwd, base), status: "running" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("not_terminal");
+  });
+});
+
+describe("resolveBaseRef", () => {
+  test("a branch resolves to its tip sha and keeps the ref as typed", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await resolveBaseRef(git, cwd, "main");
+    if (!r.ok) throw new Error(r.error);
+    expect(r.sha).toBe(base);
+    expect(r.ref).toBe("main");
+  });
+
+  test("a sha resolves to itself", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await resolveBaseRef(git, cwd, base);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.sha).toBe(base);
+  });
+
+  test("an unresolvable ref carries git's own diagnostic, not a generic process error", async () => {
+    const { cwd } = await setupRepo();
+    const r = await resolveBaseRef(git, cwd, "no-such-ref-xyz");
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toContain("no-such-ref-xyz");
+    expect(r.error).toContain(cwd);
+    expect(r.error).toContain("fatal:");
+  });
+
+  test("a non-git cwd is refused", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ra-nogit-"));
+    dirs.push(cwd);
+    const r = await resolveBaseRef(git, cwd, "main");
+    expect(r.ok).toBe(false);
   });
 });

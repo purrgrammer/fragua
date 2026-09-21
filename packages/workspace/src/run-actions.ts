@@ -268,3 +268,20 @@ export async function applyDiscard(git: GitExec, gate: RunActionGate): Promise<D
   }
   return { ok: true, refs: deleted };
 }
+
+export type BaseRefResolution = { ok: true; sha: string; ref: string } | { ok: false; error: string };
+
+/** Resolve a `fragua run --base <ref>` argument to a concrete commit sha, so a
+ * run pins a base independent of the cwd's live HEAD. Returns the sha plus the
+ * ref as typed (the human label stored on `run_state.base_git_ref`). A ref that
+ * doesn't resolve — or a non-git cwd — yields `{ ok: false }` carrying git's own
+ * diagnostic so the caller can refuse the enqueue with something actionable. */
+export async function resolveBaseRef(git: GitExec, cwd: string, ref: string): Promise<BaseRefResolution> {
+  const r = await git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  const sha = r.stdout.trim();
+  if (r.exitCode !== 0 || sha === "") {
+    const detail = r.stderr.trim() || r.stdout.trim() || `exit ${r.exitCode}`;
+    return { ok: false, error: `--base ${ref} is not a valid ref in ${cwd}: ${detail}` };
+  }
+  return { ok: true, sha, ref };
+}
