@@ -454,6 +454,10 @@ into a silent no, and nothing downstream can tell a 0.55 from a 0.05.
 - `review` carries the same item shape as `kept` / `dropped`, answers under
   `judge`, so the consumer can settle an item from the evidence or list it as
   uncertain. `review.yaml` and `pr_review.yaml` do the latter.
+- Live: a three-finding probe whose evidence was deliberately thin answered
+  `present` 0.56 / 0.60 / 0.50. One finding cleared the bound by nothing at
+  all and two would have been dropped outright; with the band they land in
+  `review`. The card marks them amber beside the kept and the dropped.
 - The equivalent for a gate is the `fail` edge, which is already a recoverable
   landing: a `retry:` gate re-runs its target, so an uncertain gate read costs a
   retry, not a lost finding. The asymmetry is deliberate — `keep` loses data
@@ -468,9 +472,16 @@ in the event log:
 
 ```
 fragua judge calibrate review
-  correctness_judge
-    present   keep  >= 0.6   n=  26  near bound 4 (15%)  uncertain 8 (31%)  range 0.20-0.94
+  coherence_judge
+    present   keep    >= 0.6         n=   4  near bound 2 (50%)  uncertain 2 (50%)  range 0.59-0.86
+              review  >= 0.3 <= 0.6  n=   4  near bound 2 (50%)  uncertain 2 (50%)  range 0.59-0.86
+    refuted   keep    <= 0.4         n=   4  near bound 0        uncertain 0 (0%)   range 0.05-0.25
 ```
+
+Every bound that tests a question gets a line; the question counts once in the
+totals. Over this repo's recorded runs the report gives 126 gate reads, 10%
+within 0.10 of their bound and 18% inside the uncertain band — the numbers a
+threshold change should be argued from.
 
 Bounds are read from the graph each run executed, so editing a threshold
 compares new runs against the new number and old runs against the old one.
