@@ -298,6 +298,15 @@ web:
     expect(cfg.web?.port).toBe(9999);
   });
 
+  test("parses web.host from the global config", async () => {
+    await writeGlobal(`
+web:
+  host: "::"
+`);
+    const cfg = await load();
+    expect(cfg.web?.host).toBe("::");
+  });
+
   test("warns on out-of-range web.port and drops the bad value (non-fatal)", async () => {
     await writeGlobal(`
 web:

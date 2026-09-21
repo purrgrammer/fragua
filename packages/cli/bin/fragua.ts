@@ -281,6 +281,7 @@ cli
 cli
   .command("harness", "Supervise the daemon + HTTP server as a foreground process (Ctrl-C to stop)")
   .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.fragua/config.yaml)")
+  .option("--host <addr>", 'Bind address (default 127.0.0.1, configurable via web.host; "::" exposes to the network)')
   .option("--db <path>", "Store path (default ~/.fragua/fragua.db)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
@@ -293,6 +294,7 @@ cli
     const code = await harnessCommand({
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
+      ...(pick("host") !== undefined ? { host: pick("host")! } : {}),
     });
     process.exit(code);
   });
@@ -300,6 +302,7 @@ cli
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
   .option("--port <n>", "TCP port to bind (default 6767, configurable via web.port)")
+  .option("--host <addr>", 'Bind address (default 127.0.0.1, configurable via web.host; "::" exposes to the network)')
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db); enables parallel fraguas")
   .action(async (options: Record<string, unknown>) => {
@@ -316,6 +319,7 @@ cli
       // startServer resolves it via config.web.port → DEFAULT_WEB_PORT.
       // startServer publishes the URL into the store's server_endpoint row.
       ...(portExplicit ? { port: portNum! } : {}),
+      ...(pick("host") !== undefined ? { hostname: pick("host")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
     });

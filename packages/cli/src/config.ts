@@ -80,6 +80,12 @@ const Web = Type.Object(
     // (6767). When the resolved port is in use, the server bumps to the
     // next free port so a stray collision doesn't kill startup.
     port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
+    // Bind address for the harness / serve HTTP. CLI `--host` wins; absent
+    // here falls through to loopback. The API is unauthenticated, so a wide
+    // bind ("::" / "0.0.0.0") is a deliberate choice, never a default — and
+    // GLOBAL-ONLY: read from ~/.fragua/config.yaml alone, never from a
+    // project's committed .fragua/config.yaml (see `loadGlobalConfig`).
+    host: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
 );
@@ -330,6 +336,14 @@ export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): 
  * Returns `{}` when the project file is absent. */
 export async function loadProjectConfig(cwd: string): Promise<FraguaConfig> {
   return loadConfigFile(cwd);
+}
+
+/** Load *only* `~/.fragua/config.yaml` — no project overlay. Used for keys
+ * that are host-machine decisions a committed project file must never
+ * widen (e.g. `web.host`: a repo shipping `host: "::"` would otherwise
+ * expose every contributor's unauthenticated API to their LAN). */
+export async function loadGlobalConfig(opts: { homeDir?: string } = {}): Promise<FraguaConfig> {
+  return loadConfigFile(opts.homeDir ?? homedir());
 }
 
 /** Per-worktree bootstrap pair resolved from `<cwd>/.fragua/config.yaml`. */
