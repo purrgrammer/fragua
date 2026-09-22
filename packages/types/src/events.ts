@@ -382,6 +382,19 @@ export interface RunEnqueuedPayload {
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   workflowPath?: string;
   scheduleId?: string;
+  /** Pinned worktree base, resolved to a commit sha AT ENQUEUE from the CLI's
+   * `--base <ref>`. When set, the provisioner runs `git worktree add --detach
+   * <path> <baseGitSha>` instead of the run cwd's live HEAD. Absent = default
+   * (cwd HEAD at provision time).
+   *
+   * contract: no-bump — additive optional genesis field, read only by
+   * `genesisToInitialState` at enqueue/import time (like `projectId`); no fact
+   * fold reads it and emission of prior versions is unchanged. */
+  baseGitSha?: string;
+  /** The `--base` ref as typed by the operator (branch, tag, or sha) — the
+   * human-readable label for {@link baseGitSha}, surfaced on `run_state`.
+   * Absent when no `--base` was passed. */
+  baseGitRef?: string;
 }
 
 export type IntentEvent =

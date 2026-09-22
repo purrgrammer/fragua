@@ -16,12 +16,15 @@ function snapshot(overrides: Partial<RunDetail> = {}): RunDetail {
     runId: "r1",
     startedAt: "2024-01-01T00:00:00.000Z",
     status: "running",
+    runStatus: "running",
     lastEventSeq: 100,
     nodes: [],
     selectedEdges: [],
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     ...overrides,
   };
 }
@@ -125,8 +128,8 @@ describe("foldDetailFrame", () => {
     // this, every snapshot refetch that catches up to overlay events
     // double-counts the same edge and the run-detail Graph view shows
     // `· ×N` badges on edges that fired exactly once.
-    let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 1);
-    s = fold(s, "edge.selected", { from: "b", to: "c", iteration: 0 }, 2);
+    let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0, pass: 0 }, 1);
+    s = fold(s, "edge.selected", { from: "b", to: "c", iteration: 0, pass: 0 }, 2);
     expect(s.selectedEdges).toEqual([
       { from: "a", to: "b", iteration: 0, pass: 0, seq: 1 },
       { from: "b", to: "c", iteration: 0, pass: 0, seq: 2 },
@@ -290,36 +293,36 @@ describe("foldDetailFrame", () => {
 
 describe("mergeDetail", () => {
   test("empty overlay returns the snapshot reference unchanged", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10 }] });
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10, pass: 0 }] });
     const merged = mergeDetail(snap, EMPTY_DETAIL_OVERLAY);
     expect(merged).toBe(snap);
   });
 
   test("overlay node state replaces snapshot row when seq is newer", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10 }] });
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10, pass: 0 }] });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", iteration: 0 }, 20);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([{ nodeId: "n1", iteration: 0, pass: 0, state: "completed", lastEventSeq: 20 }]);
   });
 
   test("overlay introduces nodes not in the snapshot", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 }] });
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10, pass: 0 }] });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n2", iteration: 0 }, 25);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([
-      { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 },
+      { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10, pass: 0 },
       { nodeId: "n2", iteration: 0, pass: 0, state: "running", lastEventSeq: 25 },
     ]);
   });
 
   test("overlay introduces a fresh iteration alongside an existing one", () => {
     const snap = snapshot({
-      nodes: [{ nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10 }],
+      nodes: [{ nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10, pass: 0 }],
     });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "verify", iteration: 1 }, 25);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([
-      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10 },
+      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10, pass: 0 },
       { nodeId: "verify", iteration: 1, pass: 0, state: "running", lastEventSeq: 25 },
     ]);
   });
@@ -330,8 +333,8 @@ describe("mergeDetail", () => {
     const snap = snapshot({
       status: "running",
       nodes: [
-        { nodeId: "running-node", iteration: 0, state: "running", lastEventSeq: 5 },
-        { nodeId: "done-node", iteration: 0, state: "completed", lastEventSeq: 8 },
+        { nodeId: "running-node", iteration: 0, state: "running", lastEventSeq: 5, pass: 0 },
+        { nodeId: "done-node", iteration: 0, state: "completed", lastEventSeq: 8, pass: 0 },
       ],
     });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "errored" }, 142);
@@ -367,13 +370,13 @@ describe("mergeDetail", () => {
     // tagged with seqs 101 and 102 are strictly newer, so they pass the
     // dedup filter and concatenate after the snapshot's edges.
     const snap = snapshot({
-      selectedEdges: [{ from: "a", to: "b", iteration: 0 }],
+      selectedEdges: [{ from: "a", to: "b", iteration: 0, pass: 0 }],
     });
-    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c", iteration: 0 }, 101);
-    overlay = fold(overlay, "edge.selected", { from: "c", to: "d", iteration: 0 }, 102);
+    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c", iteration: 0, pass: 0 }, 101);
+    overlay = fold(overlay, "edge.selected", { from: "c", to: "d", iteration: 0, pass: 0 }, 102);
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
-      { from: "a", to: "b", iteration: 0 },
+      { from: "a", to: "b", iteration: 0, pass: 0 },
       { from: "b", to: "c", iteration: 0, pass: 0 },
       { from: "c", to: "d", iteration: 0, pass: 0 },
     ]);
@@ -390,16 +393,16 @@ describe("mergeDetail", () => {
       lastEventSeq: 100,
       // The snapshot already has a -> b derived server-side from the
       // same edge.selected event the overlay also saw at seq 50.
-      selectedEdges: [{ from: "a", to: "b", iteration: 0 }],
+      selectedEdges: [{ from: "a", to: "b", iteration: 0, pass: 0 }],
     });
     // Overlay caught the SAME event the snapshot already covers
     // (seq 50 ≤ snapshot.lastEventSeq=100) — must be dropped — plus a
     // genuinely-newer one at seq 150.
-    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 50);
-    overlay = fold(overlay, "edge.selected", { from: "b", to: "c", iteration: 0 }, 150);
+    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0, pass: 0 }, 50);
+    overlay = fold(overlay, "edge.selected", { from: "b", to: "c", iteration: 0, pass: 0 }, 150);
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
-      { from: "a", to: "b", iteration: 0 }, // from snapshot, NOT duplicated
+      { from: "a", to: "b", iteration: 0, pass: 0 }, // from snapshot, NOT duplicated
       { from: "b", to: "c", iteration: 0, pass: 0 }, // genuinely fresh overlay event
     ]);
   });
@@ -441,8 +444,8 @@ describe("mergeDetail", () => {
     const snap = snapshot({
       status: "running",
       nodes: [
-        { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 },
-        { nodeId: "n2", iteration: 0, state: "completed", lastEventSeq: 20 },
+        { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10, pass: 0 },
+        { nodeId: "n2", iteration: 0, state: "completed", lastEventSeq: 20, pass: 0 },
       ],
     });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_terminated", { status: "completed" }, 150);
@@ -456,7 +459,7 @@ describe("mergeDetail", () => {
     // is dropped, so no node row actually moves. The output array must
     // still be the snapshot's reference.
     const snap = snapshot({
-      nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 30 }],
+      nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 30, pass: 0 }],
     });
     const overlay: DetailOverlay = {
       ...EMPTY_DETAIL_OVERLAY,

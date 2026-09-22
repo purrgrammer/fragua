@@ -20,12 +20,37 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
-import type { AgentMessage, FeedEvent, HaltReason, SnapshotStat } from "@fragua/types";
+import type {
+  NodeState as CoreNodeState,
+  RunDetail as CoreRunDetail,
+  RunSummary as CoreRunSummary,
+  SelectedEdge as CoreSelectedEdge,
+  StepSnapshot as CoreStepSnapshot,
+} from "@fragua/core/read-plane";
+import type { AgentMessage, FeedEvent, RunStatus, SnapshotStat } from "@fragua/types";
 import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
 
 export type { FeedEvent };
 
-export const BASE_URL = "/api";
+// Run-read DTOs are the read plane's schemas — the exact shapes every read
+// client hands back. Re-exported here so component call sites keep importing
+// them from `../lib/api.ts`; never re-declare them.
+//
+// Every field the shape validators (`isRunSummary` / `isRunDetail`) soft-accept
+// as absent is widened to optional here. The read plane types them as required,
+// but an old-daemon payload can omit them and still pass validation, so the
+// narrow type would be a lie and consumers would skip the guard. A validator
+// gap and a required type must never diverge — widen both sides together.
+type SoftFields = "runStatus" | "costUsd" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens";
+export type RunSummary = Omit<CoreRunSummary, SoftFields> & Partial<Pick<CoreRunSummary, SoftFields>>;
+// Same reasoning for `pass`: the validators don't inspect array elements at
+// all, and pre-pass servers omit it — hence the `?? 0` guards at every read.
+export type NodeState = Omit<CoreNodeState, "pass"> & Partial<Pick<CoreNodeState, "pass">>;
+export type SelectedEdge = Omit<CoreSelectedEdge, "pass"> & Partial<Pick<CoreSelectedEdge, "pass">>;
+export type RunDetail = Omit<CoreRunDetail, SoftFields | "nodes" | "selectedEdges"> &
+  Partial<Pick<CoreRunDetail, SoftFields>> & { nodes: NodeState[]; selectedEdges: SelectedEdge[] };
+
+const BASE_URL = "/api";
 
 export interface HealthResponse {
   ok: boolean;
@@ -43,191 +68,6 @@ export interface HealthResponse {
     inflight: number;
     queued: number;
   };
-}
-
-export interface RunSummary {
-  runId: string;
-  workflow?: string;
-  workflowName?: string;
-  startedAt: string;
-  status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
-  /** Raw lifecycle status from the store. Used by Inbox and other
-   * fine-grained filters that need to distinguish e.g. `paused_human`
-   * from `paused`. The coarse `status` above is what the badge
-   * renders. Optional because older server builds may omit it —
-   * mirrors the soft-validate pattern below. */
-  runStatus?:
-    | "queued"
-    | "running"
-    | "paused"
-    | "paused_human"
-    | "paused_auto"
-    | "completed"
-    | "cancelled"
-    | "halted"
-    | "quarantined";
-  eventCount: number;
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  durationMs?: number;
-  title?: string;
-  /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
-   * The wire key for `?project_id=` and `/projects/:id`. Optional only to
-   * tolerate older/ephemeral payloads — present on every daemon run. */
-  projectId?: string;
-  /** Project display label captured at enqueue. */
-  projectName?: string;
-  /** Local checkout the run was enqueued from. Mirrors `run_state.cwd`.
-   * A per-machine LOCATION hint, not identity. Absent for ephemeral runs. */
-  cwd?: string;
-  /** Worktree inbox status. `pending` = a terminal run with recoverable
-   * work awaiting an operator primitive. Absent on non-worktree runs. */
-  inboxStatus?: "pending" | "acted" | "discarded";
-  /** Terminal diff stat — committed (workflow commits) vs uncommitted
-   * (agent dirt); either side null. Drives the inbox row's change badge. */
-  changeStat?: {
-    committed: SnapshotChangeStat | null;
-    uncommitted: SnapshotChangeStat | null;
-  };
-  /** Source repo branch + HEAD sha at provision — operator-action target
-   * default + git-centric row/feed label. Absent when provisioned detached. */
-  baseGitRef?: string;
-  baseGitSha?: string;
-  /** True when the run was brought in via `fragua import`. Inspect-only:
-   * the daemon will never dispatch it; operate controls must be suppressed. */
-  imported?: boolean;
-}
-
-export interface NodeState {
-  /** Goal-gate re-entry epoch. Optional: pre-pass servers omit it. */
-  pass?: number;
-  nodeId: string;
-  /** Loop iteration this entry describes (0 for the first dispatch, 1 for
-   * the first re-entry across a backward edge or goal-gate retarget, …). A
-   * non-looping run carries only `iteration: 0` entries; the graph view
-   * groups by `nodeId` and renders the latest iteration's state. */
-  iteration: number;
-  state: "pending" | "running" | "completed" | "failed" | "skipped" | "retrying";
-  lastEventSeq: number;
-}
-
-/**
- * `workflowSource` is the raw workflow captured on `run.started`; absent
- * when the run predates source capture. There is intentionally NO
- * `edges` field — graph layout topology lives in the workflow source and
- * is parsed client-side by `@fragua/core`'s `parseWorkflow`. Fan-out
- * grouping is the exception: the server serves it as `fanout` records so
- * the UI can't disagree with the executor's closure walk.
- */
-/** `(from, to, iteration)` triple for an edge the executor traversed — see
- *  server's `SelectedEdge` schema. Ordered log. Multiple entries for the
- *  same `(from, to)` carry distinct `iteration`s (back-edge re-traversal). */
-export interface SelectedEdge {
-  from: string;
-  to: string;
-  iteration: number;
-  /** Goal-gate re-entry epoch of the traversal. Optional: pre-pass servers omit it. */
-  pass?: number;
-}
-
-export interface RunDetail {
-  runId: string;
-  workflow?: string;
-  workflowName?: string;
-  startedAt: string;
-  status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
-  /** Raw lifecycle status from the store. Used by Inbox and other
-   * fine-grained filters that need to distinguish e.g. `paused_human`
-   * from `paused`. The coarse `status` above is what the badge
-   * renders. Optional because older server builds may omit it —
-   * mirrors the soft-validate pattern below. */
-  runStatus?:
-    | "queued"
-    | "running"
-    | "paused"
-    | "paused_human"
-    | "paused_auto"
-    | "completed"
-    | "cancelled"
-    | "halted"
-    | "quarantined";
-  lastEventSeq: number;
-  nodes: NodeState[];
-  selectedEdges: SelectedEdge[];
-  workflowSource?: string;
-  /** Structural fan-out topology derived server-side (read-plane) from the
-   * workflow's `type: parallel` nodes. Present only when the workflow
-   * declares one. The web consumes THIS — never re-parses the YAML — so the
-   * grouping can't drift from the executor/validator closure walk. */
-  fanout?: {
-    parentOf: Record<string, string>;
-    branchOf: Record<string, string>;
-    orderOf: Record<string, number>;
-    nodeTypes: Record<string, string>;
-  };
-  costUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  durationMs?: number;
-  title?: string;
-  /** Terminal halt diagnosis from the run's `fact.run_terminated{errored}` payload
-   *  (when `runStatus === 'halted'`). Projected by the read plane — the
-   *  web never re-derives these from raw events. Optional because older
-   *  server builds may omit them. */
-  haltReason?: HaltReason;
-  haltDetail?: string;
-  /** Structured diagnostic context from the halt fact's `occContext`
-   *  (OCC-exhaustion halts). Projected by the read plane — the web never
-   *  re-derives it from raw events. Optional; only populated when recorded. */
-  haltContext?: {
-    count?: number;
-    nodeId?: string;
-    iteration?: number;
-    lastVersion?: number;
-    attemptedFactType?: string;
-  };
-  hitlNodeId?: string;
-  hitlLabel?: string;
-  /** Declared route names from the paused human node's `routes=` attr;
-   *  one button rendered per route. */
-  hitlOptions?: string[];
-  /** Sparse route-name → button-text map from each outgoing edge's `label=`
-   *  override (D6). Routes absent here fall back to `humanizeRouteName`. */
-  hitlOptionLabels?: Record<string, string>;
-  /** Per-node record of the route (and optional note) the operator chose at
-   *  each answered human gate, derived from `intent.human_input`. Survives
-   *  resume so a running/terminal run still shows past decisions. */
-  hitlDecisions?: Record<string, { route: string; note?: string }>;
-  /** One entry per `fact.run_requeued_after_crash` in the log — the startup
-   *  sweep requeued the run after a daemon died mid-dispatch. `at` is the
-   *  fact's `ts` (epoch ms). Absent when the run was never crash-requeued. */
-  crashRequeues?: Array<{ at: number; prevNode?: string; lastAliveAt?: number }>;
-  /** Project IDENTITY (UUIDv7). Stable across machines/checkouts; URL-safe.
-   * The wire key for `?project_id=` and `/projects/:id`. Optional only to
-   * tolerate older/ephemeral payloads — present on every daemon run. */
-  projectId?: string;
-  /** Project display label captured at enqueue. */
-  projectName?: string;
-  /** Local checkout the run was enqueued from. Mirrors `run_state.cwd`.
-   * A per-machine LOCATION hint, not identity. Absent for ephemeral runs. */
-  cwd?: string;
-  /** Absolute path to the still-mounted worktree under
-   * `<cwd>/.fragua/worktrees/<runId>`. Absent once the worktree was
-   * disposed or for runs that never had one. */
-  worktreePath?: string;
-  /** Source repo branch + HEAD sha at provision — shown in run-detail git
-   * metadata and used as the operator-action target default. */
-  baseGitRef?: string;
-  baseGitSha?: string;
-  /** True when the run was brought in via `fragua import`. The run has no
-   * local cwd, the daemon will never dispatch it, and operate controls
-   * should be suppressed. */
-  imported?: boolean;
 }
 
 /** One row in `GET /runs/:runId/changes`. Server projects
@@ -331,36 +171,9 @@ export interface SkillTreeResponse {
  * `messages` (the prior conversation per step) accumulated O(N²)
  * tool-result content for nothing the UI ever read.
  */
-export interface StepSnapshot {
-  stepIdx: number;
-  /** Stream seq of the originating `llm.start`. Joins this snapshot to
-   * the SQL cost-aggregate row produced by the server. Stable React key. */
-  startSeq: number;
-  nodeId: string;
-  /** When the node is a `type: parallel` fan-out branch, the parent
-   * parallel node's id — CostInspector nests branches under one group. */
-  parentNodeId?: string;
-  iteration?: { n: number; max: number };
-  /** ISO timestamp of the originating `llm.start`. The UI ticks
-   * `now - startedAt` for in-flight steps before `durationMs` lands. */
-  startedAt: string;
-  /** Set when the step's last `llm.done` has fired. Absent while the
-   * step is still in flight; the UI computes elapsed live. */
-  durationMs?: number;
-  provider?: string;
-  model?: string;
-  summary?: string;
-  cost?: {
-    input_tokens: number;
-    output_tokens: number;
-    billed_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-    cost_usd: number;
-    /** `judge` tool calls made inside this llm step — inside `cost_usd`,
-     * outside the token buckets. Present only when a call was made. */
-    judge?: { cost_usd: number; input_tokens: number; calls: number };
-  };
+/** Per-LLM-call snapshot from `GET /runs/:id/steps` — the read plane's
+ * `StepSnapshot` plus one client-only augmentation. */
+export interface StepSnapshot extends CoreStepSnapshot {
   /** Set client-side by CostInspector.mergeStepsByNode when this row
    * collapses multiple `llm.start` windows for the same node
    * (multi-turn llm, pause+resume cycles). Surfaces as a small
@@ -543,7 +356,7 @@ export async function health(): Promise<HealthResponse> {
 /** Filter passed to `GET /runs`. Every field is enforced server-side
  * (filter, order, limit). The web does no client-side sort or slice. */
 export interface ListRunsFilter {
-  status?: ReadonlyArray<NonNullable<RunSummary["runStatus"]>>;
+  status?: ReadonlyArray<RunStatus>;
   /** `"oldest"` surfaces longest-waiting runs first (Inbox metaphor).
    * Default = newest-first by updated_at. */
   order?: "newest" | "oldest";
@@ -835,47 +648,6 @@ export async function listJobs(filter?: { status?: JobStatus; limit?: number }):
   if (filter?.limit !== undefined) qs.set("limit", String(filter.limit));
   const q = qs.toString();
   return getJson(`/jobs${q ? `?${q}` : ""}`, (v): v is JobSummary[] => Array.isArray(v) && v.every(isJobSummary));
-}
-
-export async function getJob(id: string): Promise<JobSummary> {
-  return getJson(`/jobs/${encodeURIComponent(id)}`, isJobSummary);
-}
-
-export async function cancelJob(id: string): Promise<{ status: string; jobId: string }> {
-  const u = url(`/jobs/${encodeURIComponent(id)}`);
-  const res = await apiFetch("DELETE", u);
-  if (!res.ok) throw new ApiError(httpErrorMessage("DELETE", u, res.status, res.statusText), res.status, u);
-  const payload = (await res.json()) as unknown;
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    typeof (payload as { status?: unknown }).status !== "string" ||
-    typeof (payload as { jobId?: unknown }).jobId !== "string"
-  ) {
-    throw new Error(`DELETE ${u} → malformed response`);
-  }
-  return payload as { status: string; jobId: string };
-}
-
-export async function enqueueJob(input: {
-  workflow: string;
-  model?: string;
-  priority?: number;
-}): Promise<{ jobId: string; runId: string }> {
-  const body = {
-    workflow: input.workflow,
-    ...(input.model !== undefined ? { model: input.model } : {}),
-    ...(input.priority !== undefined ? { priority: input.priority } : {}),
-  };
-  return postJson(
-    "/jobs",
-    body,
-    (v): v is { jobId: string; runId: string } =>
-      typeof v === "object" &&
-      v !== null &&
-      typeof (v as { jobId?: unknown }).jobId === "string" &&
-      typeof (v as { runId?: unknown }).runId === "string",
-  );
 }
 
 /** Direct POST /runs — bypasses /jobs. The workflow must already be

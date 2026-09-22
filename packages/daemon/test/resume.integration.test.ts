@@ -607,6 +607,48 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     r.cleanup();
   });
 
+  test("harness-supervised crash: evictDaemonLockIfStale writes the reaper_took_over + truthful sweep_completed audit trail", () => {
+    // The harness reaps a crashed daemon's lock (via evictDaemonLockIfStale)
+    // BEFORE respawning, so the fresh daemon clean-acquires with no prior
+    // heartbeat and its own startup sweep is a no-op. The audit trail must
+    // therefore be written by the eviction itself, mirroring the direct
+    // takeover path above — otherwise monitors see a false negative on every
+    // harness-supervised crash.
+    const r = makeRig(`name: t
+steps:
+  work: {type: llm, prompt: x}
+`);
+    enqueue(r, "hev-1");
+    r.store.claimNextRun(1); // status → running, orphaned by the crash
+
+    const PRIOR_PID = 91001;
+    r.store.forceAcquireDaemonLock(PRIOR_PID, "host-dead");
+    const heartbeatAt = r.store.currentDaemonLock()!.heartbeatAt;
+
+    // A provably-dead pid (probe → false) evicts even on a fresh heartbeat.
+    const res = r.store.evictDaemonLockIfStale({ ttlMs: 30_000, isHolderAlive: () => false });
+    expect(res.evicted).toBe(true);
+    expect(r.store.currentDaemonLock()).toBeNull();
+
+    const daemonEvents = r.store.getDaemonEvents();
+    const takeover = daemonEvents.find((e) => e.type === "daemon.reaper_took_over");
+    expect(takeover).toBeDefined();
+    const tPayload = takeover!.payload as { priorPid: number; priorHeartbeatAt: number };
+    expect(tPayload.priorPid).toBe(PRIOR_PID);
+    expect(tPayload.priorHeartbeatAt).toBe(heartbeatAt);
+
+    const sweepCompleted = daemonEvents.find((e) => e.type === "daemon.sweep_completed");
+    expect(sweepCompleted).toBeDefined();
+    expect((sweepCompleted!.payload as { requeued: number }).requeued).toBe(1);
+    expect(takeover!.seq).toBeLessThan(sweepCompleted!.seq);
+
+    const requeued = r.store.getEvents("hev-1").find((e) => e.type === "fact.run_requeued_after_crash");
+    expect(requeued).toBeDefined();
+    expect((requeued!.payload as { lastAliveAt?: number }).lastAliveAt).toBe(heartbeatAt);
+    expect(r.store.getState("hev-1")!.status).toBe("queued");
+    r.cleanup();
+  });
+
   test("an immediate pause whose fact loses its OCC race retries instead of stranding the run", async () => {
     // Pre-fix the shouldPause arm ignored tryAppendFact's result: a
     // ConcurrencyError silently dropped fact.run_paused AND exited the

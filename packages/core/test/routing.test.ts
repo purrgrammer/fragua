@@ -30,12 +30,15 @@ import {
   OPERATOR_NOTE_MAX_BYTES,
   OPERATOR_NOTES_KEY,
   OPERATOR_NOTES_MAX_BYTES,
+  PENDING_STEER_KEY,
   PROVIDER_RETRY_ATTEMPT_KEY,
   PROVIDER_RETRY_CUMULATIVE_MS_KEY,
   readOperatorNotes,
+  readPendingSteer,
   retryCountKey,
   timeoutRetriesKey,
   truncateOperatorNote,
+  utf8Truncate,
 } from "../src/routing.ts";
 
 const utf8Len = (s: string): number => new TextEncoder().encode(s).length;
@@ -165,6 +168,41 @@ describe("routing accessors", () => {
     expect(readOperatorNotes(r)).toEqual([good]);
     expect(readOperatorNotes({ [OPERATOR_NOTES_KEY]: "junk" })).toEqual([]);
     expect(readOperatorNotes({})).toEqual([]);
+  });
+
+  test("readPendingSteer reads a string and degrades empty/non-string to undefined", () => {
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: "focus on auth" })).toBe("focus on auth");
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: "" })).toBeUndefined(); // cleared sentinel
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: 7 })).toBeUndefined();
+    expect(readPendingSteer({ [PENDING_STEER_KEY]: null })).toBeUndefined();
+    expect(readPendingSteer({})).toBeUndefined();
+  });
+
+  test("utf8Truncate drops a lone low surrogate that lands on the boundary", () => {
+    // "ab" + lone low surrogate + padding: cutting right after the surrogate
+    // must not keep it (it would encode as a 3-byte U+FFFD).
+    const lone = `ab\udc00${"x".repeat(20)}`;
+    const cut = utf8Truncate(lone, 5);
+    expect(cut).toBe("ab");
+    // An intact pair on the boundary is kept whole.
+    const pair = `ab\ud83d\ude00${"x".repeat(20)}`;
+    expect(utf8Truncate(pair, 6)).toBe("ab\ud83d\ude00");
+    expect(utf8Truncate(pair, 5)).toBe("ab");
+  });
+
+  test("utf8Truncate bounds by UTF-8 bytes on a codepoint boundary, with no marker", () => {
+    // Fits verbatim — no marker, no default budget.
+    expect(utf8Truncate("fits", 100)).toBe("fits");
+    // Cuts to the byte budget without appending anything.
+    const long = "x".repeat(500);
+    const cut = utf8Truncate(long, 100);
+    expect(utf8Len(cut)).toBeLessThanOrEqual(100);
+    expect(cut).not.toContain("[truncated]");
+    // Multibyte inputs never split a codepoint (no U+FFFD).
+    expect(utf8Truncate("験".repeat(100), 100)).not.toContain("�"); // 3 bytes each
+    expect(utf8Truncate("😀".repeat(100), 100)).not.toContain("�"); // 4-byte surrogate pairs
+    // A non-positive budget yields the empty string.
+    expect(utf8Truncate("y".repeat(500), 0)).toBe("");
   });
 
   test("truncateOperatorNote bounds by UTF-8 bytes and marks the cut", () => {

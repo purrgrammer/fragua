@@ -53,8 +53,8 @@ describe("RunConversation — fan-out branch grouping", () => {
       assistantRow(4, "lens_b", "B second"),
     ];
     const nodeStates: NodeState[] = [
-      { nodeId: "lens_a", iteration: 0, state: "completed", lastEventSeq: 3 },
-      { nodeId: "lens_b", iteration: 0, state: "running", lastEventSeq: 4 },
+      { nodeId: "lens_a", iteration: 0, state: "completed", lastEventSeq: 3, pass: 0 },
+      { nodeId: "lens_b", iteration: 0, state: "running", lastEventSeq: 4, pass: 0 },
     ];
 
     const { container } = renderWithClient(
@@ -87,8 +87,8 @@ describe("RunConversation — fan-out branch grouping", () => {
   it("renders each branch's OWN streaming buffer, not a shared one", () => {
     const messages: RunMessageRow[] = [];
     const nodeStates: NodeState[] = [
-      { nodeId: "lens_a", iteration: 0, state: "running", lastEventSeq: 1 },
-      { nodeId: "lens_b", iteration: 0, state: "running", lastEventSeq: 2 },
+      { nodeId: "lens_a", iteration: 0, state: "running", lastEventSeq: 1, pass: 0 },
+      { nodeId: "lens_b", iteration: 0, state: "running", lastEventSeq: 2, pass: 0 },
     ];
     const streamingByNode = new Map<string, StreamingMessage>([
       ["lens_a", { nodeId: "lens_a", blocks: [{ type: "text", index: 0, text: "alpha streaming" }] }],

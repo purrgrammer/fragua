@@ -104,6 +104,24 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       });
       prompt = `${blocks.join("\n\n")}\n\n${prompt}`;
     }
+    // A steer folded in before this dispatch (docs/intent-fold.md) — inject it
+    // at the head of the first user turn so the model sees the operator's
+    // redirection ahead of the task prompt. Mid-flight steers ride
+    // pi-agent-core's queue instead (supervisor onSteer); this is the
+    // pre-dispatch delivery path. The steer is the HIGHEST-priority prefix: it
+    // sits above the operator gate notes prepended just above, so a live
+    // operator redirect supersedes an earlier gate correction. The text is
+    // fenced in an `[operator-steer]` delimiter (matching the operator-notes
+    // label convention) so attacker-influenceable steer text can't pose as
+    // task content at the head of the prompt.
+    if (ctx.steering !== undefined && ctx.steering.length > 0) {
+      // Strip the fence literals from the (operator-influenceable) steer body so
+      // an embedded `[/operator-steer]` can't close the fence early and let the
+      // trailing bytes pose as task content. The fence is purely structural
+      // markup, so the tokens carry no meaning inside the body.
+      const fencedSteer = ctx.steering.replaceAll("[operator-steer]", "").replaceAll("[/operator-steer]", "");
+      prompt = `[operator-steer]\n${fencedSteer}\n[/operator-steer]\n\n${prompt}`;
+    }
     const graphGoal = getContext(ctx.routing).goal;
 
     let tokens = 0;

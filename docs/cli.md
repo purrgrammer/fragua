@@ -36,14 +36,21 @@ fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ## create runs — `fragua run <workflow>`
 
 ```sh
-fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--no-follow]
-                      [--cwd <dir>] [--db <path>]
+fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref>]
+                      [--no-follow] [--cwd <dir>] [--db <path>]
 ```
 
 `<workflow>` resolves: a bare name → `~/.fragua/workflows/<name>.yaml` then
 `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or a `.yaml` suffix is a
 literal path. `-i name=value` binds the typed inputs declared in the workflow's
-`inputs:` block (`@path` reads a file, `@-` reads stdin). Saves + enqueues, then
+`inputs:` block (`@path` reads a file, `@-` reads stdin). `--base <ref>` pins the
+run's worktree base to a branch, tag, or sha: the ref is resolved to a commit sha
+**at enqueue** (`git -C <cwd> rev-parse --verify <ref>^{commit}`) and stored on the
+run, so the worktree is provisioned from that sha (`git worktree add --detach`)
+regardless of where the cwd's HEAD moves afterward; an unresolvable ref is rejected
+before the run is minted, and the resolved sha is printed in the enqueue output.
+Without `--base`, the worktree defaults to the cwd's HEAD at provision time. The
+pinned base surfaces on `fragua runs status`. Saves + enqueues, then
 **follows by default** (streams the event log to terminal, answering HITL gates
 inline on a TTY); `--no-follow` prints the run id and exits. The exit code
 reflects the run's outcome (see [Exit codes](#exit-codes)).
@@ -195,8 +202,8 @@ fragua schedule list | pause <id> | resume <id> | rm <id>
 ## server / daemon primitives
 
 ```sh
-fragua harness [--port <n>] [--db <path>]                 # daemon + HTTP under one supervisor (:6767)
-fragua serve   [--port <n>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only
+fragua harness [--port <n>] [--host <addr>] [--db <path>]   # daemon + HTTP under one supervisor (127.0.0.1:6767)
+fragua serve   [--port <n>] [--host <addr>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only
 fragua daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
 fragua daemon  stop                                       # SIGTERM the daemon holding the store lock
 ```
@@ -205,6 +212,18 @@ Server discovery is store-resident: whoever binds the HTTP listener (the
 harness's in-process server, or a standalone `serve`) writes its URL into the
 store's `server_endpoint` row and clears it on shutdown. `@fragua/web` reads that
 row — there is no `serve.json` file and no localhost default.
+
+`harness` supervises the daemon subprocess: an unexpected exit — including a crash
+during initial boot — is restarted with exponential backoff (500ms doubling to
+30s, reset after 60s of healthy uptime), and five consecutive fast crashes stop
+the harness with a non-zero exit. A hard crash leaves its `daemon_lock` row
+behind (the release never runs); before respawning, the harness evicts that row
+only when the holder is provably gone — its heartbeat is past the lock TTL, or
+`kill(pid, 0)` reports the pid dead — so a still-live daemon (e.g. an orphan from
+a SIGKILLed sibling harness) keeps its lock and single-writer holds. Readiness
+gates on the replacement holding the lock under its own pid. On Ctrl-C the daemon
+is sent SIGTERM and, if it has not stopped within 5s, SIGKILL; the wait after
+SIGKILL is bounded too, so a wedged child can never hang shutdown.
 
 ---
 
@@ -275,6 +294,25 @@ its result in `~/.fragua/update-check.json`
 with a ~6h TTL (so it hits the network at most ~4×/day). Set
 `check_for_updates: false` in `~/.fragua/config.yaml` to disable it; a `version:`
 pin or a `bun run` (dev) checkout suppresses it too.
+
+`bash.env-passthrough: [NAME, ...]` in `.fragua/config.yaml` (merged global ⊕
+project, whole-array replace) re-admits named environment variables into `bash`
+tool subprocesses. By default the daemon/harness strips every variable whose
+name ends in any secret-shaped suffix (`_KEY`, `_SECRET`, `_TOKEN`, `_PASSWORD`,
+`_CREDENTIAL`, `_PASS`, `_AUTH`, `_PASSPHRASE`) — regardless of prefix — plus the
+env-var names of providers configured in the store, so workflow shell steps
+can't read the operator's keys. This is broader than provider credentials alone:
+generic infra secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`, or `S3_ACCESS_KEY`
+are stripped too. List a non-credential var here to let it through (e.g.
+`GH_TOKEN` for a `gh` step); provider credentials are never re-admitted
+regardless. The passthrough list is resolved **per run** from the run's project
+config merged over global, so each project served by one daemon gets its own
+passthrough regardless of the daemon's launch cwd — a *different* config seam
+from `bootstrap` (passthrough merges global ⊕ project; `bootstrap` is
+project-only). See
+`docs/execution-model.md` §2c. This is the daemon counterpart of `fragua ci
+--allow-env`; `fragua ci`'s default behaviour is unchanged, though `--allow-env`
+now refuses non-`_API_KEY` provider creds too (e.g. `ANTHROPIC_OAUTH_TOKEN`).
 
 ---
 

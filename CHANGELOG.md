@@ -75,6 +75,32 @@ guarantee.
   An alias moves when a release ships, and every threshold a workflow authors is
   read against one version's answers. Set `model:` on the step to move.
 
+- **The HTTP server binds loopback (`127.0.0.1`) by default.** The API is
+  unauthenticated, so exposing it to the network is now opt-in: pass
+  `--host <addr>` to `fragua harness` / `fragua serve`, or set `web.host` in
+  `~/.fragua/config.yaml` (`"::"` for dual-stack). `web.host` is read from the
+  global config only; a project's `.fragua/config.yaml` cannot widen the bind.
+  Port auto-bump is unchanged.
+
+- **Workflow `bash` steps under `fragua daemon`/`harness` no longer inherit the
+  operator's provider credentials.** The daemon applies the same env-strip
+  `fragua ci` uses — every secret-shaped variable name (`*_KEY`, `*_SECRET`,
+  `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE`)
+  plus the env names of store-configured providers — to every shell subprocess,
+  including the worktree bootstrap command. A new `bash.env-passthrough:
+  [NAME, ...]` config key re-admits named non-credential variables, resolved per
+  run from the run's project config over global; provider credentials are never
+  re-admitted. `fragua ci --allow-env` now refuses provider credentials beyond
+  `*_API_KEY` too, pointing at `fragua providers add <provider>`. See
+  [`docs/execution-model.md`](docs/execution-model.md) §2c.
+
+- **The pi-ai model catalogue is refreshed (0.79.1 → 0.80.7).** Workflows gain
+  the providers and models added in that range — including the `radius`
+  provider — and pick up updated cost/context metadata for existing models.
+  Model ids already referenced by the built-in workflows continue to resolve;
+  no default model choices changed. `radius` is
+  a purely dynamic provider with no static catalog default, so `--provider
+  radius` without an explicit `--model` has no built-in fallback.
 ### Fixed
 
 - **`skill` tool inside a worktree.** Loading a project-scope skill failed with
@@ -141,11 +167,46 @@ guarantee.
   locale- or ICU-version-dependent order made the cache prefix differ between
   machines for the same project.
 
+- Steer text (`POST /runs/:id/steer`) is now bounded at 2000 code points, so an
+  over-long ASCII steer is rejected with a clean validation error at the plane
+  boundary rather than failing deep in the store write path. A steer whose
+  multi-byte encoding still exceeds the event-payload cap surfaces as a `413`
+  from the store, and a steer that passes both limits is now stashed for
+  delivery without silent truncation.
+
 ### Fixed
 
+- Accepting a run whose tail renamed or deleted tracked files no longer leaves
+  the old paths on disk as untracked copies. The worktree is now brought in line
+  with the staged tree after accept, so a following `git checkout` is not blocked
+  by "untracked working tree files would be overwritten".
 - A budget, priority, max-retries, goal-gate, or max-loops raise sent to a
   running run no longer aborts the step in flight; the new ceiling applies at
   the next step boundary. "Raise & Resume" no longer costs one wasted LLM call.
+- `fragua harness` now supervises the executor daemon instead of dying with it.
+  An unexpected daemon exit is restarted with exponential backoff (500ms
+  doubling to 30s, reset after 60s of healthy uptime); five consecutive fast
+  crashes stop the harness with a non-zero exit and a clear message. Ctrl-C is
+  bounded: the daemon gets SIGTERM, and if it hasn't stopped within 5s it is
+  SIGKILLed, so a hung daemon can no longer hang shutdown forever.
+- A budget raise + resume on a run paused for budget at a `parallel` step no
+  longer loops. The fan-out dispatch now lands the operator's cap raise in
+  routing and marks the resume intent applied on the same commit — even when the
+  budget check re-trips on the wake turn — so the wake-pending sweeper stops
+  re-waking the run, and a sufficient raise lets the fan-out proceed. A resume
+  also no longer re-emits `daemon.worktree_provisioned` when the run's worktree
+  already exists.
+- Operator intents sent while a run is still `queued` (before the executor
+  claims it) are no longer silently discarded on the run-start turn. A pre-claim
+  budget/priority/retry-cap raise now lands in the run's routing before the
+  first node dispatches, and a pre-claim steer is delivered to the first `llm`
+  step—injected at the head of its first user turn—rather than dropped, even
+  when it co-arrives with a later cap raise or when the first node is not an
+  `llm` step (it carries forward to the first one that is). A pre-claim steer
+  paired with a pre-claim pause now honours both — the steer reaches the handler
+  and the run still pauses after that dispatch — and a steer carried into a
+  `parallel` node reaches every branch handler rather than only the first to
+  commit.
 - `bootstrapCommand` is XML-escaped before it is interpolated into the
   `<environment>` block. It comes from an unconstrained string in
   `<project>/.fragua/config.yaml`, so a value containing `</environment>`
@@ -196,6 +257,14 @@ guarantee.
 
 ### Added
 
+- **`fragua run --base <ref>` pins the worktree base.** A run can now pin the git
+  ref (branch, tag, or sha) its worktree is provisioned from. The ref is resolved
+  to a commit sha at enqueue and stored on the run, so the worktree is built from
+  that sha regardless of where the enqueuing checkout's HEAD moves afterward — no
+  need to keep a branch checked out until the daemon provisions. An unresolvable
+  ref is rejected before the run is minted; the resolved sha is printed in the
+  enqueue output and shown by `fragua runs status`. Without `--base`, the base
+  still defaults to the cwd's HEAD at provision time.
 - **MCP tools (experimental).** An `llm` step can now opt into Model Context
   Protocol servers with `mcp-servers: [name, …]`. Every tool the servers expose
   is materialised as an ordinary tool named `mcp__<server>__<tool>`. Declaring a

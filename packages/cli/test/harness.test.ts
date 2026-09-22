@@ -1,0 +1,660 @@
+// Tests for the `fragua harness` supervisor.
+//
+// Strategy: bind the in-process HTTP server on port 0 and inject a fake `spawn`
+// seam so we control the daemon subprocess lifecycle without launching a real
+// one. Fake procs model the real daemon's contract with the store: on spawn
+// they acquire `daemon_lock` under their own pid (crashing if a stale lock
+// blocks them), and a hard crash leaves that row behind — exactly what the
+// supervisor must evict before respawning. We drive `superviseDaemon` directly
+// with shortened timing knobs and assert its restart + shutdown policy.
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
+import { hostnameSafe, SqliteStore } from "@fragua/store";
+import {
+  type DaemonProcess,
+  evictStaleLock,
+  type SpawnDaemon,
+  type SupervisorConfig,
+  superviseDaemon,
+} from "../src/commands/harness.ts";
+import { startServer } from "../src/commands/serve.ts";
+
+interface FakeProc extends DaemonProcess {
+  pid: number;
+  exitCode: number | null;
+  killed: boolean;
+  lastSignal: number | undefined;
+  crash(code: number): void;
+}
+
+function makeFakeProc(pid: number): FakeProc {
+  let resolveExit!: (code: number) => void;
+  const exited = new Promise<number>((r) => {
+    resolveExit = r;
+  });
+  const proc: FakeProc = {
+    pid,
+    exited,
+    exitCode: null,
+    killed: false,
+    lastSignal: undefined,
+    kill(signal?: number) {
+      this.killed = true;
+      this.lastSignal = signal;
+      this.exitCode = signal === 9 ? 137 : 143;
+      resolveExit(this.exitCode);
+    },
+    crash(code: number) {
+      this.exitCode = code;
+      resolveExit(code);
+    },
+  };
+  return proc;
+}
+
+/** Model the real daemon boot: acquire `daemon_lock` under `pid`. Returns
+ *  whether the lock was taken — a fresh stale row makes this fail. */
+function acquireLock(dbPath: string, pid: number): boolean {
+  const store = new SqliteStore({ path: dbPath, migrate: false });
+  try {
+    return store.acquireDaemonLock(pid, hostnameSafe()).acquired;
+  } finally {
+    store.close();
+  }
+}
+
+function currentLockPid(dbPath: string): number | null {
+  const store = new SqliteStore({ path: dbPath, migrate: false });
+  try {
+    return store.currentDaemonLock()?.pid ?? null;
+  } finally {
+    store.close();
+  }
+}
+
+async function waitFor(pred: () => boolean, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return pred();
+}
+
+/** Emit `SIGINT` only once the supervisor has registered its handler — the
+ *  readiness gate is async, so a bare emit can race ahead of it. */
+async function emitSigintWhenReady(before: number): Promise<void> {
+  await waitFor(() => process.listenerCount("SIGINT") > before);
+  process.emit("SIGINT");
+}
+
+describe("superviseDaemon", () => {
+  let scratch: string | undefined;
+
+  afterEach(async () => {
+    if (scratch) {
+      await rm(scratch, { recursive: true, force: true });
+      scratch = undefined;
+    }
+  });
+
+  /** Fresh scratch dir + migrated store with no daemon lock: fake procs take
+   *  the lock themselves, so the readiness gate reflects a real acquisition. */
+  async function freshDbPath(): Promise<string> {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-harness-"));
+    const dbPath = join(scratch, "fragua.db");
+    new SqliteStore({ path: dbPath }).close();
+    return dbPath;
+  }
+
+  async function makeConfig(dbPath: string, overrides: Partial<SupervisorConfig> = {}): Promise<SupervisorConfig> {
+    const serverHandle = await startServer({ dbPath, port: 0, version: "test" });
+    return {
+      dbPath,
+      serverHandle,
+      restartInitialBackoffMs: 10,
+      restartMaxBackoffMs: 1_000,
+      healthyResetMs: 60_000,
+      maxFastFailures: 5,
+      // Default off: most tests assert the give-up policy on fast-failure count
+      // alone. The recycled-pid case sets a non-zero window explicitly.
+      lockTtlMs: 0,
+      shutdownGraceMs: 5_000,
+      lockWaitMs: 5_000,
+      ...overrides,
+    };
+  }
+
+  /** A lock-aware spawn: each child acquires `daemon_lock` under its own pid,
+   *  crashing (exit 1) if a stale row blocks it — the real daemon's
+   *  `DaemonAlreadyRunningError` path. */
+  function lockAwareSpawn(dbPath: string, procs: FakeProc[]): SpawnDaemon {
+    let nextPid = 5_000;
+    return () => {
+      const p = makeFakeProc(nextPid++);
+      if (!acquireLock(dbPath, p.pid)) queueMicrotask(() => p.crash(1));
+      procs.push(p);
+      return p;
+    };
+  }
+
+  test("reaps a gate-timed-out child before spawning its replacement", async () => {
+    const dbPath = await freshDbPath();
+    // A child whose `kill()` does NOT resolve `exited` at once — a real daemon
+    // takes time to shut down, and while it does it still answers
+    // `kill(pid, 0)`, so `evictStaleLock` refuses to clear its lock and the
+    // replacement cannot acquire. The supervisor must wait for the corpse.
+    const LINGER_MS = 150;
+    const exitedAt: number[] = [];
+    const spawnedAt: number[] = [];
+    // No child ever takes the lock, so every readiness gate times out.
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(6_000 + spawnedAt.length);
+      const realKill = p.kill.bind(p);
+      p.kill = (signal?: number) => {
+        setTimeout(() => {
+          exitedAt.push(Date.now());
+          realKill(signal);
+        }, LINGER_MS);
+      };
+      spawnedAt.push(Date.now());
+      return p;
+    };
+
+    const cfg = await makeConfig(dbPath, { lockWaitMs: 30, restartInitialBackoffMs: 1 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    expect(await waitFor(() => spawnedAt.length >= 2, 4_000)).toBe(true);
+    // The replacement must not predate the first child's exit.
+    expect(exitedAt.length).toBeGreaterThanOrEqual(1);
+    expect(spawnedAt[1]!).toBeGreaterThanOrEqual(exitedAt[0]!);
+
+    process.emit("SIGINT");
+    await done;
+    await cfg.serverHandle.close();
+  });
+
+  test("restarts the daemon subprocess after an unexpected crash", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, procs);
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath);
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    // Simulate a daemon crash — the supervisor must respawn.
+    procs[0]!.crash(1);
+    expect(await waitFor(() => procs.length >= 2)).toBe(true);
+    // The replacement must be the live daemon (never self-crashed on a blocked
+    // acquire, never cycled through fast failures) before we signal shutdown.
+    expect(await waitFor(() => currentLockPid(dbPath) === procs[1]!.pid)).toBe(true);
+    expect(procs[1]!.exitCode).toBeNull();
+
+    await emitSigintWhenReady(sigintBefore);
+    const code = await done;
+    expect(code).toBe(0);
+  });
+
+  test("evicts a stale daemon_lock left by a hard crash and restarts", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, procs);
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath);
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    // Hard crash: proc[0] exits WITHOUT releasing the lock — the stale row
+    // remains, fresh enough to block a naive re-acquire.
+    procs[0]!.crash(1);
+    expect(await waitFor(() => procs.length >= 2)).toBe(true);
+    // The replacement must actually hold the lock under its own pid — proof the
+    // supervisor evicted the stale row before spawning it.
+    expect(await waitFor(() => currentLockPid(dbPath) === procs[1]!.pid)).toBe(true);
+    // And the replacement stays up (never self-crashed on a blocked acquire).
+    expect(procs[1]!.exitCode).toBeNull();
+
+    await emitSigintWhenReady(sigintBefore);
+    const code = await done;
+    expect(code).toBe(0);
+  });
+
+  test("evicts a stale lock before the initial spawn", async () => {
+    const dbPath = await freshDbPath();
+    // A prior harness/daemon hard-crashed within the TTL: a fresh stale row is
+    // left behind under a dead pid. The FIRST child must still acquire cleanly.
+    const seed = new SqliteStore({ path: dbPath, migrate: false });
+    seed.forceAcquireDaemonLock(999_999, hostnameSafe());
+    seed.close();
+
+    const procs: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, procs);
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath);
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    // The initial child holds the lock under its own pid — proof the stale row
+    // was evicted before the initial spawn, not only on restart.
+    expect(await waitFor(() => currentLockPid(dbPath) === procs[0]!.pid)).toBe(true);
+    expect(procs[0]!.exitCode).toBeNull();
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("runs the startup sweep during the initial eviction, requeuing an orphan", async () => {
+    const dbPath = await freshDbPath();
+
+    // A run was in-flight ("running") when the prior daemon hard-crashed,
+    // leaving a stale lock. Eviction must run the sweep (crediting the stale
+    // lock's heartbeat as priorHeartbeatAt) — not merely clear the lock — so
+    // the orphan is requeued rather than left stuck "running" forever.
+    const wf = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
+    const seed = new SqliteStore({ path: dbPath, migrate: false });
+    seed.saveWorkflow("wf", "t", wf, serializeGraph(parseWorkflow(wf)), CURRENT_IR_VERSION);
+    seed.enqueueRun({ runId: "orphan-run", workflowSha: "wf" });
+    seed.claimNextRun(1); // status → running
+    seed.forceAcquireDaemonLock(999_999, hostnameSafe());
+    seed.close();
+
+    const procs: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, procs);
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath);
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const state = check.getState("orphan-run");
+    check.close();
+    // The eviction's startupSweep requeued the orphan — the old
+    // force-acquire+release compound never ran a sweep at all.
+    expect(state?.status).toBe("queued");
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("SIGKILL escalation tolerates ESRCH without an unhandled rejection", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      // Ignore SIGTERM; then raise ESRCH on the SIGKILL escalation, modelling
+      // the child exiting between the grace timeout and the kill(9).
+      p.kill = (signal?: number) => {
+        p.lastSignal = signal;
+        if (signal === 9) {
+          p.crash(137);
+          throw new Error("kill ESRCH");
+        }
+      };
+      procs.push(p);
+      return p;
+    };
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { shutdownGraceMs: 50 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    // The ESRCH from kill(9) must be swallowed: shutdown still completes and
+    // the harness resolves 0 rather than defeating the bounded shutdown.
+    expect(await done).toBe(0);
+    expect(procs[0]!.lastSignal).toBe(9);
+    // The server must still be closed on the SIGKILL branch — a skipped
+    // `serverHandle.close()` would leave the endpoint row behind.
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+
+  test("fails fast when the daemon never acquires within lockWaitMs", async () => {
+    const dbPath = await freshDbPath();
+    // Hold the lock under a live-looking pid so no child can ever acquire it.
+    const seed = new SqliteStore({ path: dbPath, migrate: false });
+
+    const procs: FakeProc[] = [];
+    // A spawn that never acquires (its acquire always loses to the held lock).
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      procs.push(p);
+      return p;
+    };
+
+    // Re-assert the blocking lock after the initial eviction so gateReady can
+    // never see the child's pid, forcing the lockWaitMs deadline.
+    const cfg = await makeConfig(dbPath, { lockWaitMs: 120 });
+    seed.forceAcquireDaemonLock(4242, hostnameSafe());
+    // The initial eviction clears it; re-hold it on a microtask so the child's
+    // pid never appears under the lock.
+    const reHold = setInterval(() => seed.forceAcquireDaemonLock(4242, hostnameSafe()), 10);
+
+    const startedAt = Date.now();
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+    clearInterval(reHold);
+    seed.close();
+
+    expect(code).toBe(1);
+    // Bounded by lockWaitMs, not the module-level default (5s).
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  test("gives up after N consecutive fast crashes and exits non-zero", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      procs.push(p);
+      // Crash immediately on every spawn (fast failure), leaving a stale lock
+      // the supervisor must evict before the next attempt.
+      queueMicrotask(() => p.crash(1));
+      return p;
+    };
+
+    const cfg = await makeConfig(dbPath, { restartInitialBackoffMs: 5, maxFastFailures: 5 });
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(code).toBe(1);
+    expect(procs.length).toBe(5);
+  });
+
+  test("keeps retrying past maxFastFailures until the lock TTL window elapses", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      procs.push(p);
+      queueMicrotask(() => p.crash(1));
+      return p;
+    };
+
+    // maxFastFailures=2 would give up after 2 crashes, but a non-zero lockTtlMs
+    // holds the harness open until the TTL window elapses so the store's
+    // unconditional TTL eviction arm gets its chance — so more than 2 procs
+    // must be spawned before it finally exits non-zero.
+    const cfg = await makeConfig(dbPath, {
+      restartInitialBackoffMs: 5,
+      restartMaxBackoffMs: 20,
+      maxFastFailures: 2,
+      lockTtlMs: 150,
+    });
+    const startedAt = Date.now();
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(code).toBe(1);
+    expect(procs.length).toBeGreaterThan(cfg.maxFastFailures);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
+  });
+
+  test("resets the failure budget after a daemon survives past healthyResetMs", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      procs.push(p);
+      // Only the first daemon crashes on its own; the replacement stays up
+      // past healthyResetMs before the test crashes it by hand.
+      if (procs.length === 1) queueMicrotask(() => p.crash(1));
+      return p;
+    };
+
+    // maxFastFailures=2: the first crash spends one of two allowances. Without
+    // a healthy-uptime reset the second crash would trip "giving up"; with the
+    // reset it restarts, so a third proc must appear.
+    const cfg = await makeConfig(dbPath, {
+      restartInitialBackoffMs: 5,
+      healthyResetMs: 30,
+      maxFastFailures: 2,
+    });
+    const sigintBefore = process.listenerCount("SIGINT");
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    // First crash → restart → proc[1] comes up healthy.
+    expect(await waitFor(() => procs.length >= 2)).toBe(true);
+    const startedAt = Date.now();
+    // Let proc[1] live past healthyResetMs, then crash it: the budget resets,
+    // so the supervisor restarts rather than gives up. Wait on wall-clock
+    // rather than a fixed sleep so scheduler jitter can't skip the reset path.
+    expect(await waitFor(() => Date.now() - startedAt >= cfg.healthyResetMs + 20)).toBe(true);
+    procs[1]!.crash(1);
+    expect(await waitFor(() => procs.length >= 3)).toBe(true);
+
+    await emitSigintWhenReady(sigintBefore);
+    const code = await done;
+    expect(code).toBe(0);
+  });
+
+  test("shutdown escalates to SIGKILL when the daemon ignores SIGTERM", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      // Ignore SIGTERM (signal 15): only SIGKILL (9) resolves exited.
+      const realKill = p.kill.bind(p);
+      p.kill = (signal?: number) => {
+        p.killed = true;
+        p.lastSignal = signal;
+        if (signal === 9) realKill(9);
+      };
+      procs.push(p);
+      return p;
+    };
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { shutdownGraceMs: 50 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    const code = await done;
+    expect(code).toBe(0);
+    expect(procs[0]!.lastSignal).toBe(9);
+    // Server closed even when the daemon only died on the SIGKILL escalation.
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+
+  test("shutdown tolerates ESRCH when the daemon dies between the gate and the signal", async () => {
+    const dbPath = await freshDbPath();
+
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      // Stay alive (exitCode === null) through the liveness gate, then model
+      // the TOCTOU: the process dies just as the signal is sent, so `kill`
+      // raises ESRCH. The ESRCH branch must be swallowed and the server closed.
+      p.kill = (signal?: number) => {
+        p.killed = true;
+        p.lastSignal = signal;
+        p.crash(1);
+        throw new Error("kill ESRCH");
+      };
+      procs.push(p);
+      return p;
+    };
+
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath);
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    // The daemon is still alive (exitCode null) when shutdown runs, so the
+    // kill branch — and its ESRCH throw — is exercised.
+    await emitSigintWhenReady(sigintBefore);
+    const code = await done;
+    expect(code).toBe(0);
+    // The SIGTERM branch fired (kill invoked, raising ESRCH) before the server
+    // was closed — `killed` proves the branch ran, unlike the vacuous
+    // `killed === false` it replaces.
+    expect(procs[0]!.killed).toBe(true);
+    expect(procs[0]!.exitCode).toBe(1);
+
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+
+  test("resolves exit 1 and clears server_endpoint when the initial spawn throws", async () => {
+    const dbPath = await freshDbPath();
+    const spawn: SpawnDaemon = () => {
+      throw new Error("spawn ENOENT");
+    };
+    const cfg = await makeConfig(dbPath);
+    // The pre-gate throw must land in the supervisor's error path — resolve a
+    // harness exit code AND close the server — not leak past the ready gate.
+    const code = await superviseDaemon(spawn, ["dummy"], cfg);
+    expect(code).toBe(1);
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+
+  test("restarts with backoff when the daemon crashes during boot", async () => {
+    const dbPath = await freshDbPath();
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      procs.push(p);
+      // First child crashes before ever acquiring the lock (boot-time crash);
+      // the replacement acquires cleanly and stays up.
+      if (procs.length === 1) queueMicrotask(() => p.crash(1));
+      else acquireLock(dbPath, p.pid);
+      return p;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { restartInitialBackoffMs: 5 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    // A boot-time crash must route through registerFailure (backoff + respawn),
+    // not fall through to a bare exit 1: a second proc must appear.
+    expect(await waitFor(() => procs.length >= 2)).toBe(true);
+    expect(await waitFor(() => currentLockPid(dbPath) === procs[1]!.pid)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("bounds the wait after SIGKILL when the daemon never exits", async () => {
+    const dbPath = await freshDbPath();
+    const procs: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(5_000 + procs.length);
+      acquireLock(dbPath, p.pid);
+      // Ignore SIGTERM AND SIGKILL: `exited` never resolves (a D-state hang).
+      // The bounded post-SIGKILL wait must let shutdown finish regardless.
+      p.kill = (signal?: number) => {
+        p.killed = true;
+        p.lastSignal = signal;
+      };
+      procs.push(p);
+      return p;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { shutdownGraceMs: 40 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+    expect(await waitFor(() => procs.length >= 1)).toBe(true);
+    await emitSigintWhenReady(sigintBefore);
+    // Never blocks on the unresolving `exited`: the harness still resolves and
+    // the server is closed.
+    expect(await done).toBe(0);
+    expect(procs[0]!.lastSignal).toBe(9);
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const endpoint = check.currentServerEndpoint();
+    check.close();
+    expect(endpoint).toBeNull();
+  });
+});
+
+describe("evictStaleLock", () => {
+  let scratch: string | undefined;
+
+  afterEach(async () => {
+    if (scratch) {
+      await rm(scratch, { recursive: true, force: true });
+      scratch = undefined;
+    }
+  });
+
+  async function seedLock(pid: number, host: string): Promise<{ dbPath: string; heartbeatAt: number }> {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-evict-"));
+    const dbPath = join(scratch, "fragua.db");
+    const store = new SqliteStore({ path: dbPath });
+    store.forceAcquireDaemonLock(pid, host);
+    const heartbeatAt = store.currentDaemonLock()!.heartbeatAt;
+    store.close();
+    return { dbPath, heartbeatAt };
+  }
+
+  function lockPid(dbPath: string): number | null {
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      return store.currentDaemonLock()?.pid ?? null;
+    } finally {
+      store.close();
+    }
+  }
+
+  test("evicts a lock whose heartbeat is past the TTL", async () => {
+    const { dbPath, heartbeatAt } = await seedLock(4242, "some-host");
+    // Heartbeat is stale; the (claimed-alive) holder is evicted anyway.
+    evictStaleLock(dbPath, { now: () => heartbeatAt + 30_001, isPidAlive: () => true });
+    expect(lockPid(dbPath)).toBeNull();
+  });
+
+  test("evicts a fresh lock whose pid is provably dead on THIS host", async () => {
+    const { dbPath } = await seedLock(4242, hostnameSafe());
+    // Fresh heartbeat, but the pid is gone (kill(pid,0) → ESRCH).
+    evictStaleLock(dbPath, { isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBeNull();
+  });
+
+  test("leaves a fresh lock whose pid is alive (live daemon from another harness)", async () => {
+    const { dbPath } = await seedLock(4242, hostnameSafe());
+    // Fresh heartbeat AND a reachable pid — never evict a live daemon.
+    evictStaleLock(dbPath, { isPidAlive: () => true });
+    expect(lockPid(dbPath)).toBe(4242);
+  });
+
+  test("ignores the pid probe for a lock held on another host", async () => {
+    const { dbPath } = await seedLock(4242, "some-other-host");
+    // A daemon in another PID namespace (container vs host) or on another
+    // machine sharing the store reports ESRCH for a live pid. Only the TTL
+    // may evict it.
+    evictStaleLock(dbPath, { isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBe(4242);
+  });
+
+  test("the TTL still evicts a foreign-host lock", async () => {
+    const { dbPath, heartbeatAt } = await seedLock(4242, "some-other-host");
+    evictStaleLock(dbPath, { now: () => heartbeatAt + 30_001, isPidAlive: () => false });
+    expect(lockPid(dbPath)).toBeNull();
+  });
+});

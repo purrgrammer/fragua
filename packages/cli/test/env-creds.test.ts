@@ -5,15 +5,20 @@
 // GH_TOKEN doesn't masquerade as a Copilot credential.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
 import { SqliteStore } from "@fragua/store";
 import {
+  buildProviderCredentialContext,
+  buildStoreProviderPrefixes,
   captureCiEnvSecrets,
   ciEnvDenyNames,
   ciEnvDenyPredicate,
+  daemonEnvDeny,
+  isDeniedEnvName,
+  listGlobalStoreProviders,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
   unsafeAllowEnvNames,
@@ -443,6 +448,150 @@ describe("--allow-env (ciEnvDeny* allow-set)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// daemonEnvDeny — the default env-strip for `fragua daemon` / harness. Reuses
+// the ci secret-name rule; adds store-provider env-var names; honours the
+// `bash.env-passthrough` allow-set (but never re-admits provider creds).
+// ---------------------------------------------------------------------------
+
+describe("daemonEnvDeny", () => {
+  test("(daemon-deny) strips ANTHROPIC_API_KEY and generic secret-suffixed names", () => {
+    const env: NodeJS.ProcessEnv = {
+      ANTHROPIC_API_KEY: "sk-ant-value-12345678",
+      MY_SECRET_TOKEN: "secret-value-12345678",
+      NODE_ENV: "production",
+    };
+    const { names, predicate } = daemonEnvDeny({ env });
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+    expect(names.has("MY_SECRET_TOKEN")).toBe(true);
+    expect(names.has("NODE_ENV")).toBe(false);
+    // predicate catches a secret-named var set after capture.
+    expect(predicate("MY_SECRET_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
+    expect(predicate("NODE_ENV")).toBe(false);
+  });
+
+  test("(daemon-deny-passthrough) a passthrough-listed name is excluded from names and predicate", () => {
+    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678", OTHER_TOKEN: "other-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({ env, passthrough: new Set(["GH_TOKEN"]) });
+    expect(names.has("GH_TOKEN")).toBe(false);
+    expect(names.has("OTHER_TOKEN")).toBe(true);
+    expect(predicate("GH_TOKEN")).toBe(false);
+    expect(predicate("OTHER_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-store-creds) provider env var names from storeProviders are added to the deny set", () => {
+    const { names } = daemonEnvDeny({ env: {}, storeProviders: ["anthropic"] });
+    // pi-ai maps anthropic to ANTHROPIC_API_KEY (and OAuth token) — at least one
+    // anthropic env-var name lands in the strip even though env is empty.
+    expect([...names].some((n) => n.startsWith("ANTHROPIC_"))).toBe(true);
+  });
+
+  test("(daemon-deny-refuse-provider-cred) a provider credential in passthrough is refused — still stripped", () => {
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: "sk-ant-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({
+      env,
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_API_KEY"]),
+    });
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
+  });
+
+  test("(daemon-deny-oauth-token) a non-_API_KEY provider credential in passthrough is refused — still stripped", () => {
+    // ANTHROPIC_OAUTH_TOKEN is caught registry-independently via ALWAYS_PROVIDER_CRED.
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-value-12345678" };
+    const { names, predicate } = daemonEnvDeny({
+      env,
+      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN"]),
+    });
+    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-gate4-exact) gate 4 refuses an exact-prefix secret but not a prefix-prefixed one", () => {
+    // GROQ_SECRET = exact provider prefix (GROQ) + secret suffix → refused.
+    // OPENAI_PROXY_AUTH = prefix OPENAI_PROXY (merely STARTS WITH a provider
+    // prefix) → NOT a provider credential, stays re-admittable.
+    const { passthrough } = daemonEnvDeny({
+      env: {},
+      passthrough: new Set(["GROQ_SECRET", "OPENAI_PROXY_AUTH", "ANTHROPIC_RATE_LIMIT_TOKEN"]),
+    });
+    expect(passthrough.has("GROQ_SECRET")).toBe(false);
+    expect(passthrough.has("OPENAI_PROXY_AUTH")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+  });
+
+  test("(daemon-deny-store-custom) a store-only custom provider's non-_API_KEY cred is stripped", () => {
+    // customai is not in pi-ai's registry, so gate 1/3/4 all miss CUSTOMAI_OAUTH_TOKEN.
+    // The storeProviders prefix scan must still strip it (secret-shaped + prefix match),
+    // while leaving a non-secret var carrying the same prefix untouched.
+    const { names } = daemonEnvDeny({
+      env: { CUSTOMAI_OAUTH_TOKEN: "custom-oauth-value-12345678", CUSTOMAI_ENDPOINT: "https://api.example" },
+      storeProviders: ["customai"],
+    });
+    expect(names.has("CUSTOMAI_OAUTH_TOKEN")).toBe(true);
+    expect(names.has("CUSTOMAI_ENDPOINT")).toBe(false);
+  });
+
+  test("(daemon-deny-store-cred-ignores-passthrough) a store provider's credential is stripped even if passthrough-listed", () => {
+    // A provider credential surfaced by the storeProviders loop must be denied
+    // regardless of passthrough — the passthrough gate applies only to
+    // non-credential candidates, mirroring the refusal filter.
+    process.env["ANTHROPIC_OAUTH_TOKEN"] = "sk-ant-oat-FAKE123456";
+    const { names } = daemonEnvDeny({
+      env: { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-FAKE123456" },
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
+    });
+    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
+  });
+
+  test("(daemon-deny-store-passthrough-agree) names and predicate agree on a <PROVIDER>_<WORD>_<SECRET-SUFFIX> passthrough entry for a storeProvider", () => {
+    // ANTHROPIC_RATE_LIMIT_TOKEN is a secret-shaped var carrying a held
+    // provider's prefix, but gate 4's exact-prefix match cannot classify it as
+    // a provider credential (prefix ANTHROPIC_RATE_LIMIT ≠ ANTHROPIC). Listing
+    // it in bash.env-passthrough must NOT let names and predicate disagree: the
+    // storeProviders prefix scan strips it, so both surfaces must deny it.
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_RATE_LIMIT_TOKEN: "held-prefix-value-12345678" };
+    const { names, predicate, passthrough } = daemonEnvDeny({
+      env,
+      storeProviders: ["anthropic"],
+      passthrough: new Set(["ANTHROPIC_RATE_LIMIT_TOKEN"]),
+    });
+    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(predicate("ANTHROPIC_RATE_LIMIT_TOKEN"));
+    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+    expect(predicate("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(false);
+  });
+
+  test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
+    const { passthrough } = daemonEnvDeny({
+      env: {},
+      passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
+    });
+    expect(passthrough.has("GH_TOKEN")).toBe(true);
+    expect(passthrough.has("ANTHROPIC_API_KEY")).toBe(false);
+    expect(passthrough.has("ANTHROPIC_OAUTH_TOKEN")).toBe(false);
+  });
+
+  test("(daemon-deny-warn-refused) refused provider creds warn once naming each and pointing at `fragua providers`", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+    try {
+      daemonEnvDeny({ env: {}, passthrough: new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) });
+    } finally {
+      console.warn = origWarn;
+    }
+    const combined = warnings.join(" ");
+    expect(combined).toContain("ANTHROPIC_API_KEY");
+    expect(combined).toContain("ANTHROPIC_OAUTH_TOKEN");
+    expect(combined).toContain("fragua providers");
+  });
+});
+
 describe("unsafeAllowEnvNames (provider-cred rail)", () => {
   test("provider credential names are refused", () => {
     expect(unsafeAllowEnvNames(["ANTHROPIC_API_KEY"])).toContain("ANTHROPIC_API_KEY");
@@ -454,6 +603,32 @@ describe("unsafeAllowEnvNames (provider-cred rail)", () => {
 
   test("mixed input returns only the provider creds", () => {
     expect(unsafeAllowEnvNames(["GH_TOKEN", "ANTHROPIC_API_KEY"])).toEqual(["ANTHROPIC_API_KEY"]);
+  });
+
+  test("non-_API_KEY provider credentials (ANTHROPIC_OAUTH_TOKEN) are refused", () => {
+    expect(unsafeAllowEnvNames(["ANTHROPIC_OAUTH_TOKEN"])).toContain("ANTHROPIC_OAUTH_TOKEN");
+  });
+
+  test("a provider-prefix-prefixed var (OPENAI_PROXY_AUTH) is NOT refused — gate 4 requires an exact prefix", () => {
+    expect(unsafeAllowEnvNames(["OPENAI_PROXY_AUTH", "ANTHROPIC_RATE_LIMIT_TOKEN"])).toEqual([]);
+  });
+
+  test("generic CI platform tokens (GH_TOKEN / GITHUB_TOKEN) still pass the provider-prefix gate", () => {
+    expect(unsafeAllowEnvNames(["GH_TOKEN", "GITHUB_TOKEN"])).toEqual([]);
+  });
+
+  test("(store-provider) a custom store-only provider's credential is refused via the storeProviders prefix scan", () => {
+    // CUSTOMAI is absent from pi-ai's registry, so all four pi-ai gates miss
+    // CUSTOMAI_OAUTH_TOKEN — only the storeProviders prefix scan catches it.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_OAUTH_TOKEN"], ["customai"])).toContain("CUSTOMAI_OAUTH_TOKEN");
+    // Without the snapshot the pi-ai-only gate can't classify it — the exact
+    // divergence the fix closes.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_OAUTH_TOKEN"])).toEqual([]);
+  });
+
+  test("(store-provider) a non-secret var carrying a held provider's prefix is NOT refused", () => {
+    // CUSTOMAI_ENDPOINT has the prefix but no secret suffix — allow-able.
+    expect(unsafeAllowEnvNames(["CUSTOMAI_ENDPOINT"], ["customai"])).toEqual([]);
   });
 });
 
@@ -533,5 +708,88 @@ describe("(review-5/finding-5) captureCiEnvSecrets — skip warning must not rev
     const combined = errors.join(" ");
     // A count ("2") must appear somewhere in the warning.
     expect(combined).toMatch(/\d+/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isDeniedEnvName + buildStoreProviderPrefixes — the single classification gate
+// both rails share, including the COPILOT_AMBIENT_ENV guard inside the
+// held-provider prefix scan.
+// ---------------------------------------------------------------------------
+
+describe("isDeniedEnvName (shared refusal gate)", () => {
+  test("provider credentials are denied", () => {
+    const ctx = buildProviderCredentialContext();
+    expect(isDeniedEnvName("ANTHROPIC_API_KEY", ctx, new Set())).toBe(true);
+  });
+
+  test("generic CI tokens are NOT denied", () => {
+    const ctx = buildProviderCredentialContext();
+    expect(isDeniedEnvName("GH_TOKEN", ctx, new Set())).toBe(false);
+    expect(isDeniedEnvName("GITHUB_TOKEN", ctx, new Set())).toBe(false);
+  });
+
+  test("a held-provider-prefixed secret is denied via the prefix scan", () => {
+    const ctx = buildProviderCredentialContext();
+    const prefixes = buildStoreProviderPrefixes(["customai"]);
+    expect(isDeniedEnvName("CUSTOMAI_OAUTH_TOKEN", ctx, prefixes)).toBe(true);
+  });
+
+  test("COPILOT_AMBIENT_ENV names survive even a github-prefixed store provider", () => {
+    // A `github`-prefixed store provider would otherwise reclassify GH_TOKEN /
+    // GITHUB_TOKEN (which carry the GITHUB_ prefix + a secret suffix) as
+    // provider credentials. The guard inside matchesStoreProviderPrefix spares them.
+    const ctx = buildProviderCredentialContext();
+    const prefixes = buildStoreProviderPrefixes(["github"]);
+    expect(isDeniedEnvName("GH_TOKEN", ctx, prefixes)).toBe(false);
+    expect(isDeniedEnvName("GITHUB_TOKEN", ctx, prefixes)).toBe(false);
+  });
+});
+
+describe("daemonEnvDeny — COPILOT_AMBIENT_ENV survives a github store provider", () => {
+  test("GH_TOKEN / GITHUB_TOKEN stay re-admittable when a github provider is held", () => {
+    const env: NodeJS.ProcessEnv = {
+      GH_TOKEN: "ghs_token_value_12345678",
+      GITHUB_TOKEN: "ghs_github_value_12345678",
+    };
+    const { passthrough } = daemonEnvDeny({
+      env,
+      storeProviders: ["github"],
+      passthrough: new Set(["GH_TOKEN", "GITHUB_TOKEN"]),
+    });
+    expect(passthrough.has("GH_TOKEN")).toBe(true);
+    expect(passthrough.has("GITHUB_TOKEN")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listGlobalStoreProviders — never throws out of `fragua ci`.
+// ---------------------------------------------------------------------------
+
+describe("listGlobalStoreProviders (fault tolerance)", () => {
+  test("returns [] for a missing global store", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-nostore-"));
+    try {
+      expect(listGlobalStoreProviders(join(dir, "does-not-exist.db"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns [] and warns (does not throw) on an unreadable / schema-mismatch store", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-badstore-"));
+    const badPath = join(dir, "fragua.db");
+    // A non-SQLite file: opening it or reading auth rows must fail cleanly.
+    writeFileSync(badPath, "not a sqlite database at all");
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+    try {
+      expect(listGlobalStoreProviders(badPath)).toEqual([]);
+    } finally {
+      console.warn = origWarn;
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(warnings.join(" ")).toContain(badPath);
   });
 });

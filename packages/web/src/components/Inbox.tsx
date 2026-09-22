@@ -156,7 +156,10 @@ export function Inbox({ limit, viewAllHref, title, testId }: InboxProps): JSX.El
 }
 
 export function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.Element | null {
-  const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
+  // `runStatus` is optional at the web boundary (old-daemon payloads may
+  // omit it); a missing status has no attention metadata, so bail like any
+  // non-attention row.
+  const meta = row.runStatus === undefined ? undefined : REASON_META[row.runStatus];
   if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;

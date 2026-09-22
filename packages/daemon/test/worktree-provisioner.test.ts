@@ -184,6 +184,59 @@ describe("WorktreeProvisioner — bootstrap resolution", () => {
   });
 });
 
+describe("WorktreeProvisioner — per-run env-strip resolution", () => {
+  test("no resolver → constructor envDeny values pass through", async () => {
+    const names = new Set(["ANTHROPIC_API_KEY"]);
+    const predicate = (n: string) => n === "SECRET";
+    const p = new WorktreeProvisioner({ envDenyNames: names, envDenyPredicate: predicate });
+    const out = await p.resolveEnvDenyFor("/any/cwd");
+    expect(out.names).toBe(names);
+    expect(out.predicate).toBe(predicate);
+  });
+
+  test("resolver is authoritative and receives each run's cwd", async () => {
+    // Mirrors bootstrap: one daemon serving many projects resolves the env-strip
+    // per run, so each project's own bash.env-passthrough takes effect.
+    const seen: string[] = [];
+    const namesA = new Set(["A_TOKEN"]);
+    const namesB = new Set(["B_TOKEN"]);
+    const p = new WorktreeProvisioner({
+      envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+      resolveRunEnvDeny: async (cwd) => {
+        seen.push(cwd);
+        return { names: cwd === "/project/a" ? namesA : namesB };
+      },
+    });
+    expect((await p.resolveEnvDenyFor("/project/a")).names).toBe(namesA);
+    expect((await p.resolveEnvDenyFor("/project/b")).names).toBe(namesB);
+    expect(seen).toEqual(["/project/a", "/project/b"]);
+  });
+
+  // Regression guard: `create()` must forward the resolver's env-strip into the
+  // provisioned environment, not the constructor fallback. A LocalEnvironment
+  // that stripped `SHOULD_NOT_LEAK` (the constructor value) instead of
+  // `RUN_TOKEN` (the resolver value) would leave the direct-resolver tests green.
+  test("create() applies resolveRunEnvDeny to the provisioned environment (not the fallback)", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-envdeny-"));
+    try {
+      const p = new WorktreeProvisioner({
+        envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
+        resolveRunEnvDeny: async () => ({ names: new Set(["RUN_TOKEN"]) }),
+      });
+      const env = await p.ensure("r-envdeny", { cwd: nonGit });
+      expect(env).toBeInstanceOf(LocalEnvironment);
+      const res = await env.exec('echo "[$RUN_TOKEN][$SHOULD_NOT_LEAK]"', {
+        env: { RUN_TOKEN: "from-resolver", SHOULD_NOT_LEAK: "from-constructor" },
+      });
+      // Resolver's name is stripped; the constructor fallback name survives.
+      expect(res.stdout).not.toContain("from-resolver");
+      expect(res.stdout).toContain("from-constructor");
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
   // The daemon serves runs from many cwds. The provisioner type is decided
   // per run against the run's own cwd — NOT once, at boot, against the
@@ -247,6 +300,42 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
 
       // Clean up the worktree (registers + removes) so the temp dir is removable.
       await p.dispose("r-git");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  // Pinned base (`fragua run --base <ref>`): the worktree is provisioned
+  // detached at the pinned sha even when the cwd's live HEAD has since moved.
+  test("pinned baseRef → worktree HEAD is the pinned sha, not the cwd's live HEAD", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-base-"));
+    try {
+      const git = (args: string[]) => {
+        const r = Bun.spawnSync({
+          cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+          cwd: repo,
+        });
+        if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed (exit ${r.exitCode})`);
+        return r.stdout.toString().trim();
+      };
+      git(["init", "-q"]);
+      git(["commit", "--allow-empty", "-m", "base", "-q"]);
+      const pinnedSha = git(["rev-parse", "HEAD"]);
+      // Advance the cwd's HEAD past the pinned commit.
+      git(["commit", "--allow-empty", "-m", "later", "-q"]);
+      const liveHead = git(["rev-parse", "HEAD"]);
+      expect(liveHead).not.toBe(pinnedSha);
+
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-pin", { cwd: repo, baseRef: pinnedSha });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      const worktreeHead = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: env.cwd() })
+        .stdout.toString()
+        .trim();
+      expect(worktreeHead).toBe(pinnedSha);
+      expect(p.baseGitSha("r-pin")).toBe(pinnedSha);
+
+      await p.dispose("r-pin");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

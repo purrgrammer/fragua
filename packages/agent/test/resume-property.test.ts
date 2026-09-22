@@ -13,7 +13,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { Node } from "@fragua/core";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import * as handler from "@fragua/core/handler";

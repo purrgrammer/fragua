@@ -45,6 +45,11 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   bootstrap?: BootstrapSpec;
   /** Timeout for the bootstrap command. Default 10 minutes. */
   bootstrapTimeoutMs?: number;
+  /** Escape-hatch label for the bootstrap-failure diagnostic note, naming the
+   * CLI-layer surface that re-admits a stripped var. The daemon passes
+   * `bash.env-passthrough in .fragua/config.yaml`; `fragua ci` passes
+   * `--allow-env`. Keeps this layer ignorant of CLI-layer config keys. */
+  envPassthroughHint?: string;
 }
 
 export class WorktreeEnvironment implements ExecutionEnvironment {
@@ -67,6 +72,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly keepAfterDispose: boolean;
   private readonly bootstrap: BootstrapSpec | undefined;
   private readonly bootstrapTimeoutMs: number;
+  private readonly envPassthroughHint: string | undefined;
   private readonly local: LocalEnvironment;
   private readonly envDenyNames: ReadonlySet<string> | undefined;
   private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
@@ -83,6 +89,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
     if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
+    if (opts.envPassthroughHint !== undefined) this.envPassthroughHint = opts.envPassthroughHint;
     if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
     if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
     this.local = new LocalEnvironment({
@@ -144,11 +151,25 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     // at best and churns lockfiles at worst.
     if (this.bootstrap !== undefined && !alreadyProvisioned) {
       if (typeof this.bootstrap === "string") {
-        const result = await this.local.exec(this.bootstrap, { timeoutMs: this.bootstrapTimeoutMs });
+        const cmd = this.bootstrap;
+        const result = await this.local.exec(cmd, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
-          throw new Error(
-            `bootstrap command failed (exit ${result.exitCode}): ${this.bootstrap}\n${result.stderr.trim()}`,
-          );
+          // The bootstrap ran under the bash env-strip. Only surface the strip
+          // as a suspect when the command actually names a stripped var. The
+          // daemon always populates envDenyNames with provider names, so any
+          // looser gate fires on every unrelated failure (network timeout,
+          // wrong cwd, typo'd command) and misattributes it to the strip.
+          const denied = this.envDenyNames ? [...this.envDenyNames] : [];
+          const referenced = denied.filter((n) => cmd.includes(n));
+          const hint = this.envPassthroughHint;
+          let note = "";
+          if (referenced.length > 0) {
+            note =
+              `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")}` +
+              (hint ? ` — re-admit a non-credential var via ${hint}` : "") +
+              `)`;
+          }
+          throw new Error(`bootstrap command failed (exit ${result.exitCode}): ${cmd}\n${result.stderr.trim()}${note}`);
         }
       } else {
         await this.bootstrap(this.local);

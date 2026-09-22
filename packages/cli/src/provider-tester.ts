@@ -3,7 +3,7 @@
 // so the server package carries no pi-ai runtime dependency; the server
 // route injects this via `ServerOptions.testProvider`.
 
-import { streamSimple } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { ProviderTester } from "@fragua/server";
 
 export const streamSimpleProviderTester: ProviderTester = async (model, apiKey) => {

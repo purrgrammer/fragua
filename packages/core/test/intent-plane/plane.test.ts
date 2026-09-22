@@ -33,6 +33,8 @@ describe("intent plane — build* (validate + construct)", () => {
     expect(plane.buildSteer({ text: "" }).ok).toBe(false);
     expect(plane.buildSteer({}).ok).toBe(false);
     expect(plane.buildSteer({ text: "x", extra: 1 }).ok).toBe(false); // additionalProperties
+    expect(plane.buildSteer({ text: "x".repeat(2000) }).ok).toBe(true); // at the bound
+    expect(plane.buildSteer({ text: "x".repeat(2001) }).ok).toBe(false); // over maxLength
   });
 
   test("pause: empty body, constructs intent.pause_requested", () => {
@@ -382,6 +384,23 @@ describe("intent plane — buildEnqueue", () => {
     if (!r.ok) throw new Error(r.error);
     expect(r.runId).toBe("run-1"); // the injected minter, never a supplied id
     expect(r.params.scheduleId).toBe("sch-1");
+  });
+
+  test("pinned base: baseGitSha + baseGitRef pass through onto enqueue params", () => {
+    const { plane } = rig();
+    const sha = "a".repeat(40);
+    const r = plane.buildEnqueue({ workflowSha: "sha1", baseGitSha: sha, baseGitRef: "feature-x" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.baseGitSha).toBe(sha);
+    expect(r.params.baseGitRef).toBe("feature-x");
+  });
+
+  test("no pinned base → params omit baseGitSha/baseGitRef", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.baseGitSha).toBeUndefined();
+    expect(r.params.baseGitRef).toBeUndefined();
   });
 
   test("no inputDecls → no input validation (dispatcher path)", () => {

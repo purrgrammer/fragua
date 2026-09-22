@@ -111,4 +111,62 @@ describe("appendFact routing-patch gate", () => {
     expect(thrown).toBeInstanceOf(RoutingPatchError);
     expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
   });
+
+  test("accepts a pending-steer string (write + empty-sentinel clear)", async () => {
+    const { store, runId, version } = await startedRun();
+
+    const res = store.appendFact(runId, [noop], version, {
+      routingPatch: { "internal.pending_steer": "focus on the auth module" },
+    });
+    expect(store.getState(runId)!.routing["internal.pending_steer"]).toBe("focus on the auth module");
+
+    store.appendFact(runId, [noop], res.newVersion, {
+      routingPatch: { "internal.pending_steer": "" },
+    });
+    expect(store.getState(runId)!.routing["internal.pending_steer"]).toBe("");
+  });
+
+  test("rejects a non-string pending-steer value", async () => {
+    const { store, runId, version } = await startedRun();
+
+    let thrown: unknown;
+    try {
+      store.appendFact(runId, [noop], version, {
+        routingPatch: { "internal.pending_steer": 42 },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RoutingPatchError);
+    expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
+  });
+
+  test("accepts a boolean pause-after-dispatch marker (set + clear)", async () => {
+    const { store, runId, version } = await startedRun();
+
+    const res = store.appendFact(runId, [noop], version, {
+      routingPatch: { "internal.pause_after_dispatch": true },
+    });
+    expect(store.getState(runId)!.routing["internal.pause_after_dispatch"]).toBe(true);
+
+    store.appendFact(runId, [noop], res.newVersion, {
+      routingPatch: { "internal.pause_after_dispatch": false },
+    });
+    expect(store.getState(runId)!.routing["internal.pause_after_dispatch"]).toBe(false);
+  });
+
+  test("rejects a non-boolean pause-after-dispatch value", async () => {
+    const { store, runId, version } = await startedRun();
+
+    let thrown: unknown;
+    try {
+      store.appendFact(runId, [noop], version, {
+        routingPatch: { "internal.pause_after_dispatch": "yes" },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RoutingPatchError);
+    expect((thrown as RoutingPatchError).violation).toBe("wrong-type");
+  });
 });

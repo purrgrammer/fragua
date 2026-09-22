@@ -19,9 +19,15 @@ import {
   getLimits,
   OPERATOR_NOTES_KEY,
   type OutputsValue,
+  PAUSE_AFTER_DISPATCH_KEY,
+  PENDING_STEER_KEY,
+  PENDING_STEER_MAX_BYTES,
   readGoalGateRetries,
   readOperatorNotes,
+  readPauseAfterDispatch,
+  readPendingSteer,
   retryCountKey,
+  utf8Truncate,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import {
@@ -638,7 +644,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // Advance lastAppliedSeq so the pause intent (and any hitched-along
         // intents that were folded into appliedSeqs) doesn't refire on
         // the next dispatch after wakePending moves the run back to queued.
-        decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
+        (() => {
+          const advanceAppliedTo = computeAdvanceAppliedTo(decision.appliedSeqs);
+          return advanceAppliedTo !== undefined ? { advanceAppliedTo } : undefined;
+        })(),
       );
       // Same OCC handling as the cancel arm above: a swallowed conflict here
       // dropped the pause AND exited the executor — a `running` zombie with
@@ -671,10 +680,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // idempotent but we avoid the extra lookup.
     if (opts.provisioner && runEnv === undefined) {
       try {
-        const provisionOpts: { cwd?: string } = {};
+        const provisionOpts: { cwd?: string; baseRef?: string } = {};
         if (state.cwd != null) provisionOpts.cwd = state.cwd;
+        if (state.baseGitSha != null) provisionOpts.baseRef = state.baseGitSha;
+        // `runEnv` is a per-runOne-pass local, so every resume re-enters with it
+        // undefined and calls `ensure` again — idempotent on the provisioner, but
+        // the daemon event must NOT re-fire on a cache hit or a paused→resumed
+        // loop floods `daemon_events` with `daemon.worktree_provisioned` (the
+        // production symptom). Only emit when this is a genuine first provision
+        // (the provisioner has no cached env for the run yet).
+        const alreadyProvisioned = opts.provisioner.envFor(runId) !== undefined;
         runEnv = await opts.provisioner.ensure(runId, provisionOpts);
-        opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
+        if (!alreadyProvisioned) {
+          opts.store.appendDaemonEvent(
+            { type: "daemon.worktree_provisioned", payload: { runId, ok: true } },
+            { runId },
+          );
+        }
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         opts.store.appendDaemonEvent(
@@ -697,8 +719,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (needsStart) {
       const start = routingString(state.routing, "start_node") ?? "start";
-      const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
-      const baseGitRef = opts.provisioner?.baseGitRef(runId) ?? undefined;
+      // Prefer the pinned base (seeded from the genesis payload onto run_state)
+      // over the provisioner's live read — the provisioner's `baseGitRef` reads
+      // the source repo's symbolic-ref, which would clobber a pinned branch/tag.
+      const baseGitSha = state.baseGitSha ?? opts.provisioner?.baseGitSha(runId) ?? undefined;
+      const baseGitRef = state.baseGitRef ?? opts.provisioner?.baseGitRef(runId) ?? undefined;
       const startFacts: FactEvent[] = [
         {
           type: "fact.run_started",
@@ -718,18 +743,44 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // back, it can be arbitrarily long prose, and the routing-patch
       // write gate rejects keys outside the known vocabulary.
       const startGraph = graphFor(state.workflowSha);
-      const startRoutingPatch: Record<string, unknown> = {};
+      // Carry the fold's routing delta so a pre-claim cap raise
+      // (`intent.budget_adjusted` → `budget_override.*`, `priority`,
+      // `max_retries_override.*`, …) queued while the run was `queued`
+      // lands in `run_state.routing` on run_started instead of being
+      // dropped. The graph goal wins where the keys collide.
+      const startRoutingPatch: Record<string, unknown> = { ...decision.routingDelta };
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
         startRoutingPatch[GRAPH_GOAL_KEY] = startGraph.attrs.goal;
+      }
+      // Thread a pre-claim steer through routing rather than holding its seq back
+      // on the intent log. `last_applied_seq` is a watermark, so a steer at a
+      // lower seq than a co-arriving non-steer pre-claim intent (e.g. a
+      // `budget_adjusted` at a higher seq) can't be left unapplied while the
+      // later intent advances — advancing past the later one would bury the
+      // steer below the watermark, and holding the watermark below the steer
+      // would leave the later intent unapplied (tripping the supervisor). We
+      // therefore advance past EVERY pre-claim intent and stash the steer text
+      // in `internal.pending_steer` (twin of the operator-notes path); the
+      // first-node dispatch surfaces it as `ctx.steering` and the transition
+      // planner clears it once an llm step consumes it.
+      if (decision.steering !== undefined && decision.steering.length > 0) {
+        startRoutingPatch[PENDING_STEER_KEY] = utf8Truncate(decision.steering, PENDING_STEER_MAX_BYTES);
+      }
+      // A pre-claim pause co-arriving with a steer folds to shouldPauseAfterDispatch
+      // (R3): run_started advances past BOTH intents, so the deferred pause has no
+      // other carrier into the next turn. Stash a marker the first running-turn
+      // dispatch reads (twin of how later turns consult decision.shouldPauseAfterDispatch)
+      // so the operator's concurrent pause isn't silently swallowed by the steer.
+      if (decision.shouldPauseAfterDispatch) {
+        startRoutingPatch[PAUSE_AFTER_DISPATCH_KEY] = true;
       }
       // Advance lastAppliedSeq on run_started so the supervisor doesn't
       // mistake the synthetic `intent.run_enqueued` (the queue marker
       // that caused this run to exist) for a fresh operator intent
       // mid-handler. Without this, the supervisor's first tick can land
       // mid-LLM-call and trip the controller (cause: "aborted",
-      // tokens=0), causing a spurious re-dispatch. Fold's `applied`
-      // already includes the run_enqueued seq; we just need to actually
-      // persist it.
+      // tokens=0), causing a spurious re-dispatch. Every pre-claim intent
+      // (including the steer, now carried in routing) advances here.
       const startAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
@@ -771,13 +822,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     if (currentNode == null) return { kind: "terminal" };
 
+    // A deferred pre-claim pause (a steer+pause pair stashed at run_started) rides
+    // routing across the boundary; resolve it before the fan-out branch so a
+    // parallel FIRST node honours it at the join, exactly as the linear path
+    // honours it after the dispatch (surfaced again below for the linear turn).
+    const deferredPause = readPauseAfterDispatch(effectiveRouting);
+
     // `type: parallel` fan-out (Model A, docs/proposals/fan-out-nodes.md). The
     // frontier loop owns dispatch + barrier; `current_node` stays pinned to the
     // parallel node until the join. Branches run concurrently through the same
     // store, each sub-node durable on the log (the linearization invariant —
     // concurrent execute, serialized commit).
     if (graphFor(state.workflowSha)?.nodes[currentNode]?.type === "parallel") {
-      return await runFanout(state, decision, currentNode, effectiveRouting);
+      return await runFanout(state, decision, currentNode, effectiveRouting, deferredPause);
     }
 
     // Stamp dispatchStartedAt before handing control to the handler
@@ -964,7 +1021,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
-    if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
+    // Steer delivery merges two sources: a pre-claim steer threaded through
+    // `internal.pending_steer` at run_started (carried until an llm step
+    // consumes it) and any steer the fold just consumed from the intent log
+    // (mid-flight / buffered-on-pause). Both surface through `ctx.steering`.
+    const pendingSteer = readPendingSteer(effectiveRouting);
+    const mergedSteer = [pendingSteer, decision.steering].filter((s): s is string => s != null && s.length > 0);
+    if (mergedSteer.length > 0) ctxOpts.steering = mergedSteer.join("\n");
     applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
@@ -1157,9 +1220,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // retry → provider retry → resultToFacts → fact-list rewrites → routing
     // patch. See transition-planner.ts. The commit + OCC + snapshot below
     // stay here — the planner has no store, clock, or I/O.
+    // A deferred pause stashed at run_started (a pre-claim pause+steer pair) is
+    // carried in routing, not in the fold — this turn's decision folds clean.
+    // Surface the marker as shouldPauseAfterDispatch so the planner swaps the
+    // success continuation for fact.run_paused exactly as it does when a running-
+    // turn fold produces it; the planner also clears the marker once the pause
+    // has landed (buildRoutingPatch), so the run doesn't re-pause on resume.
+    // `deferredPause` is resolved once at the top of the dispatch (shared with
+    // the fan-out path).
+    const planDecision =
+      deferredPause && !decision.shouldPauseAfterDispatch ? { ...decision, shouldPauseAfterDispatch: true } : decision;
     const plan = planTransition({
       state,
-      decision,
+      decision: planDecision,
       graph: graphFor(state.workflowSha),
       handlerResult: result,
       accounting: usage.totals(),
@@ -1263,6 +1336,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     baseState: RunState,
     branchRouting: Readonly<Record<string, unknown>>,
     branchTimeoutMs: number,
+    foldSteer: string | undefined,
   ): Promise<BranchOutcome> => {
     const graph = graphFor(baseState.workflowSha);
     const spec = opts.dispatcher.get(baseState.workflowSha, branchNode);
@@ -1323,6 +1397,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
     applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
+    // Deliver steer to the branch handler, mirroring the linear path's merge of
+    // the run-start pending steer (`internal.pending_steer`, carried in routing)
+    // with this turn's freshly folded steer (`decision.steering` for a mid-run
+    // steer that lands while parked at the parallel node). `buildRoutingPatch`
+    // fires the pending clear (pending_steer -> "") per llm branch, so without
+    // this mirror the first branch to commit would strip the steer from routing
+    // and every sibling would dispatch without ever seeing ctx.steering; and the
+    // fold consumes the mid-run steer's seq once, so a dropped `foldSteer` is
+    // gone for good.
+    const branchSteer = [readPendingSteer(branchRouting as Record<string, unknown>), foldSteer].filter(
+      (s): s is string => s != null && s.length > 0,
+    );
+    if (branchSteer.length > 0) ctxOpts.steering = branchSteer.join("\n");
     const ctx = core.buildHandlerContext(ctxOpts);
 
     const invocation = await invokeHandler({
@@ -1399,6 +1486,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     decision: Extract<core.IntentDecision, { kind: "proceed" }>,
     parallelNode: string,
     effectiveRouting: Readonly<Record<string, unknown>>,
+    deferredPause: boolean,
   ): Promise<DispatchOutcome> => {
     const graph = graphFor(state.workflowSha);
     const node = graph?.nodes[parallelNode];
@@ -1441,7 +1529,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // queued intents (else wake-pending re-resumes forever).
     const foldOpts: FanoutAppendOpts = {};
     if (Object.keys(decision.routingDelta).length > 0) foldOpts.routingPatch = decision.routingDelta;
-    if (decision.appliedSeqs.length > 0) foldOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+    const foldAdvanceTo = computeAdvanceAppliedTo(decision.appliedSeqs);
+    if (foldAdvanceTo !== undefined) foldOpts.advanceAppliedTo = foldAdvanceTo;
     let foldPending = foldOpts.routingPatch !== undefined || foldOpts.advanceAppliedTo !== undefined;
     const takeFold = (): FanoutAppendOpts => {
       if (!foldPending) return {};
@@ -1455,7 +1544,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // run is already parked, terminal is correct; OCC exhaustion ⇒ park the
     // facts in `pendingFanoutDisposition` and retry at the next turn's entry
     // (they are NOT re-derivable from durable state once the branch outcomes
-    // that produced them are gone).
+    // that produced them are gone). The disposition commit RIDES `takeFold()`
+    // so a resume that immediately re-pauses (the budget check re-tripping in
+    // the same turn) still advances `last_applied_seq` past the resume intent
+    // and lands the budget override — else the intents stay unapplied and
+    // wake-pending re-wakes the run forever (the parallel-node budget loop).
     const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
       // A park (budget pause / halt) may be this turn's FIRST commit — it must
       // carry the operator fold too, or the raised cap never lands and the
@@ -1503,15 +1596,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Hot per-commit gate reuses the just-committed projection; the cold once-per-fan-out
       // barrier forces a fresh read so its budget check never trusts a possibly-stale snapshot.
       const folded = (gate.fresh ? opts.store.getState(runId) : lastFanoutState) ?? opts.store.getState(runId) ?? state;
-      // Overlay this turn's operator fold: a `budget_adjusted` queued before the
-      // resume lives in `decision.routingDelta` until the first commit lands it,
-      // and the gate must see the raised cap on that very first check — the
-      // fan-out analog of the linear path's `effectiveRouting`.
-      const overrides = readBudgetOverrides(
+      // Read overrides from the fold-applied view (durable routing ⊕ this turn's
+      // uncommitted routingDelta) exactly as the linear path reads them off
+      // effectiveRouting. Without the delta merge a resume that raised the cap
+      // re-trips this gate against the PRE-fold routing on its own wake turn and
+      // re-pauses forever — the operator's raise never taking effect because the
+      // fold hasn't committed yet when the barrier check runs. Gate on the delta
+      // itself (idempotent post-commit) rather than `foldPending`, which
+      // `takeFold()` clears before the commit resolves — so a future early-return
+      // path added before the join can't read stale routing overrides.
+      const overrideRouting =
         Object.keys(decision.routingDelta).length > 0
           ? { ...folded.routing, ...decision.routingDelta }
-          : folded.routing,
-      );
+          : folded.routing;
+      const overrides = readBudgetOverrides(overrideRouting);
       let nodeCumulativeCostUsd = 0;
       let nodeCumulativeTokens = 0;
       for (const id of closureNodes) {
@@ -1580,6 +1678,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // turn's state read and the seed append is a `status` stop (yield the turn),
     // not an OCC conflict to feed the controller.
     if (plan.kind === "seed") {
+      // Seed and dispatch are separate supersteps: `takeFold()` here advances
+      // `last_applied_seq` past a mid-run steer folded THIS turn, so the seed
+      // must carry that steer into `pending_steer` routing (exactly as
+      // run_started does for a pre-claim steer) or the next turn's branch
+      // dispatch reads a cleared fold and drops it. The re-dispatch/direct
+      // arms dispatch in the SAME turn the steer folds, so their
+      // executeBranchNode `decision.steering` thread covers them instead.
+      let seedOpts = takeFold();
+      if (decision.steering !== undefined && decision.steering.length > 0) {
+        seedOpts = {
+          ...seedOpts,
+          routingPatch: {
+            ...(seedOpts.routingPatch ?? {}),
+            [PENDING_STEER_KEY]: utf8Truncate(decision.steering, PENDING_STEER_MAX_BYTES),
+          },
+        };
+      }
       const res = await commitFanoutFact(
         [
           {
@@ -1587,7 +1702,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             payload: { nodeId: parallelNode, iteration, ...passField(pass), branches: [...plan.branches] },
           },
         ],
-        takeFold(),
+        seedOpts,
       );
       if (!res.ok) {
         if (res.reason !== "occ") return { kind: "continue" };
@@ -1604,9 +1719,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (plan.kind === "join") {
       const drainedBarrier = fanoutBudgetDisposition({ fresh: true });
       if (drainedBarrier !== undefined) return commitParkOrTerminal([drainedBarrier]);
-      const res = await commitFanoutFact(
-        [
-          {
+      // A deferred pre-claim pause (a steer+pause pair stashed at run_started)
+      // must land HERE: the fan-out join is this path's success continuation, the
+      // twin of the linear planner's node_started→run_paused swap. Emit
+      // fact.run_paused instead of fact.fanout_joined and clear the marker in the
+      // same commit — resume re-enters runFanout, re-drains to the join with the
+      // marker cleared, and advances past it cleanly. The commit still serializes
+      // through commitFanoutFact (the linearization point).
+      const joinFact: FactEvent = deferredPause
+        ? { type: "fact.run_paused", payload: { reason: "operator", nodeId: parallelNode } }
+        : {
             type: "fact.fanout_joined",
             payload: {
               nodeId: parallelNode,
@@ -1615,15 +1737,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               nextNode: plan.nextNode,
               branchesCompleted: plan.branchesCompleted,
             },
-          },
-        ],
-        takeFold(),
-      );
+          };
+      let joinOpts = takeFold();
+      if (deferredPause) {
+        joinOpts = {
+          ...joinOpts,
+          routingPatch: { ...(joinOpts.routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false },
+        };
+      }
+      const res = await commitFanoutFact([joinFact], joinOpts);
       if (!res.ok) {
         // Status-stop ⇒ the run is already leaving `running`; just yield the
         // turn. Only true OCC exhaustion feeds the conflict controller.
         if (res.reason !== "occ") return { kind: "continue" };
-        const { halted } = await onOccConflict("fact.fanout_joined", parallelNode, iteration, state.version);
+        const { halted } = await onOccConflict(joinFact.type, parallelNode, iteration, state.version);
         return halted ? { kind: "terminal" } : { kind: "continue" };
       }
       onOccResolved(parallelNode, iteration);
@@ -1709,6 +1836,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // closure: a correction aimed at a scan step gets re-applied by the verify
     // step that was supposed to JUDGE its output. The turn-start value doubles as
     // the region snapshot, so entries see the same notes whatever the settle order.
+    //
+    // `internal.pending_steer` is deliberately NOT stripped the same way: a
+    // steer is run-scoped, not gate-scoped, and on the linear path it reaches
+    // every llm node until the clear commits. Deeper sub-nodes seeing it
+    // matches that, so the asymmetry with operator notes is the intent.
     const branchEntries = new Set(branches);
     const routingForBranch = (nodeId: string): Readonly<Record<string, unknown>> => {
       if (branchEntries.has(nodeId)) return liveRouting;
@@ -1772,7 +1904,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             // strips pending operator notes for non-entry sub-nodes.
             return {
               nodeId,
-              outcome: await executeBranchNode(nodeId, freshState, routingForBranch(nodeId), branchTimeoutMs),
+              outcome: await executeBranchNode(
+                nodeId,
+                freshState,
+                routingForBranch(nodeId),
+                branchTimeoutMs,
+                decision.steering,
+              ),
             };
           } finally {
             sem.release();

@@ -605,6 +605,14 @@ export interface EnqueueRunParams {
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
+  /** Pinned worktree base, resolved to a commit sha at enqueue from
+   * `fragua run --base <ref>`. Seeds `run_state.base_git_sha`; the provisioner
+   * reads it and provisions the worktree detached at this sha. Omitted =
+   * default (cwd HEAD at provision time). */
+  baseGitSha?: string;
+  /** The `--base` ref as typed (branch/tag/sha). Seeds
+   * `run_state.base_git_ref`; the human label for `baseGitSha`. */
+  baseGitRef?: string;
 }
 
 export interface GetEventsOpts {
@@ -1128,6 +1136,33 @@ export interface IDaemonCoordinator {
   forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
+  /**
+   * Unconditionally delete whatever `daemon_lock` row exists, in a single
+   * `DELETE FROM daemon_lock WHERE id = 1` statement. The low-level eviction
+   * primitive: the server reaper (after its own TTL check) and
+   * {@link evictDaemonLockIfStale} call it. Prefer `evictDaemonLockIfStale`
+   * over calling this directly so the TTL/liveness gate can't be skipped.
+   */
+  forceDeleteDaemonLock(): void;
+  /**
+   * TTL-gated eviction: read the current lock, and delete it only when its
+   * heartbeat is past `ttlMs` OR the supplied `isHolderAlive` probe reports the
+   * holder dead. A fresh heartbeat with a live (or unprobed) holder is left
+   * untouched — never evict a live daemon. When it does evict, `startupSweep`
+   * runs FIRST (crediting the dead lock's heartbeat as `priorHeartbeatAt` to
+   * in-flight runs), THEN the row is deleted in a single pid+heartbeat-guarded
+   * `DELETE`, so a daemon that re-acquired between the liveness snapshot and
+   * the delete is spared (its fresh pid/heartbeat fails the guard). On a
+   * successful eviction it emits `daemon.reaper_took_over` + a truthful
+   * `daemon.sweep_completed` so harness-supervised and server-reaper recoveries
+   * are audit-visible, mirroring the daemon's direct-takeover path.
+   * `stalePid` / `priorHeartbeatAt` are populated only when `evicted` is true.
+   */
+  evictDaemonLockIfStale(opts: {
+    ttlMs: number;
+    now?: () => number;
+    isHolderAlive?: (lock: DaemonLockRow) => boolean;
+  }): { evicted: boolean; swept?: SweepResult; stalePid?: number; priorHeartbeatAt?: number };
   currentDaemonLock(): DaemonLockRow | null;
   currentServerEndpoint(): ServerEndpointRow | null;
   setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void;

@@ -7,40 +7,9 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { createMemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test } from "vitest";
 import { App } from "../../src/App.tsx";
-import type { RunSummary } from "../../src/lib/api.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { blockedRun, pendingRun } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json } from "../helpers/with-query-client.tsx";
-
-function blockedRun(id: string): RunSummary {
-  return {
-    runId: id,
-    startedAt: "2024-01-01T00:00:00Z",
-    status: "paused",
-    runStatus: "paused",
-    eventCount: 2,
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-  };
-}
-
-function pendingRun(id: string): RunSummary {
-  return {
-    runId: id,
-    startedAt: "2024-01-01T00:00:00Z",
-    status: "success",
-    runStatus: "completed",
-    eventCount: 1,
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    inboxStatus: "pending",
-    changeStat: {
-      committed: { filesChanged: 1, insertions: 2, deletions: 0 },
-      uncommitted: null,
-    },
-  };
-}
 
 function mountApp(mocks: Record<string, () => Response | Promise<Response>>, path = "/inbox") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });

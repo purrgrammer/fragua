@@ -7,9 +7,17 @@ import { snapshotLabel } from "../../src/components/RunDiffTab.tsx";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { makeRunDetail } from "../helpers/fixtures.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Minimal RunDetail factory. Defaults cover every required field so a
+// future field-addition lands in `test/helpers/fixtures.ts` once rather
+// than across every site; tests pass only the fields they assert on.
+function makeDetail(overrides: Partial<RunDetailT> = {}): RunDetailT {
+  return makeRunDetail(overrides);
+}
 
 // ─── FakeEventSource ─────────────────────────────────────────────
 // Minimal EventSource stand-in for injecting SSE frames into useRunLive.
@@ -116,18 +124,11 @@ describe("RunDetail", () => {
   afterEach(() => cleanup());
 
   it("fetches the run for the :id from the URL and renders the conversation region", async () => {
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "abc12345xyz",
       workflowName: "build-feature",
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "running",
       lastEventSeq: 3,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    });
     const { client, mock } = prepare("abc12345xyz", detail);
     try {
       const { container } = mount(client, "/runs/abc12345xyz");
@@ -146,19 +147,17 @@ describe("RunDetail", () => {
   });
 
   it("renders cost + tokens + duration stat tiles when metrics are present", async () => {
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-metrics",
       workflowName: "w",
-      startedAt: "2024-01-01T00:00:00Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 4,
-      nodes: [],
-      selectedEdges: [],
       costUsd: 0.42,
       inputTokens: 2500,
       outputTokens: 500,
       durationMs: 75_000,
-    };
+    });
     const { client, mock } = prepare("run-metrics", detail);
     try {
       const { container } = mount(client, "/runs/run-metrics");
@@ -184,17 +183,11 @@ describe("RunDetail", () => {
     // For a terminal run without durationMs the server value is authoritative
     // (undefined → formatDuration → "—"). The cost tile also shows "—" since
     // costUsd is 0 and there are no tokens.
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-empty",
-      startedAt: "2024-01-01T00:00:00Z",
       status: "success",
-      lastEventSeq: 1,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+      runStatus: "completed",
+    });
     const { client, mock } = prepare("run-empty", detail);
     try {
       const { container } = mount(client, "/runs/run-empty");
@@ -210,17 +203,13 @@ describe("RunDetail", () => {
   });
 
   it("never renders the raw ISO startedAt string to the user", async () => {
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-dates",
       startedAt: "2024-06-01T12:34:56Z",
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 2,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    });
     const { client, mock } = prepare("run-dates", detail);
     try {
       const { container } = mount(client, "/runs/run-dates");
@@ -272,17 +261,10 @@ describe("RunDetail", () => {
 
     // startedAt is 5 seconds before the frozen clock.
     const startedAt = new Date(base.getTime() - 5_000).toISOString();
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-ticking",
       startedAt,
-      status: "running",
-      lastEventSeq: 1,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    });
     const { client, mock } = prepare("run-ticking", detail);
     try {
       const { container } = mount(client, "/runs/run-ticking");
@@ -317,19 +299,15 @@ describe("RunDetail", () => {
     vi.setSystemTime(base);
 
     const startedAt = new Date(base.getTime() - 5_000).toISOString();
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-terminal",
       startedAt,
       status: "success",
+      runStatus: "completed",
       lastEventSeq: 5,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
       // Server durationMs is authoritative for terminal runs.
       durationMs: 3_000,
-    };
+    });
     const { client, mock } = prepare("run-terminal", detail);
     try {
       const { container } = mount(client, "/runs/run-terminal");
@@ -355,19 +333,10 @@ describe("RunDetail", () => {
   });
 
   it("stats strip live-updates cost and tokens from SSE cost.recorded events", async () => {
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-live-cost",
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "running",
-      lastEventSeq: 1,
-      nodes: [],
-      selectedEdges: [],
       // snapshot starts at zero — live events should update the tiles
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-    };
+    });
     const { client, mock } = prepare("run-live-cost", detail);
     const fakeEs = installFakeEventSource();
     try {
@@ -447,18 +416,10 @@ describe("RunDetail", () => {
     // drop out of the aggregate via the `aggregateLiveFrames` cutoff
     // filter, so `snapshot.costUsd + liveCost.totalCostUsd` stays
     // disjoint and there's no double-count over the overlap range.
-    const detailV1: RunDetailT = {
+    const detailV1 = makeDetail({
       runId: "run-cost-overlap",
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "running",
       lastEventSeq: 100,
-      nodes: [],
-      selectedEdges: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-    };
+    });
     const { client, mock } = prepare("run-cost-overlap", detailV1);
     const fakeEs = installFakeEventSource();
     try {
@@ -491,13 +452,13 @@ describe("RunDetail", () => {
 
       // Phase 2: snapshot advances to absorb both frames. The overlap
       // range drops out of the live delta and the tile stays at $0.10.
-      const detailV2: RunDetailT = {
+      const detailV2 = makeDetail({
         ...detailV1,
         costUsd: 0.1,
         inputTokens: 1000,
         outputTokens: 200,
         lastEventSeq: 102,
-      };
+      });
       await act(async () => {
         client.setQueryData(queries.runs.detail("run-cost-overlap").queryKey, detailV2);
       });
@@ -512,14 +473,11 @@ describe("RunDetail", () => {
   });
 
   it("exposes a Graph tab that renders the live graph when the tab is active", async () => {
-    const detail: RunDetailT = {
+    const detail = makeDetail({
       runId: "run-graph",
       workflowName: "demo",
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "running",
-      lastEventSeq: 1,
-      nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1 }],
-      selectedEdges: [{ from: "start", to: "implement", iteration: 0 }],
+      nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1, pass: 0 }],
+      selectedEdges: [{ from: "start", to: "implement", iteration: 0, pass: 0 }],
       workflowSource: `name: demo
 steps:
   implement:
@@ -527,10 +485,7 @@ steps:
     label: Implement
     model: claude-sonnet-4-5
 `,
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    });
     const { client, mock } = prepare("run-graph", detail);
     try {
       const { container } = mount(client, "/runs/run-graph/graph");
@@ -547,18 +502,9 @@ steps:
 
   describe("RunControls — operator pause/resume/cancel", () => {
     it("shows Pause and Cancel for a running run", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-running",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
-        runStatus: "running",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+      });
       const { client, mock } = prepare("run-running", detail);
       try {
         const { container } = mount(client, "/runs/run-running");
@@ -574,18 +520,15 @@ steps:
       }
     });
 
-    it("shows Resume and Cancel for an operator-paused run", async () => {
-      const detail: RunDetailT = {
+    it("shows Resume and Cancel for an operator-driven pause RunControls owns (paused_human, no options)", async () => {
+      // An operator `POST /pause` on a human gate lands as `paused_human`
+      // with no HITL options — no HitlChoice, no RunPausedNotice — so
+      // RunControls is the sole owner of Resume + Cancel here.
+      const detail = makeDetail({
         runId: "run-paused-op",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "paused",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+        runStatus: "paused_human",
+      });
       const { client, mock } = prepare("run-paused-op", detail);
       try {
         const { container } = mount(client, "/runs/run-paused-op");
@@ -601,22 +544,53 @@ steps:
       }
     });
 
+    it("renders exactly one Resume and one Cancel for an operator-paused run (RunPausedNotice owns them)", async () => {
+      // Regression: RunControls must NOT also render Resume/Cancel for a
+      // `paused` run — RunPausedNotice owns that surface. When the events
+      // endpoint carries an operator `fact.run_paused`, the notice renders
+      // its own actions; duplicate buttons from RunControls are the bug.
+      const detail = makeDetail({
+        runId: "run-paused-dup",
+        status: "paused",
+        runStatus: "paused",
+        lastEventSeq: 2,
+      });
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail("run-paused-dup").queryKey, detail);
+      const mock = installFetchMock(
+        {
+          "/api/runs/run-paused-dup/events.json": () =>
+            json([{ seq: 2, type: "fact.run_paused", payload: { reason: "operator", nodeId: "work" } }]),
+          "/api/runs/run-paused-dup/messages": () => json([]),
+          "/api/runs/run-paused-dup/steps": () => json([]),
+          "/api/runs/run-paused-dup": () => json(detail),
+        },
+        () => json([]),
+      );
+      try {
+        const { container } = mount(client, "/runs/run-paused-dup");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-paused-notice")).toBeTruthy();
+        });
+        expect(container.querySelectorAll(`[data-testid$="-resume"]`).length).toBe(1);
+        expect(container.querySelectorAll(`[data-testid$="-cancel"]`).length).toBe(1);
+        expect(q.queryByTestId("run-controls-resume")).toBeNull();
+        expect(q.queryByTestId("run-controls-cancel")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
     it("hides Resume when status is paused_human (HitlChoice owns it)", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-hitl",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "paused",
         runStatus: "paused_human",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         hitlNodeId: "gate",
         hitlLabel: "Approve?",
         hitlOptions: ["approve", "reject"],
-      };
+      });
       const { client, mock } = prepare("run-hitl", detail);
       try {
         const { container } = mount(client, "/runs/run-hitl");
@@ -632,18 +606,9 @@ steps:
     });
 
     it("opens a confirmation dialog on Cancel click, then POSTs cancel on confirm", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-cancel-confirm",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
-        runStatus: "running",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+      });
       const client = createTestQueryClient();
       client.setQueryData(queries.runs.detail("run-cancel-confirm").queryKey, detail);
       const mock = installFetchMock(
@@ -692,19 +657,16 @@ steps:
     });
 
     it("renders ImportedBadge in the header and no action controls when detail.imported is true", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-imported",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "paused",
         runStatus: "paused",
         lastEventSeq: 2,
-        nodes: [],
-        selectedEdges: [],
         costUsd: 0.01,
         inputTokens: 100,
         outputTokens: 50,
         imported: true,
-      };
+      });
       const { client, mock } = prepare("run-imported", detail);
       try {
         const { container } = mount(client, "/runs/run-imported");
@@ -725,20 +687,14 @@ steps:
 
   describe("RunHaltedNotice — halted-run banner", () => {
     it("renders the read-only notice with reason + detail for a halted run", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-halted",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "fail",
         runStatus: "halted",
         lastEventSeq: 4,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         haltReason: "error",
         haltDetail: "handler threw: boom",
-      };
+      });
       const { client, mock } = prepare("run-halted", detail);
       try {
         const { container } = mount(client, "/runs/run-halted");
@@ -758,20 +714,14 @@ steps:
     });
 
     it("renders the worktree_error label for a provision-failed halt", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-worktree-fail",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "fail",
         runStatus: "halted",
         lastEventSeq: 4,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         haltReason: "worktree_error",
         haltDetail: "worktree_provision_failed: no disk space",
-      };
+      });
       const { client, mock } = prepare("run-worktree-fail", detail);
       try {
         const { container } = mount(client, "/runs/run-worktree-fail");
@@ -794,18 +744,11 @@ steps:
         ["run-not-halted-run", "running", "running"],
         ["run-not-halted-paused", "paused", "paused"],
       ] as const) {
-        const detail: RunDetailT = {
+        const detail = makeDetail({
           runId: id,
-          startedAt: "2024-01-01T00:00:00Z",
           status,
           runStatus,
-          lastEventSeq: 1,
-          nodes: [],
-          selectedEdges: [],
-          costUsd: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-        };
+        });
         const { client, mock } = prepare(id, detail);
         try {
           const { container } = mount(client, `/runs/${id}`);
@@ -822,18 +765,10 @@ steps:
     });
 
     it("shows the notice without a refetch when fact.run_halted arrives via SSE", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-live-halt",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
-        runStatus: "running",
         lastEventSeq: 5,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+      });
       const { client, mock } = prepare("run-live-halt", detail);
       const fakeEs = installFakeEventSource();
       try {
@@ -912,18 +847,13 @@ steps:
     }
 
     it("shows the Diff tab trigger when the run has a cwd", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-cwd",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-cwd", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-cwd");
@@ -937,18 +867,12 @@ steps:
     });
 
     it("hides the Diff tab when the run has no cwd", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-nocwd",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
+        runStatus: "completed",
         // no cwd field
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-nocwd", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-nocwd");
@@ -962,17 +886,11 @@ steps:
     });
 
     it("navigates to /conversation when /diff is opened for a no-cwd run", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-redir",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+        runStatus: "completed",
+      });
       const { client, mock } = prepareWithDiff("run-diff-redir", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-redir/diff");
@@ -986,18 +904,13 @@ steps:
     });
 
     it("renders the stat header and diff for the latest snapshot (vs base) when the Diff tab is active", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-latest",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const diffText = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
       const { client, mock } = prepareWithDiff("run-diff-latest", detail, {
         "/api/runs/run-diff-latest/snapshots/30/diff?against=base": diffText,
@@ -1025,18 +938,12 @@ steps:
     });
 
     it("redirects to /conversation when /diff is opened for a run with no diffable snapshots", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-empty",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
+        runStatus: "completed",
         cwd: "/home/user/project",
-      };
+      });
       const client = createTestQueryClient();
       client.setQueryData(queries.runs.detail("run-diff-empty").queryKey, detail);
       const mock = installFetchMock(
@@ -1063,18 +970,12 @@ steps:
     });
 
     it("hides the Diff tab trigger entirely when snapshots resolve to an empty array", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-disabled",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
-        lastEventSeq: 1,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
+        runStatus: "completed",
         cwd: "/home/user/project",
-      };
+      });
       const client = createTestQueryClient();
       client.setQueryData(queries.runs.detail("run-diff-disabled").queryKey, detail);
       const mock = installFetchMock(
@@ -1102,18 +1003,13 @@ steps:
     });
 
     it("renders the Diff tab when snapshots have file changes", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-enabled",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-enabled", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-enabled");
@@ -1128,18 +1024,12 @@ steps:
     });
 
     it("invalidates snapshots + snapshotDiff when fact.node_completed arrives via SSE", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-node-inv",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
         lastEventSeq: 5,
-        nodes: [{ nodeId: "build", iteration: 0, state: "running", lastEventSeq: 5 }],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
+        nodes: [{ nodeId: "build", iteration: 0, state: "running", lastEventSeq: 5, pass: 0 }],
         cwd: "/home/user/project",
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-node-inv", detail);
       const fakeEs = installFakeEventSource();
       try {
@@ -1163,18 +1053,11 @@ steps:
     });
 
     it("invalidates snapshots + snapshotDiff when fact.run_completed arrives via SSE", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-run-inv",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
         lastEventSeq: 5,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-run-inv", detail);
       const fakeEs = installFakeEventSource();
       try {
@@ -1195,18 +1078,13 @@ steps:
     });
 
     it("renders a snapshot selector trigger (combobox) in the Diff tab when snapshots are present", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-selector",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const { client, mock } = prepareWithDiff("run-diff-selector", detail);
       try {
         const { container } = mount(client, "/runs/run-diff-selector/diff");
@@ -1230,18 +1108,13 @@ steps:
     });
 
     it("fetches the diff for the latest snapshot by default (eventIdx of last snapshot)", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-default",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const latestDiff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
       const { client, mock } = prepareWithDiff("run-diff-default", detail, {
         "/api/runs/run-diff-default/snapshots/30/diff?against=base": latestDiff,
@@ -1263,18 +1136,13 @@ steps:
     });
 
     it("fetches the diff for an earlier snapshot after picking it from the selector", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-diff-pick",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 30,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         cwd: "/home/user/project",
-      };
+      });
       const latestDiff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
       const step1Diff = "--- a/other.ts\n+++ b/other.ts\n@@ -1 +1 @@\n-a\n+b";
       const { client, mock } = prepareWithDiff("run-diff-pick", detail, {
@@ -1317,19 +1185,14 @@ steps:
 
   describe("RunDetail header — git base", () => {
     it("renders baseGitRef + short baseGitSha when both present", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-git-base",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         baseGitRef: "main",
         baseGitSha: "abcdef1234567890",
-      };
+      });
       const { client, mock } = prepare("run-git-base", detail);
       try {
         const { container } = mount(client, "/runs/run-git-base/conversation");
@@ -1347,18 +1210,13 @@ steps:
     });
 
     it("renders only baseGitSha when baseGitRef is absent", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-sha-only",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         baseGitSha: "abcdef1234567890",
-      };
+      });
       const { client, mock } = prepare("run-sha-only", detail);
       try {
         const { container } = mount(client, "/runs/run-sha-only/conversation");
@@ -1375,17 +1233,12 @@ steps:
     });
 
     it("does not render the base-ref pill when both fields are absent", async () => {
-      const detail: RunDetailT = {
+      const detail = makeDetail({
         runId: "run-no-git",
-        startedAt: "2024-01-01T00:00:00Z",
         status: "success",
+        runStatus: "completed",
         lastEventSeq: 5,
-        nodes: [],
-        selectedEdges: [],
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
+      });
       const { client, mock } = prepare("run-no-git", detail);
       try {
         const { container } = mount(client, "/runs/run-no-git/conversation");

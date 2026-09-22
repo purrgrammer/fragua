@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "swarm",
@@ -11,10 +12,10 @@
     },
     "packages/agent": {
       "name": "@fragua/agent",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
-        "@earendil-works/pi-agent-core": "0.79.1",
-        "@earendil-works/pi-ai": "0.79.1",
+        "@earendil-works/pi-agent-core": "0.80.7",
+        "@earendil-works/pi-ai": "0.80.7",
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
         "@fragua/types": "workspace:*",
@@ -22,13 +23,14 @@
         "@sinclair/typebox": "0.34.49",
       },
       "devDependencies": {
+        "@fragua/test-utils": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
     },
     "packages/cli": {
       "name": "@fragua/cli",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "bin": {
         "fragua": "./bin/fragua.ts",
       },
@@ -52,18 +54,19 @@
       },
       "devDependencies": {
         "@fragua/daemon": "workspace:*",
+        "@fragua/test-utils": "workspace:*",
         "@types/prompts": "2.4.9",
         "@types/react": "18.3.12",
         "typescript": "5.7.3",
       },
       "peerDependencies": {
-        "@earendil-works/pi-agent-core": "0.79.1",
-        "@earendil-works/pi-ai": "0.79.1",
+        "@earendil-works/pi-agent-core": "0.80.7",
+        "@earendil-works/pi-ai": "0.80.7",
       },
     },
     "packages/core": {
       "name": "@fragua/core",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
         "@fragua/types": "workspace:*",
         "@noble/hashes": "2.2.0",
@@ -79,7 +82,7 @@
     },
     "packages/daemon": {
       "name": "@fragua/daemon",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
@@ -93,7 +96,7 @@
     },
     "packages/server": {
       "name": "@fragua/server",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
@@ -110,7 +113,7 @@
     },
     "packages/store": {
       "name": "@fragua/store",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/types": "workspace:*",
@@ -123,17 +126,18 @@
     },
     "packages/test-utils": {
       "name": "@fragua/test-utils",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "devDependencies": {
+        "@earendil-works/pi-ai": "0.80.7",
         "typescript": "5.7.3",
       },
     },
     "packages/types": {
       "name": "@fragua/types",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
-        "@earendil-works/pi-agent-core": "0.79.1",
-        "@earendil-works/pi-ai": "0.79.1",
+        "@earendil-works/pi-agent-core": "0.80.7",
+        "@earendil-works/pi-ai": "0.80.7",
       },
       "devDependencies": {
         "typescript": "5.7.3",
@@ -141,7 +145,7 @@
     },
     "packages/web": {
       "name": "@fragua/web",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.2.9",
         "@fragua/core": "workspace:*",
@@ -198,10 +202,10 @@
     },
     "packages/workspace": {
       "name": "@fragua/workspace",
-      "version": "0.8.0",
+      "version": "0.10.0",
       "dependencies": {
-        "@earendil-works/pi-agent-core": "0.79.1",
-        "@earendil-works/pi-ai": "0.79.1",
+        "@earendil-works/pi-agent-core": "0.80.7",
+        "@earendil-works/pi-ai": "0.80.7",
         "@fragua/core": "workspace:*",
         "@fragua/types": "workspace:*",
         "@modelcontextprotocol/sdk": "1.29.0",
@@ -388,9 +392,9 @@
 
     "@dotenvx/dotenvx": ["@dotenvx/dotenvx@1.61.0", "", { "dependencies": { "commander": "^11.1.0", "dotenv": "^17.2.1", "eciesjs": "^0.4.10", "execa": "^5.1.1", "fdir": "^6.2.0", "ignore": "^5.3.0", "object-treeify": "1.1.33", "picomatch": "^4.0.2", "which": "^4.0.0", "yocto-spinner": "^1.1.0" }, "bin": { "dotenvx": "src/cli/dotenvx.js" } }, "sha512-utL3cpZoFzflyqUkjYbxYujI6STBTmO5LFn4bbin/NZnRWN6wQ7eErhr3/Vpa5h/jicPFC6kTa42r940mQftJQ=="],
 
-    "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@0.79.1", "", { "dependencies": { "@earendil-works/pi-ai": "^0.79.1", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" } }, "sha512-PBPjBa2YBm9jauiLtHAKaSfVJ4Dvm3/nK/bR/oHebLjwBCS2tGx3aQDX7MSGAOXi6BejlhzbB/z82BkyAyNjjQ=="],
+    "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@0.80.7", "", { "dependencies": { "@earendil-works/pi-ai": "^0.80.7", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" } }, "sha512-EFjyAuoz2kn24sR9Q5A86sZCG6mD+nz58DCsA2I2wxgmS50cF1tSLCBOZaHKI5U9Y3pJs4BefeK3LRkB5TdJag=="],
 
-    "@earendil-works/pi-ai": ["@earendil-works/pi-ai@0.79.1", "", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.1", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "bin": { "pi-ai": "dist/cli.js" } }, "sha512-UnORwrcsTNLm4StEvoM8iEom0u87Te7BXEWxhec3iNXygWD6eEBosUoq9ddcveqtj/QpUZBMPWUu81cCtZxzkQ=="],
+    "@earendil-works/pi-ai": ["@earendil-works/pi-ai@0.80.7", "", { "dependencies": { "@anthropic-ai/sdk": "0.91.1", "@aws-sdk/client-bedrock-runtime": "3.1048.0", "@google/genai": "1.52.0", "@mistralai/mistralai": "2.2.6", "@opentelemetry/api": "1.9.0", "@smithy/node-http-handler": "4.7.3", "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6", "openai": "6.26.0", "partial-json": "0.1.7", "typebox": "1.1.38" }, "bin": { "pi-ai": "dist/cli.js" } }, "sha512-8RLKLwe5TFM9kKFMNu/lTzveduq4GxZbnlG6ba8FAhLeb5wJP4zbj1eBumKBRvggpFQnW5R/Vo2a8zTlHsV9SQ=="],
 
     "@ecies/ciphers": ["@ecies/ciphers@0.2.6", "", { "peerDependencies": { "@noble/ciphers": "^1.0.0" } }, "sha512-patgsRPKGkhhoBjETV4XxD0En4ui5fbX0hzayqI3M8tvNMGUoUvmyYAIWwlxBc1KX5cturfqByYdj5bYGRpN9g=="],
 
@@ -500,7 +504,7 @@
 
     "@mermaid-js/parser": ["@mermaid-js/parser@1.1.0", "", { "dependencies": { "langium": "^4.0.0" } }, "sha512-gxK9ZX2+Fex5zu8LhRQoMeMPEHbc73UKZ0FQ54YrQtUxE1VVhMwzeNtKRPAu5aXks4FasbMe4xB4bWrmq6Jlxw=="],
 
-    "@mistralai/mistralai": ["@mistralai/mistralai@2.2.1", "", { "dependencies": { "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ=="],
+    "@mistralai/mistralai": ["@mistralai/mistralai@2.2.6", "", { "dependencies": { "@opentelemetry/semantic-conventions": "^1.40.0", "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" }, "peerDependencies": { "@opentelemetry/api": "^1.9.0" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-W8pX7zHxjJvMIpw8JMxeJEleapXX0Q9NPszdNzqkM3MIEoIGPObdodujj+WHteXEvGfaP/AMwlNyRfEzSY6dQQ=="],
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
 
@@ -531,6 +535,8 @@
     "@open-draft/until": ["@open-draft/until@2.1.0", "", {}, "sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
+
+    "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.43.0", "", {}, "sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg=="],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 

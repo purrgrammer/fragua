@@ -766,6 +766,134 @@ describe("buildRoutingPatch", () => {
       });
       expect(patch?.["internal.operator_notes"]).toBeUndefined();
     });
+
+    const withSteer = (): Record<string, unknown> => ({ "internal.pending_steer": "focus on auth" });
+
+    test("an llm node completing with success clears the pending steer to the empty sentinel", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(patch?.["internal.pending_steer"]).toBe("");
+    });
+
+    test("a fail/retry outcome keeps the pending steer for the next attempt", () => {
+      const failPatch = buildRoutingPatch({
+        result: transition({ nextNode: "redo", outcomeStatus: "fail" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(failPatch?.["internal.pending_steer"]).toBeUndefined();
+      const retryPatch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", outcomeStatus: "retry" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(retryPatch?.["internal.pending_steer"]).toBeUndefined();
+    });
+
+    test("a non-llm node advancing carries the pending steer forward (does not clear it)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n1", route: "approve" }),
+        decision: emptyDecision,
+        state: mkState("gate"),
+        currentNode: "gate",
+        graph: gatedSpine(),
+        effectiveRouting: withSteer(),
+        budgetWarnedTags: [],
+      });
+      expect(patch?.["internal.pending_steer"]).toBeUndefined();
+    });
+  });
+
+  describe("deferred pre-claim pause", () => {
+    test("clears internal.pause_after_dispatch once the operator pause lands", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied: true,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBe(false);
+    });
+
+    test("does not clear the marker when the turn did not pause (no shouldPauseAfterDispatch)", () => {
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: emptyDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied: false,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
+
+    test("keeps the marker when the swap did not fire despite transition + shouldPauseAfterDispatch", () => {
+      // R3 leaves a halt alone (terminal beats pause), so no fact.run_paused
+      // is emitted. Re-deriving the swap's condition from result+decision would
+      // clear the marker here and swallow the operator's pause; the run could
+      // then be resumed past a pause it never served.
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied: false,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
+
+    test("rewriteTerminalFacts does not swap a halt, so the marker survives the turn", () => {
+      const done: FactEvent = { type: "fact.node_completed", payload: { nodeId: "n1" } } as FactEvent;
+      const halted: FactEvent = {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error" },
+      } as FactEvent;
+      const facts = rewriteTerminalFacts({
+        facts: [done, halted],
+        result: transition({ nextNode: "n2" }),
+        state: mkState("n1"),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+      });
+      const operatorPauseApplied = facts.some(
+        (f) => f.type === "fact.run_paused" && (f.payload as { reason?: string }).reason === "operator",
+      );
+      expect(operatorPauseApplied).toBe(false);
+      const patch = buildRoutingPatch({
+        result: transition({ nextNode: "n2", outcomeStatus: "success" }),
+        decision: { ...emptyDecision, shouldPauseAfterDispatch: true } as ProceedDecision,
+        state: mkState("n1"),
+        currentNode: "n1",
+        graph: spine(),
+        effectiveRouting: { "internal.pause_after_dispatch": true },
+        budgetWarnedTags: [],
+        operatorPauseApplied,
+      });
+      expect(patch?.["internal.pause_after_dispatch"]).toBeUndefined();
+    });
   });
 });
 

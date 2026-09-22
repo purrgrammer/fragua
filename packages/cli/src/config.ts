@@ -2,14 +2,15 @@
 //   global   ~/.fragua/config.yaml   — generic preferences (LLM defaults,
 //                                      auto-title, blocklist, concurrency,
 //                                      timeouts, blob GC, skills paths, …)
-//   project  <cwd>/.fragua/config.yaml — project-specific knobs only
-//                                      (today: `bootstrap`). Overlays
-//                                      global; project keys win.
+//   project  <cwd>/.fragua/config.yaml — project-specific overrides
+//                                      (`bootstrap`, `bash.env-passthrough`, …).
+//                                      Overlays global; project keys win.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`) merge one level
-// deep so a project config can override `defaults.model` without losing
-// the global `summariser` block.
+// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`) merge one
+// level deep so a project config can override `defaults.model` without losing
+// the global `summariser` block. (`bash.env-passthrough` is an array, replaced
+// wholesale — not merged element-wise.)
 //
 // Missing files → `{}` (first-run UX). Malformed file or schema-invalid
 // content → throw with a caller-friendly message; silent fallback would
@@ -80,6 +81,28 @@ const Web = Type.Object(
     // (6767). When the resolved port is in use, the server bumps to the
     // next free port so a stray collision doesn't kill startup.
     port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
+    // Bind address for the harness / serve HTTP. CLI `--host` wins; absent
+    // here falls through to loopback. The API is unauthenticated, so a wide
+    // bind ("::" / "0.0.0.0") is a deliberate choice, never a default — and
+    // GLOBAL-ONLY: read from ~/.fragua/config.yaml alone, never from a
+    // project's committed .fragua/config.yaml (see `loadGlobalConfig`).
+    host: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const Bash = Type.Object(
+  {
+    // Env var names re-allowed into bash-tool subprocesses under the daemon
+    // (and hence the harness). By default the daemon strips every
+    // provider-credential-named var (API keys, tokens, secrets, plus the
+    // env-var names of providers configured in the store) so a workflow's
+    // shell steps can't read the operator's credentials. List a name here to
+    // re-admit it — e.g. `GH_TOKEN` for a workflow that shells out to `gh`.
+    // Provider credentials are never re-admitted (the spawn-time predicate
+    // strips them regardless). Merged as a whole-array replace: a project
+    // list overrides the global list, it does not append.
+    "env-passthrough": Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );
@@ -153,6 +176,7 @@ export const FraguaConfigSchema = Type.Object(
     skills: Type.Optional(Skills),
     timeouts: Type.Optional(Timeouts),
     web: Type.Optional(Web),
+    bash: Type.Optional(Bash),
   },
   { additionalProperties: false },
 );
@@ -206,6 +230,13 @@ export function resolveTimeouts(cfg: FraguaConfig): ResolvedTimeouts {
     }
   }
   return out;
+}
+
+/** Resolve the set of env var names re-allowed into bash-tool subprocesses.
+ * Empty when unset. Consumed by `daemonEnvDeny` to exempt these names from
+ * the default provider-credential strip (`fragua daemon` / harness). */
+export function resolveEnvPassthrough(cfg: FraguaConfig): Set<string> {
+  return new Set(cfg.bash?.["env-passthrough"] ?? []);
 }
 
 function formatValidationErrors(errors: Iterable<{ path: string; message: string }>): string {
@@ -307,6 +338,14 @@ export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): 
  * Returns `{}` when the project file is absent. */
 export async function loadProjectConfig(cwd: string): Promise<FraguaConfig> {
   return loadConfigFile(cwd);
+}
+
+/** Load *only* `~/.fragua/config.yaml` — no project overlay. Used for keys
+ * that are host-machine decisions a committed project file must never
+ * widen (e.g. `web.host`: a repo shipping `host: "::"` would otherwise
+ * expose every contributor's unauthenticated API to their LAN). */
+export async function loadGlobalConfig(opts: { homeDir?: string } = {}): Promise<FraguaConfig> {
+  return loadConfigFile(opts.homeDir ?? homedir());
 }
 
 /** Per-worktree bootstrap pair resolved from `<cwd>/.fragua/config.yaml`. */

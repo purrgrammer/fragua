@@ -581,10 +581,33 @@ steps:
   });
 
   test("oversized intent payload → 413 with code=payload_too_large (not 500)", async () => {
-    // Steer with text that, once JSON-wrapped, exceeds MAX_EVENT_PAYLOAD_BYTES (4 KB).
-    // 5000 bytes of "x" plus the wrapper comfortably blows past the cap.
+    // An unbounded body (cancel's `reason`) that, once JSON-wrapped, exceeds
+    // MAX_EVENT_PAYLOAD_BYTES (4 KB): 5000 bytes of "x" plus the wrapper
+    // comfortably blows past the cap and must surface as a clean 413.
     store.enqueueRun({ runId: "rbig", workflowSha: "wf" });
-    const res = await req("POST", "/runs/rbig/steer", { text: "x".repeat(5000) });
+    const res = await req("POST", "/runs/rbig/cancel", { reason: "x".repeat(5000) });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { code: string; sizeBytes: number; maxBytes: number };
+    expect(body.code).toBe("payload_too_large");
+    expect(body.sizeBytes).toBeGreaterThan(body.maxBytes);
+    expect(body.maxBytes).toBe(4096);
+  });
+
+  test("over-long steer text → 400 at validation (before the store payload cap)", async () => {
+    // Steer text is bounded at 2000 code points, so an oversized steer is a clean
+    // validation error, not a 413 deep in the store write path.
+    store.enqueueRun({ runId: "rsteer", workflowSha: "wf" });
+    const res = await req("POST", "/runs/rsteer/steer", { text: "x".repeat(2001) });
+    expect(res.status).toBe(400);
+  });
+
+  test("multi-byte steer under the code-point cap but over the store payload cap → 413", async () => {
+    // The SteerText cap counts code points, the store payload cap counts UTF-8
+    // bytes. A 1367-char run of a 3-byte CJK codepoint is ~4101 bytes: it passes
+    // validation (≤2000 code points) yet blows past MAX_EVENT_PAYLOAD_BYTES
+    // (4 KB), so the /steer store-cap path must surface a clean 413.
+    store.enqueueRun({ runId: "rsteerbig", workflowSha: "wf" });
+    const res = await req("POST", "/runs/rsteerbig/steer", { text: "中".repeat(1367) });
     expect(res.status).toBe(413);
     const body = (await res.json()) as { code: string; sizeBytes: number; maxBytes: number };
     expect(body.code).toBe("payload_too_large");
