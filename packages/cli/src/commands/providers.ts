@@ -65,6 +65,13 @@ export function providersListCommand(): number {
       return 0;
     }
 
+    // The judge provider is a System One endpoint, not an LLM catalogue entry,
+    // so pi-ai's registry carries no models for it and it never appeared in
+    // these rows — a credentialed `typesafe` read as "0/N credentialed" and the
+    // documented `fragua providers add typesafe` had no way to confirm itself.
+    // `providersAddCommand` already unions it into its known set; do the same.
+    if (!byProvider.has(JUDGE_DEFAULT_PROVIDER)) byProvider.set(JUDGE_DEFAULT_PROVIDER, 0);
+
     console.log(chalk.bold("Providers (via pi-ai registry):\n"));
     const rows = [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     let credentialed = 0;
@@ -74,7 +81,9 @@ export function providersListCommand(): number {
       const source = ready ? auth.describeAuthSource(name) : null;
       const mark = ready ? chalk.green("✓") : chalk.dim("·");
       const nameCol = name.padEnd(24);
-      const countCol = `${count} model${count === 1 ? "" : "s"}`.padEnd(12);
+      const countCol = (
+        name === JUDGE_DEFAULT_PROVIDER ? `judge (${JUDGE_DEFAULT_MODEL})` : `${count} model${count === 1 ? "" : "s"}`
+      ).padEnd(12);
       const sourceCol = source ? ` ${source}` : "";
       console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(sourceCol)}`);
     }

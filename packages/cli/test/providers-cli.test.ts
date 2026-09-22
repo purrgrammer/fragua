@@ -10,7 +10,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage } from "@fragua/agent";
+import { JUDGE_DEFAULT_MODEL, JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { openGlobalStore } from "../src/commands/open-global-store.ts";
+import { providersListCommand } from "../src/commands/providers.ts";
 
 describe("providers add", () => {
   let tmp: string;
@@ -72,5 +74,60 @@ describe("providers add", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("providers ls — the judge provider", () => {
+  let tmp: string;
+  let prevFraguaHome: string | undefined;
+  let lines: string[];
+  let restore: (() => void) | undefined;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "fragua-providers-judge-"));
+    prevFraguaHome = process.env["FRAGUA_HOME"];
+    process.env["FRAGUA_HOME"] = tmp;
+    lines = [];
+    const real = console.log;
+    console.log = (...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    };
+    restore = () => {
+      console.log = real;
+    };
+  });
+
+  afterEach(() => {
+    restore?.();
+    if (prevFraguaHome === undefined) delete process.env["FRAGUA_HOME"];
+    else process.env["FRAGUA_HOME"] = prevFraguaHome;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  // `typesafe` is a System One endpoint, not an LLM catalogue entry, so pi-ai's
+  // registry has no models for it. The listing is built from that registry, so
+  // a credentialed judge provider was invisible here and the tally read 0 —
+  // leaving `fragua providers add typesafe`, the documented judge setup step,
+  // with no way to confirm itself.
+  test("appears in the listing even with no catalogue models", () => {
+    expect(providersListCommand()).toBe(0);
+    const row = lines.find((l) => l.includes(JUDGE_DEFAULT_PROVIDER));
+    expect(row).toBeDefined();
+    expect(row).toContain(JUDGE_DEFAULT_MODEL);
+  });
+
+  test("a stored judge credential is counted as credentialed", () => {
+    const store = openGlobalStore();
+    try {
+      AuthStorage.fromStore(store).set(JUDGE_DEFAULT_PROVIDER, { type: "api_key", key: "sk-typesafe-test" });
+    } finally {
+      store.close();
+    }
+    expect(providersListCommand()).toBe(0);
+    const row = lines.find((l) => l.includes(JUDGE_DEFAULT_PROVIDER));
+    expect(row).toContain("✓");
+    // The tally must move: it read "0/N credentialed" with the key stored.
+    expect(lines.some((l) => /(?:^|\s)0\/\d+ providers credentialed/.test(l))).toBe(false);
+    expect(lines.some((l) => /[1-9]\d*\/\d+ providers credentialed/.test(l))).toBe(true);
   });
 });
