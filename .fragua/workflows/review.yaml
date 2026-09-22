@@ -132,12 +132,27 @@ steps:
             exit 2
           }
           case "$rd/$b" in
-            "$root"/*) printf '%s\n' "$f" >> "$out/files.txt" ;;
+            "$root"/*) : ;;
             *)
               echo "classify_diff: refusing path outside the worktree: $f" >&2
               exit 2
               ;;
           esac
+          # `cd … && pwd -P` resolves every symlink in the DIRNAME but not the
+          # leaf, so `link.txt -> ../../secret` still sat under $root and was
+          # read. Resolve the leaf too; if readlink can't, refuse rather than
+          # assume.
+          if [ -L "$rd/$b" ]; then
+            real=$(readlink -f -- "$rd/$b" 2>/dev/null) || real=""
+            case "${real:-/nonexistent}" in
+              "$root"/*) : ;;
+              *)
+                echo "classify_diff: refusing symlink leaving the worktree: $f" >&2
+                exit 2
+                ;;
+            esac
+          fi
+          printf '%s\n' "$f" >> "$out/files.txt"
         done < "$out/files.raw"
         : > "$out/patch.diff"
         while IFS= read -r f; do

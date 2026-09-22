@@ -213,4 +213,40 @@ describe("makeJudgeClient — credential redaction in persisted errors", () => {
     const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
     expect((err as JudgeProviderError).message).toContain("model jev-9 does not exist");
   });
+
+  test("diagnostics that merely LOOK key-shaped are left readable", async () => {
+    // Regression: a prefix list of `api|key|tok` ate these whole, costing the
+    // operator the message the redaction exists to preserve.
+    const body = "api_key_expired_for_org, api-version-unsupported, token_scope_insufficient";
+    const { fetch: f } = fetchSeq([new Response(body, { status: 400 })]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    const msg = (err as JudgeProviderError).message;
+    expect(msg).toContain("api_key_expired_for_org");
+    expect(msg).toContain("api-version-unsupported");
+    expect(msg).toContain("token_scope_insufficient");
+  });
+
+  test("a network error carrying the key is redacted too", async () => {
+    const { fetch: f } = fetchSeq([
+      new Error(`connect failed for ${KEY}`),
+      new Error(`connect failed for ${KEY}`),
+      new Error(`connect failed for ${KEY}`),
+      new Error(`connect failed for ${KEY}`),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect((err as JudgeProviderError).message).not.toContain(KEY);
+  });
+
+  test("a 200 body whose answer id carries the key does not persist it", async () => {
+    // parseResponse builds its message from RESPONSE-controlled keys, which
+    // reach the same `fact.run_terminated.detail` field.
+    const hostile = JSON.stringify({ model: "jev-1.13.0", answers: { [`leak ${KEY}`]: {} } });
+    const { fetch: f } = fetchSeq([new Response(hostile, { status: 200 })]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    expect((err as JudgeProviderError).message).not.toContain(KEY);
+  });
 });

@@ -53,11 +53,15 @@ export function makeJudgeClient(opts: JudgeClientOpts): JudgeClient {
           });
         } catch (err) {
           if (signal.aborted) throw err;
-          lastRetryable = new JudgeProviderError(`network error: ${errorMessage(err)}`, provider, null);
+          lastRetryable = new JudgeProviderError(
+            `network error: ${redactSecrets(errorMessage(err), apiKey)}`,
+            provider,
+            null,
+          );
           if (attempt < maxAttempts) await sleep(backoffMs(attempt, undefined), signal);
           continue;
         }
-        if (res.ok) return parseResponse(await res.text(), provider);
+        if (res.ok) return parseResponse(await res.text(), provider, apiKey);
         const text = await res.text().catch(() => "");
         if (RETRYABLE.has(res.status)) {
           const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
@@ -88,16 +92,21 @@ export function makeJudgeClient(opts: JudgeClientOpts): JudgeClient {
  * error that echoes the key back — a common enough API habit — would otherwise
  * land the key in SQLite, readable by anyone with dashboard access. Redacts the
  * live key itself first (the only exact match available), then anything
- * `Bearer`-shaped or key-prefixed the body may carry on its own. */
+ * `Bearer`-shaped or carrying a known token prefix.
+ *
+ * The prefix list is deliberately narrow — real token prefixes only. An earlier
+ * pass included `api|key|tok`, which ate ordinary diagnostics whole
+ * (`api_key_expired_for_org` → `[redacted]`) and cost the operator the very
+ * message this is meant to keep readable. */
 function redactSecrets(text: string, apiKey: string): string {
   let out = text;
   if (apiKey.length >= 8) out = out.split(apiKey).join("[redacted]");
   out = out.replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer [redacted]");
-  out = out.replace(/\b(sk|pk|api|key|tok)[-_][A-Za-z0-9._-]{12,}/gi, "[redacted]");
+  out = out.replace(/\b(sk|pk|ghp|gho|ghu|ghs|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{12,}/gi, "[redacted]");
   return out;
 }
 
-function parseResponse(text: string, provider: string): JudgeResponse {
+function parseResponse(text: string, provider: string, apiKey: string): JudgeResponse {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -117,7 +126,10 @@ function parseResponse(text: string, provider: string): JudgeResponse {
   }
   for (const [id, a] of Object.entries(answers as Record<string, unknown>)) {
     const problem = answerShapeProblem(a);
-    if (problem !== undefined) throw new JudgeProviderError(`answer "${id}": ${problem}`, provider, 200);
+    if (problem !== undefined) {
+      const safeId = redactSecrets(id, apiKey).slice(0, 80);
+      throw new JudgeProviderError(`answer "${safeId}": ${problem}`, provider, 200);
+    }
   }
   const inputTokens = typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : 0;
   return {

@@ -52,12 +52,6 @@ steps:
   update:
     type: llm
     thread: bump
-    # Two steps route their `fail` back here (lockfile_check, manifest_rules),
-    # and a backward edge is bounded by max-retries on its TARGET (SPEC §105).
-    # Without this the pair could bounce off `update` — one LLM call a turn —
-    # until the run budget ran out, and `budget-policy: pause` would then stall
-    # on a human gate instead of halting with max_retries_exceeded.
-    max-retries: 3
     allowed-tools: [read, grep, find, bash, edit]
     prompt: |
       Update fragua's third-party dependencies. Scope `${{ inputs.scope }}`: patch → patch bumps only; minor → patch + minor; major → include majors. Package filter `${{ inputs.package }}` — if non-empty, restrict to that one dependency; empty means every eligible dep.
@@ -89,7 +83,13 @@ steps:
       bun install --frozen-lockfile
     on:
       success: manifest_rules
-      fail: update                     # lockfile drifted from the manifests ⇒ back to update (capped by its max-retries)
+      # NOT capped by max-retries, despite SPEC §105: the retry counter is only
+      # bumped on outcomeStatus="retry" (transition-planner applyRetryGate), a
+      # tool step only ever yields success|fail, and the counter is RESET on
+      # every success — which `update` produces each pass. So this back-edge and
+      # manifest_rules' below are bounded only by `budget` (6.00, policy pause)
+      # and the executor's 1000-dispatch ceiling. Both are operator gates.
+      fail: update                     # lockfile drifted from the manifests ⇒ back to update
 
   manifest_rules:                      # (a)(b)(c) are a regex, a semver comparison, and a path filter — code, not judgment
     type: tool
