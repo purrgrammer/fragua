@@ -9,7 +9,7 @@
 // how many reads sat inside the model's uncertain band and how many sat close
 // enough to the bound that a re-run could land on the other side.
 
-import { deserializeGraph, type JudgeThreshold } from "@fragua/core";
+import { deserializeGraph, type JudgeThreshold, type NodeAttrs } from "@fragua/core";
 import chalk from "chalk";
 import { withStoreClient } from "../store-client.ts";
 
@@ -41,20 +41,24 @@ interface Reads {
 }
 
 /** Every noul / composite bound a judge node authors, by question id. */
-function gatesOf(attrs: Record<string, unknown>): Map<string, Gate[]> {
+function gatesOf(attrs: NodeAttrs): Map<string, Gate[]> {
   const out = new Map<string, Gate[]>();
   const add = (source: string, rules: readonly JudgeThreshold[] | undefined): void => {
     for (const r of rules ?? []) out.set(r.question, [...(out.get(r.question) ?? []), { source, bound: r }]);
   };
-  const keep = attrs["judge_keep"] as { rules: JudgeThreshold[] } | undefined;
-  const review = attrs["judge_review"] as { rules: JudgeThreshold[] } | undefined;
-  const decide = attrs["judge_decide"] as
-    | { outcome?: { rules: JudgeThreshold[] }; route?: { question: string; min_confidence?: number } }
-    | undefined;
+  // Read through `NodeAttrs`, not string literals on a cast: renaming one of
+  // these IR keys in `@fragua/core` would otherwise typecheck here and just
+  // return no gates, so `judge calibrate` would silently print no bounds.
+  const keep = attrs.judge_keep;
+  const review = attrs.judge_review;
+  const decide = attrs.judge_decide;
   add("keep", keep?.rules);
   add("review", review?.rules);
-  add("decide.outcome", decide?.outcome?.rules);
-  if (decide?.route?.min_confidence !== undefined) {
+  // `JudgeDecide` is a union — a node decides EITHER an outcome or a route,
+  // never both — so each arm needs its own narrow. The old cast read both keys
+  // off one shape and typechecked, which is what hid the distinction.
+  if (decide !== undefined && "outcome" in decide) add("decide.outcome", decide.outcome.rules);
+  if (decide !== undefined && "route" in decide && decide.route.min_confidence !== undefined) {
     add("decide.route", [{ question: decide.route.question, min: decide.route.min_confidence }]);
   }
   return out;
@@ -120,7 +124,7 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
       if (gates === undefined) {
         const wf = store.getWorkflow(row.workflowSha);
         const node = wf === null ? undefined : deserializeGraph(wf.ir).nodes[row.nodeId];
-        gates = node === undefined ? new Map<string, Gate[]>() : gatesOf(node.attrs as Record<string, unknown>);
+        gates = node === undefined ? new Map<string, Gate[]>() : gatesOf(node.attrs);
         gateCache.set(cacheKey, gates);
       }
 

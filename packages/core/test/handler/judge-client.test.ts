@@ -166,3 +166,51 @@ describe("makeJudgeClient — answer shape validation", () => {
     expect((err as JudgeProviderError).message).toMatch(/model/);
   });
 });
+
+describe("makeJudgeClient — credential redaction in persisted errors", () => {
+  const KEY = "sk-live-abcdef0123456789";
+
+  test("a 401 body echoing the key does not carry it into the error message", async () => {
+    // These messages are persisted: a non-retryable failure surfaces verbatim
+    // as `fact.run_terminated.detail`, so an API that echoes the credential
+    // would otherwise land it in SQLite.
+    const { fetch: f } = fetchSeq([
+      new Response(`{"error":"invalid key ${KEY}","hint":"Authorization: Bearer ${KEY}"}`, { status: 401 }),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    const msg = (err as JudgeProviderError).message;
+    expect(msg).not.toContain(KEY);
+    expect(msg).not.toContain("abcdef0123456789");
+    expect(msg).toContain("401");
+    expect(msg).toContain("[redacted]");
+  });
+
+  test("a retryable 429 body is redacted too — it reaches fact.run_paused", async () => {
+    const { fetch: f } = fetchSeq([
+      new Response(`rate limited for Bearer ${KEY}`, { status: 429 }),
+      new Response(`rate limited for Bearer ${KEY}`, { status: 429 }),
+      new Response(`rate limited for Bearer ${KEY}`, { status: 429 }),
+      new Response(`rate limited for Bearer ${KEY}`, { status: 429 }),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    expect((err as JudgeProviderError).message).not.toContain(KEY);
+  });
+
+  test("a body carrying an unrelated bearer token is redacted by shape", async () => {
+    const { fetch: f } = fetchSeq([new Response("upstream said: Bearer ghp_ZZZZZZZZZZZZZZZZ", { status: 400 })]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect((err as JudgeProviderError).message).not.toContain("ghp_ZZZZZZZZZZZZZZZZ");
+  });
+
+  test("ordinary error text still comes through", async () => {
+    const { fetch: f } = fetchSeq([new Response("model jev-9 does not exist", { status: 400 })]);
+    const client = makeJudgeClient({ getApiKey: async () => KEY, fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect((err as JudgeProviderError).message).toContain("model jev-9 does not exist");
+  });
+});

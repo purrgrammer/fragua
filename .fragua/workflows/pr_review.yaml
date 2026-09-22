@@ -696,7 +696,14 @@ steps:
           true: A `## Scope` section naming which lenses found something; then only the severity sections that have findings, from `## Critical` / `## High` / `## Medium` in that order (or `## All clear` when there are none); a `## Next steps` section
           false: A required section is missing or misnamed, a `Low` tier appears, or an empty severity section is present
     decide:
-      outcome: {calibrated: 0.6, schema_ok: 0.6}   # the bar is enforced per finding by the lens judges (`concrete`, `in_diff`); a review-level "every finding clears it" noul is a composite and flapped 0.59 / 0.41 / 0.90 on one text
+      # `concrete` is the per-finding bar, enforced by each lens judge's `keep:`.
+      # `in_diff` is NOT a keep gate — it is a fact the reader looks up, and
+      # scope is applied by `synthesize`'s SCOPE rule, which needs the item's
+      # `evidence` to judge "the diff changed what reaches it". So it is an
+      # instruction, not a typed gate, and `verify` does not re-check it: a
+      # review-level "every finding clears it" noul is a composite and flapped
+      # 0.59 / 0.41 / 0.90 on one text, which is why it was not made one.
+      outcome: {calibrated: 0.6, schema_ok: 0.6}
     retry: synthesize                  # fail ⇒ re-synthesise from the same verified findings (capped)
     max-retries: 2
     next: verdict

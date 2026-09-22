@@ -197,6 +197,12 @@ CREATE TABLE IF NOT EXISTS messages (
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 
+-- `role` is a STORED generated column, so it indexes like any other. The
+-- judge-answer reader (`selectJudgeMessages`, behind `fragua judge calibrate`)
+-- selects one role out of the whole message corpus; without this it is a full
+-- scan whose cost grows with every message ever written, judge or not.
+CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
+
 -- Structured step outputs index. Rebuildable from fact.node_completed.payload.outputs.
 -- Keyed by (run_id, node_id, iteration); INSERT OR REPLACE provides last-write-wins
 -- semantics for re-entrant nodes. `struct` is JSON validated at write time;

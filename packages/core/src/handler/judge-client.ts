@@ -62,7 +62,7 @@ export function makeJudgeClient(opts: JudgeClientOpts): JudgeClient {
         if (RETRYABLE.has(res.status)) {
           const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
           lastRetryable = new JudgeProviderError(
-            `${res.status} ${statusLabel(res.status)}: ${text.slice(0, 300)}`,
+            `${res.status} ${statusLabel(res.status)}: ${redactSecrets(text, apiKey).slice(0, 300)}`,
             provider,
             res.status,
             retryAfterMs,
@@ -70,11 +70,31 @@ export function makeJudgeClient(opts: JudgeClientOpts): JudgeClient {
           if (attempt < maxAttempts) await sleep(backoffMs(attempt, retryAfterMs), signal);
           continue;
         }
-        throw new JudgeProviderError(`${res.status}: ${text.slice(0, 600)}`, provider, res.status);
+        throw new JudgeProviderError(
+          `${res.status}: ${redactSecrets(text, apiKey).slice(0, 600)}`,
+          provider,
+          res.status,
+        );
       }
       throw lastRetryable ?? new JudgeProviderError("exhausted retries", provider, null);
     },
   };
+}
+
+/** Strip anything credential-shaped from a provider response body before it
+ * becomes a `JudgeProviderError` message. Those messages are persisted: a
+ * non-retryable failure surfaces verbatim as `fact.run_terminated.detail`, and
+ * a 429/529 as `pause_provider.errorMessage` on `fact.run_paused`. An auth
+ * error that echoes the key back — a common enough API habit — would otherwise
+ * land the key in SQLite, readable by anyone with dashboard access. Redacts the
+ * live key itself first (the only exact match available), then anything
+ * `Bearer`-shaped or key-prefixed the body may carry on its own. */
+function redactSecrets(text: string, apiKey: string): string {
+  let out = text;
+  if (apiKey.length >= 8) out = out.split(apiKey).join("[redacted]");
+  out = out.replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer [redacted]");
+  out = out.replace(/\b(sk|pk|api|key|tok)[-_][A-Za-z0-9._-]{12,}/gi, "[redacted]");
+  return out;
 }
 
 function parseResponse(text: string, provider: string): JudgeResponse {

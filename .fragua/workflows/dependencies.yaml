@@ -52,6 +52,12 @@ steps:
   update:
     type: llm
     thread: bump
+    # Two steps route their `fail` back here (lockfile_check, manifest_rules),
+    # and a backward edge is bounded by max-retries on its TARGET (SPEC §105).
+    # Without this the pair could bounce off `update` — one LLM call a turn —
+    # until the run budget ran out, and `budget-policy: pause` would then stall
+    # on a human gate instead of halting with max_retries_exceeded.
+    max-retries: 3
     allowed-tools: [read, grep, find, bash, edit]
     prompt: |
       Update fragua's third-party dependencies. Scope `${{ inputs.scope }}`: patch → patch bumps only; minor → patch + minor; major → include majors. Package filter `${{ inputs.package }}` — if non-empty, restrict to that one dependency; empty means every eligible dep.

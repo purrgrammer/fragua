@@ -115,7 +115,30 @@ steps:
         git diff --end-of-options "$spec" > "$out/patch.diff"
         git diff --stat --end-of-options "$spec" > "$out/stat.txt"
       else
-        printf '%s' ${{ outputs.resolve.paths }} | jq -r '.[]' > "$out/files.txt"
+        printf '%s' ${{ outputs.resolve.paths }} | jq -r '.[]' > "$out/files.raw"
+        # `paths` is LLM output, and the files it names are themselves under
+        # review — a prompt-injected `../../.ssh/id_rsa` would otherwise be read
+        # here and shipped to the judge API inside patch-head.diff. `--` stops
+        # flag injection but not traversal, so resolve each path and require it
+        # under the worktree root. Fail closed: a bad path halts the step.
+        root=$(pwd -P)
+        : > "$out/files.txt"
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          d=$(dirname -- "$f")
+          b=$(basename -- "$f")
+          rd=$(cd "$d" 2>/dev/null && pwd -P) || {
+            echo "classify_diff: refusing unreadable path: $f" >&2
+            exit 2
+          }
+          case "$rd/$b" in
+            "$root"/*) printf '%s\n' "$f" >> "$out/files.txt" ;;
+            *)
+              echo "classify_diff: refusing path outside the worktree: $f" >&2
+              exit 2
+              ;;
+          esac
+        done < "$out/files.raw"
         : > "$out/patch.diff"
         while IFS= read -r f; do
           printf '=== %s\n' "$f" >> "$out/patch.diff"

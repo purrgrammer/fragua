@@ -32,16 +32,26 @@ for (const line of stat.split("\n")) {
   }
 }
 
-// Changed dependency lines: `"name": "version"` on a removed / added line.
+// Changed dependency lines: `"name": "version"` on a removed / added line,
+// keyed by (file, name). Keying by name alone collapsed the whole workspace
+// into one entry: the same dep pinned at different versions in two packages
+// left only the last one parsed, so an out-of-scope bump in an earlier file
+// was compared against a later file's version and silently passed.
 const before = new Map<string, string>();
 const after = new Map<string, string>();
+const SEP = "\u0000";
+let file = "";
 for (const line of diff.split("\n")) {
+  if (line.startsWith("+++ ")) {
+    file = line.slice(4).trim().replace(/^b\//, "");
+    continue;
+  }
+  if (line.startsWith("--- ")) continue;
   const sign = line[0];
   if (sign !== "+" && sign !== "-") continue;
-  if (line.startsWith("+++") || line.startsWith("---")) continue;
   const m = /^\s*"([^"]+)":\s*"([^"]+)"/.exec(line.slice(1));
   if (m === null) continue;
-  (sign === "-" ? before : after).set(m[1] ?? "", m[2] ?? "");
+  (sign === "-" ? before : after).set(`${file}${SEP}${m[1] ?? ""}`, m[2] ?? "");
 }
 
 const EXACT = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/;
@@ -50,8 +60,11 @@ const parts = (v: string): [number, number] => {
   return [Number(M), Number(m)];
 };
 
-for (const [name, ver] of after) {
-  const old = before.get(name);
+for (const [key, ver] of after) {
+  const old = before.get(key);
+  const sep = key.indexOf(SEP);
+  const where = key.slice(0, sep);
+  const name = `${key.slice(sep + 1)}${where === "" ? "" : ` (${where})`}`;
   if (ver.startsWith("workspace:")) {
     // (c) an internal dependency is never bumped by this workflow.
     if (old !== undefined && old !== ver) violations.push(`manifests_only: internal dependency ${name} changed (${old} → ${ver})`);

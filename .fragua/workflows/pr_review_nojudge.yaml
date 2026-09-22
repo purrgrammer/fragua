@@ -15,7 +15,12 @@
 #
 # HOW TO RETIRE THIS FILE (do it in one PR, once a release ships `judge`):
 #   1. bump `setup-fragua@` in .github/workflows/pr-review.yml to that release
-#   2. change its run line back to `fragua ci pr_review`
+#      (both the pinned sha AND the `with: version:` input — the sha pins the
+#      action, the input pins the binary)
+#   2. in its run line, swap the workflow NAME ONLY: `pr_review_nojudge` →
+#      `pr_review`. Keep every other flag exactly as it is — in particular
+#      `--allow-env GH_TOKEN`, which is the sole exemption from `fragua ci`'s
+#      `*_TOKEN` strip; drop it and every `gh` call in the workflow loses auth
 #   3. delete this file
 #
 # Until then: a behavioural change to the review pipeline has to land in BOTH

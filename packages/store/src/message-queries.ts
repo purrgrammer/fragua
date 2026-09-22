@@ -278,7 +278,7 @@ const SELECT_JUDGE_MESSAGES_SQL = `
     FROM messages m
     JOIN run_state rs ON rs.run_id = m.run_id
     LEFT JOIN workflows w ON w.sha = rs.workflow_sha
-   WHERE m.content LIKE '%"role":"judge_node"%'
+   WHERE m.role = 'judge_node'
      AND (?1 IS NULL OR COALESCE(rs.workflow_name, w.name) = ?1)
    ORDER BY m.run_id, m.ordinal
 `;
