@@ -42,7 +42,11 @@ jobs:
           # worktree shares it); persist it explicitly or the push loses its auth.
           persist-credentials: true
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@1d07104f2585ba682791896393de5e8b8622220c # v0.4.0
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@34895e207cccbc3bcc942fd8d05a6dd3773573c2 # v0.10.0
+        with:
+          # Pins the BINARY too; the SHA above only pins the action, which
+          # otherwise installs `latest` at run time.
+          version: v0.10.0
 
       # The drift collectors run as `bun .fragua/scripts/drift/*.ts`; setup-fragua
       # installs the compiled fragua binary, not the bun runtime they need.
