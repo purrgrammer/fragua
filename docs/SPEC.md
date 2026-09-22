@@ -155,9 +155,9 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
 
   | Reason | Trigger | Payload | Wake |
   |---|---|---|---|
-  | `provider_retry` | Auto-retryable transport error (408/429/5xx/529/network) | `httpStatus`, `provider`, `attempt`, `resumeAt` | wake-pending sweeper at `resumeAt`; operator may short-circuit via `intent.resume` |
-  | `handler_retry` | Node returned `outcomeStatus="retry"`; backoff scheduled | `attempt`, `delayMs`, `resumeAt`, `maxRetries` | same |
-  | `timeout_retry` | Handler watchdog tripped (`max_ms` / `timeout`); retry budget remains | `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs` | same |
+  | `provider_retry` | Auto-retryable transport error (408/429/5xx/529/network) | `nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt` | wake-pending sweeper at `resumeAt`; operator may short-circuit via `intent.resume` |
+  | `handler_retry` | Node returned `outcomeStatus="retry"`; backoff scheduled | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | same |
+  | `timeout_retry` | Handler watchdog tripped (`max_ms` / `timeout`); retry budget remains | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs` | same |
 
   The concurrency slot is released during the wait so other queued runs can claim. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_auto" }` once `now >= resumeAt`; the run goes back to `queued` and re-dispatches.
 
