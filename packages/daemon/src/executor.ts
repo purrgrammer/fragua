@@ -1548,13 +1548,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // so a resume that immediately re-pauses (the budget check re-tripping in
     // the same turn) still advances `last_applied_seq` past the resume intent
     // and lands the budget override — else the intents stay unapplied and
-    // wake-pending re-wakes the run forever (the parallel-node budget loop).
+    // wake-pending re-wakes the run forever (the parallel-node budget loop,
+    // observed at 1,600+ pause/resume cycles). This holds even when the park
+    // is the turn's FIRST commit, which is why the fold rides it here rather
+    // than a later one.
     const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
-      // A park (budget pause / halt) may be this turn's FIRST commit — it must
-      // carry the operator fold too, or the raised cap never lands and the
-      // resume intent never advances the watermark: wake-pending re-resumes,
-      // the stale cap re-pauses, and the run livelocks (observed at 1,600+
-      // pause/resume cycles).
       const res = await commitFanoutFact(facts, takeFold());
       if (!res.ok && res.reason === "occ") {
         const { halted } = await onOccConflict(

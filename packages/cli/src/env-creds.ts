@@ -376,6 +376,12 @@ export function daemonEnvDeny(
   return { names, predicate: ciEnvDenyPredicate(passthrough, ctx), passthrough };
 }
 
+/** Judge (System One) provider — not in pi-ai's registry, so its env var is
+ * seeded explicitly alongside the pi-ai providers. */
+const JUDGE_ENV: ReadonlyArray<readonly [provider: string, envVar: string]> = [
+  [JUDGE_DEFAULT_PROVIDER, "TYPESAFE_API_KEY"],
+];
+
 /**
  * Validate a `--allow-env` request: return the names that must NOT be exempted
  * from the CI env-strip. A provider-credential var (e.g. `ANTHROPIC_API_KEY`,
@@ -392,12 +398,6 @@ export function daemonEnvDeny(
  * {@link daemonEnvDeny} uses, so the CI `--allow-env` rail and the daemon deny
  * surface agree on which names are provider credentials.
  */
-/** Judge (System One) provider — not in pi-ai's registry, so its env var is
- * seeded explicitly alongside the pi-ai providers. */
-const JUDGE_ENV: ReadonlyArray<readonly [provider: string, envVar: string]> = [
-  [JUDGE_DEFAULT_PROVIDER, "TYPESAFE_API_KEY"],
-];
-
 export function unsafeAllowEnvNames(allow: Iterable<string>, storeProviders: Iterable<string> = []): string[] {
   const ctx = buildProviderCredentialContext();
   const storeProviderPrefixes = buildStoreProviderPrefixes(storeProviders);

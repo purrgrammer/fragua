@@ -101,26 +101,6 @@ guarantee.
   no default model choices changed. `radius` is
   a purely dynamic provider with no static catalog default, so `--provider
   radius` without an explicit `--model` has no built-in fallback.
-### Fixed
-
-- **`skill` tool inside a worktree.** Loading a project-scope skill failed with
-  a path-escape error because the catalogue's path points at the project root,
-  outside the worktree. The tool now reads the run's own copy when its tree
-  carries one (so a worktree sees skill edits it made) and falls back to the
-  discovery path otherwise.
-- `review` on a merged PR now diffs the PR's own change (its head over the point
-  it forked from the base) instead of `origin/main..HEAD`, which ran backwards
-  once the PR had merged; the worktree lands on the merge commit.
-- `intent.dropped` is in the typed event list, so SSE consumers that register
-  per event type now see it.
-
-- A step named `done` or `end` now executes. Both names were silent terminal
-  aliases in the executor, so a workflow that validated clean skipped such a step
-  and ended the run. Only `exit` (and the internal `__end__`) end a run.
-- Per-step cost breakdown now includes judge steps (their spend already counted
-  in run totals but had no step row).
-
-### Changed
 - **`dependencies`: the pin, scope, and manifests-only rules run in code**
   (`check-manifests.ts`) as a tool step; the judge keeps the breaking-risk score.
 - **`review` / `pr_review` lenses judge per finding.** On the full tier each lens
@@ -175,6 +155,24 @@ guarantee.
   delivery without silent truncation.
 
 ### Fixed
+
+- **`skill` tool inside a worktree.** Loading a project-scope skill failed with
+  a path-escape error because the catalogue's path points at the project root,
+  outside the worktree. The tool now reads the run's own copy when its tree
+  carries one (so a worktree sees skill edits it made) and falls back to the
+  discovery path otherwise.
+- `review` on a merged PR now diffs the PR's own change (its head over the point
+  it forked from the base) instead of `origin/main..HEAD`, which ran backwards
+  once the PR had merged; the worktree lands on the merge commit.
+- `intent.dropped` is in the typed event list, so SSE consumers that register
+  per event type now see it.
+
+- A step named `done` or `end` now executes. Both names were silent terminal
+  aliases in the executor, so a workflow that validated clean skipped such a step
+  and ended the run. Only `exit` (and the internal `__end__`) end a run.
+- Per-step cost breakdown now includes judge steps (their spend already counted
+  in run totals but had no step row).
+
 
 - Accepting a run whose tail renamed or deleted tracked files no longer leaves
   the old paths on disk as untracked copies. The worktree is now brought in line
