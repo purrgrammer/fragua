@@ -44,9 +44,19 @@ if [ "$state" = "MERGED" ]; then
   # The PR head survives branch deletion under refs/pull/<n>/head; the merge
   # commit is on the base branch.
   git fetch -q origin "refs/pull/$n/head" "$base_ref"
-  git rev-parse -q --verify "${merge_commit}^{commit}" >/dev/null || { echo "merge commit $merge_commit not reachable" >&2; exit 5; }
-  base="$(git merge-base "${merge_commit}^1" "$head_oid")"
-  git checkout -q --detach "$merge_commit"
+  if [ "$merge_commit" = "-" ]; then
+    # Rebase-merged PRs have NO merge commit — GitHub reports `mergeCommit`
+    # null, which the query above turns into "-". There is nothing to check out
+    # and no `^1` to diff from, so `rev-parse -q --verify -^{commit}` used to
+    # fail and abort the whole review with exit 5. The head still exists under
+    # refs/pull/<n>/head; diff it against where it forked from the base.
+    base="$(git merge-base "origin/$base_ref" "$head_oid")"
+    git checkout -q --detach "$head_oid"
+  else
+    git rev-parse -q --verify "${merge_commit}^{commit}" >/dev/null || { echo "merge commit $merge_commit not reachable" >&2; exit 5; }
+    base="$(git merge-base "${merge_commit}^1" "$head_oid")"
+    git checkout -q --detach "$merge_commit"
+  fi
   diff_spec="${base}..${head_oid}"
 else
   gh pr checkout "$n" >/dev/null

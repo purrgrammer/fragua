@@ -160,20 +160,28 @@ Two retry idioms — they model different things, so they look different in the 
 
 ### Edge-cycle (check → fix → re-check)
 
-A plain back-edge bounded by the target's `max-retries`. Idiomatic for a deterministic check with a dedicated fixer:
+A plain back-edge. Idiomatic for a deterministic check with a dedicated fixer:
 
 ```yaml
 ci:
   type: tool
   run: bun run ci
-  max-retries: 5
   on: {success: commit, fail: fix}
 fix:
   type: llm
   prompt: |
     CI failed. Re-run it, read the failure, make the minimal fix, stop.
-  next: ci            # back-edge: fix → ci, capped by ci's max-retries
+  next: ci            # back-edge: fix → ci
 ```
+
+**This shape has no per-node cap.** `max-retries` does not bound it — the retry
+counter is only bumped when a handler returns `outcomeStatus: "retry"`, and a
+`tool` step returns `success`/`fail` from its exit code. Writing `max-retries`
+on `ci` above is inert. The cycle is bounded by the run `budget` and the
+executor's dispatch ceiling (`max_loops`, default 1000), both of which pause for
+an operator rather than halting cleanly (SPEC §3.5).
+
+If you need a real cap, use the goal gate below — its `max-retries` is enforced.
 
 ### Goal gate (judge → re-run the author)
 

@@ -40,18 +40,35 @@ for (const line of stat.split("\n")) {
 const before = new Map<string, string>();
 const after = new Map<string, string>();
 const SEP = "\u0000";
+// …and by SECTION within the file: a dep listed under both `dependencies` and
+// `devDependencies` of one package.json otherwise collapses the same way, so a
+// major bump in one section hides behind a patch bump in the other.
+const SECTION = /^[+\- ]?\s*"(dependencies|devDependencies|peerDependencies|optionalDependencies)":\s*\{/;
 let file = "";
+let section = "";
 for (const line of diff.split("\n")) {
   if (line.startsWith("+++ ")) {
     file = line.slice(4).trim().replace(/^b\//, "");
+    section = "";
     continue;
   }
   if (line.startsWith("--- ")) continue;
+  if (line.startsWith("@@")) {
+    // A new hunk may open mid-object; the section is only known from a header
+    // line, so forget it rather than attribute entries to the previous one.
+    section = "";
+    continue;
+  }
+  const sec = SECTION.exec(line);
+  if (sec !== null) {
+    section = sec[1] ?? "";
+    continue;
+  }
   const sign = line[0];
   if (sign !== "+" && sign !== "-") continue;
   const m = /^\s*"([^"]+)":\s*"([^"]+)"/.exec(line.slice(1));
   if (m === null) continue;
-  (sign === "-" ? before : after).set(`${file}${SEP}${m[1] ?? ""}`, m[2] ?? "");
+  (sign === "-" ? before : after).set(`${file}${SEP}${section}${SEP}${m[1] ?? ""}`, m[2] ?? "");
 }
 
 const EXACT = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/;
@@ -59,12 +76,27 @@ const parts = (v: string): [number, number] => {
   const [M, m] = v.replace(/[-+].*$/, "").split(".");
   return [Number(M), Number(m)];
 };
+/** Full triple, for the ordering check `parts` can't make. */
+const triple = (v: string): [number, number, number] => {
+  const [M, m, p] = v.replace(/[-+].*$/, "").split(".");
+  return [Number(M), Number(m), Number(p)];
+};
+const isDowngrade = (oldV: string, newV: string): boolean => {
+  const a = triple(oldV);
+  const b = triple(newV);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (y !== x) return y < x;
+  }
+  return false;
+};
 
 for (const [key, ver] of after) {
   const old = before.get(key);
-  const sep = key.indexOf(SEP);
-  const where = key.slice(0, sep);
-  const name = `${key.slice(sep + 1)}${where === "" ? "" : ` (${where})`}`;
+  const [where = "", sect = "", bare = ""] = key.split(SEP);
+  const at = [where, sect].filter((x) => x !== "").join(" ");
+  const name = `${bare}${at === "" ? "" : ` (${at})`}`;
   if (ver.startsWith("workspace:")) {
     // (c) an internal dependency is never bumped by this workflow.
     if (old !== undefined && old !== ver) violations.push(`manifests_only: internal dependency ${name} changed (${old} → ${ver})`);
@@ -79,6 +111,9 @@ for (const [key, ver] of after) {
   if (old === undefined || !EXACT.test(old)) continue;
   const [oM, om] = parts(old);
   const [nM, nm] = parts(ver);
+  // A same-major.minor DOWNGRADE (1.2.4 → 1.2.3) clears every scope check
+  // above, since only major/minor are compared. It is not a bump at all.
+  if (isDowngrade(old, ver)) violations.push(`scope_respected: ${name} ${old} → ${ver} is a downgrade`);
   if (scope === "patch" && (oM !== nM || om !== nm)) violations.push(`scope_respected: ${name} ${old} → ${ver} is beyond patch`);
   if (scope === "minor" && oM !== nM) violations.push(`scope_respected: ${name} ${old} → ${ver} is beyond minor`);
 }

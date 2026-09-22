@@ -83,17 +83,20 @@ steps:
       bun install --frozen-lockfile
     on:
       success: manifest_rules
-      # NOT capped by max-retries, despite SPEC §105: the retry counter is only
-      # bumped on outcomeStatus="retry" (transition-planner applyRetryGate), a
-      # tool step only ever yields success|fail, and the counter is RESET on
-      # every success — which `update` produces each pass. So this back-edge and
-      # manifest_rules' below are bounded only by `budget` (6.00, policy pause)
-      # and the executor's 1000-dispatch ceiling. Both are operator gates.
+      # NOT capped by max-retries (SPEC §3.5): the retry counter is bumped only
+      # on outcomeStatus="retry", a tool step yields success|fail, and the
+      # counter resets on success — which `update` produces each pass. So this
+      # back-edge and manifest_rules' below are bounded only by `budget` (6.00,
+      # policy pause) and the executor's 1000-dispatch ceiling — operator gates.
       fail: update                     # lockfile drifted from the manifests ⇒ back to update
 
   manifest_rules:                      # (a)(b)(c) are a regex, a semver comparison, and a path filter — code, not judgment
     type: tool
-    run: bun .fragua/scripts/dependencies/check-manifests.ts ${{ inputs.scope }}
+    # Pass the scratch dir explicitly rather than leaning on the script's
+    # default: `lockfile_check` writes it, this script reads it, and the
+    # `review` judge reads a `{file:}` under it. Renaming it in one place
+    # silently gave zero violations and a missing judge file — no error.
+    run: bun .fragua/scripts/dependencies/check-manifests.ts ${{ inputs.scope }} .fragua/scratch/deps
     on:
       success: review
       fail: update                     # a range, an out-of-scope bump, or a stray file ⇒ back to update, stderr names the rule
@@ -116,6 +119,9 @@ steps:
   typecheck:
     type: tool
     run: bun run typecheck
+    # Inert today: max-retries bounds only a goal-gate (`retry:`) loop, not a
+    # plain `on: {fail:}` back-edge (SPEC §3.5). Kept as the intended bound for
+    # when that gap closes; the live bounds are `budget` and max_loops.
     max-retries: 3
     on:
       success: ci
@@ -124,6 +130,9 @@ steps:
   ci:
     type: tool
     run: bun run ci
+    # Inert today: max-retries bounds only a goal-gate (`retry:`) loop, not a
+    # plain `on: {fail:}` back-edge (SPEC §3.5). Kept as the intended bound for
+    # when that gap closes; the live bounds are `budget` and max_loops.
     max-retries: 5
     on:
       success: exit

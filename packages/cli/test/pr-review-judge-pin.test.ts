@@ -13,6 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseWorkflow } from "@fragua/core";
 
 const root = join(import.meta.dir, "../../..");
 const wf = (name: string) => join(root, ".fragua/workflows", name);
@@ -52,5 +53,51 @@ describe("pr-review CI target tracks the judge rollout", () => {
       expect(ciTarget).toBe("pr_review");
       expect(existsSync(NOJUDGE)).toBe(false);
     });
+  }
+});
+
+describe("the twin's scan prompts stay in step", () => {
+  // `pr_review_nojudge.yaml`'s header says a behavioural change to the review
+  // pipeline has to land in BOTH files. Nothing enforced that, so tightening a
+  // DO-NOT-FLAG rule in one produced silently divergent reviews until someone
+  // noticed the results differ. The judge conversion changed how findings are
+  // GATED, not how they are SCANNED, so the `*_scan` prompts are the part that
+  // must stay identical — this pins exactly that.
+  // The one licensed difference: the canonical file prunes findings with a
+  // judge, the twin with a `verify` llm step, and each prompt names its own
+  // pruner. That is the mechanism difference the twin exists for — normalise it
+  // so the gate still catches a real content edit without forcing one of the
+  // two files to describe a pruner it does not have.
+  const normalisePruner = (prompt: string): string =>
+    prompt.replace(/\b(the judge|verify) prunes\b/g, "<pruner> prunes");
+
+  const scanPrompts = (file: string): Map<string, string> => {
+    const graph = parseWorkflow(readFileSync(wf(file), "utf8"));
+    const out = new Map<string, string>();
+    for (const [id, node] of Object.entries(graph.nodes)) {
+      if (!id.endsWith("_scan")) continue;
+      out.set(id, normalisePruner(String((node.attrs as { prompt?: unknown }).prompt ?? "")));
+    }
+    return out;
+  };
+
+  if (canonicalUsesJudge && existsSync(NOJUDGE)) {
+    const canon = scanPrompts("pr_review.yaml");
+    const twin = scanPrompts("pr_review_nojudge.yaml");
+
+    test("both files declare the same set of scan steps", () => {
+      expect([...twin.keys()].sort()).toEqual([...canon.keys()].sort());
+      expect(canon.size).toBeGreaterThan(0);
+    });
+
+    for (const [id, prompt] of canon) {
+      test(`${id} prompt matches in both files (pruner name aside)`, () => {
+        // If this fails: you edited one copy. Apply the same edit to the other,
+        // or retire the twin (see its header). If the difference is genuinely
+        // judge-vs-verify mechanism, extend `normalisePruner` rather than
+        // letting the two drift.
+        expect(twin.get(id)).toBe(prompt);
+      });
+    }
   }
 });

@@ -872,8 +872,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Production ceiling on handler dispatches. A workflow that loops
     // without ever aborting (so ABORT_LOOP_CEILING never fires) would
     // otherwise run until budget or wall-clock killed it. This is the
-    // last-resort guard; workflow authors should bound loops via
-    // `max_retries` on backward edges.
+    // last-resort guard. Note it is NOT merely last-resort for a plain
+    // `on: {fail:}` back-edge: `max_retries` does not bound those (the counter
+    // is bumped only on an `outcomeStatus: "retry"`, and reset on success), so
+    // for that shape this ceiling and the budget are the ONLY bounds. Only a
+    // goal gate (`retry:`) is capped per node.
     //
     // The override key is read on every iteration so a Raise & Resume
     // adjustment takes effect on the next dispatch — `dispatches` is

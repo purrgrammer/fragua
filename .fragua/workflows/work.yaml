@@ -164,6 +164,9 @@ steps:
   ci:
     type: tool
     run: bun run ci
+    # Inert today: max-retries bounds only a goal-gate (`retry:`) loop, not a
+    # plain `on: {fail:}` back-edge (SPEC §3.5). Kept as the intended bound for
+    # when that gap closes; the live bounds are `budget` and max_loops.
     max-retries: 5
     on:
       success: exit
