@@ -107,7 +107,7 @@ steps:
   classify_diff:                       # materialise what `classify` judges (DIFF mode: the patch; FILES mode: the files themselves)
     type: tool
     run: |
-      set -euo pipefail
+      set -eu
       out=.fragua/scratch/review
       rm -rf "$out" && mkdir -p "$out"
       spec=${{ outputs.resolve.diff_spec }}

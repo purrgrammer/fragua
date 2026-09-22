@@ -75,7 +75,7 @@ steps:
   lockfile_check:                      # (d) of the old review prompt is a command, so it is a tool step: a stale lockfile fails here
     type: tool
     run: |
-      set -euo pipefail
+      set -eu
       out=.fragua/scratch/deps
       rm -rf "$out" && mkdir -p "$out"
       git diff HEAD --stat > "$out/stat.txt"

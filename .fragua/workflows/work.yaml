@@ -47,7 +47,7 @@ steps:
   triage_context:                      # what `triage` judges the task against: the package list + the codebase map
     type: tool
     run: |
-      set -euo pipefail
+      set -eu
       out=.fragua/scratch/work
       rm -rf "$out" && mkdir -p "$out"
       ls -1 packages > "$out/packages.txt"

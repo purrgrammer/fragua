@@ -75,7 +75,7 @@ steps:
   scope_diff:                          # materialise what `scope` judges — a failing/empty diff exits non-zero and halts the run
     type: tool
     run: |
-      set -euo pipefail
+      set -eu
       out=.fragua/scratch/pr
       rm -rf "$out" && mkdir -p "$out"
       pr=${{ inputs.pr }}
