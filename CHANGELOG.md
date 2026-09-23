@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-09-23
+
 ### Changed
 
 - **`pr_review` converges.** The CI review pipeline was rebuilt around one
