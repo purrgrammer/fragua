@@ -1075,7 +1075,7 @@ function sessionKey(runId: string, threadId: string): string {
  * formats: integer seconds OR an HTTP-date. We honour seconds (the
  * common provider convention) and ignore HTTP-date (rare in LLM APIs).
  * Returns `undefined` when absent or malformed so the daemon falls back
- * to its full-jitter exponential schedule. */
+ * to its equal-jitter exponential schedule. */
 function parseRetryAfterMs(headers: Record<string, string>): number | undefined {
   // Header names are case-insensitive per RFC 9110; pi-ai surfaces them
   // verbatim. Probe the common spellings first, then fall back to a

@@ -1,7 +1,7 @@
 // Provider auto-retry policy.
 //
 // Classifies LLM-provider transport errors into auto-retry vs manual,
-// computes the next-attempt timestamp under a full-jitter exponential
+// computes the next-attempt timestamp under an equal-jitter exponential
 // schedule (or honours the provider's `Retry-After` exactly when present),
 // and bounds the chain to 5 attempts / 5 cumulative minutes — past either
 // cap the run halts with `reason="provider_exhausted"` instead of
@@ -81,7 +81,7 @@ export interface DecideProviderRetryOpts {
    * total in routing (`internal.provider_retry.cumulative_ms`), accrued
    * beside the attempt counter and cleared on a successful turn. */
   cumulativeDelayMs: number;
-  /** PRNG for full jitter — injectable for deterministic tests. */
+  /** PRNG for equal jitter — injectable for deterministic tests. */
   random?: () => number;
 }
 
@@ -90,7 +90,7 @@ export interface DecideProviderRetryOpts {
  *
  * - Non-auto-retryable status → manual pause (operator decides).
  * - Auto-retryable but at/over chain cap → halt with `provider_exhausted`.
- * - Auto-retryable within cap → schedule retry with full-jitter exponential
+ * - Auto-retryable within cap → schedule retry with equal-jitter exponential
  *   backoff (or the provider's Retry-After if present).
  */
 export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetryDecision {
@@ -125,9 +125,12 @@ export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetr
  *   - With `retryAfterMs`: honour exactly. No jitter, no exponential cap.
  *     Provider knows their state better than we do; if they say wait an
  *     hour, wait an hour. Operator can manually resume earlier.
- *   - Without: full jitter exponential, capped at
- *     `PROVIDER_RETRY_MAX_EXPONENTIAL_MS` per attempt. Full jitter
- *     desynchronises racing daemons even though we're single-daemon
+ *   - Without: equal-jitter exponential, capped at
+ *     `PROVIDER_RETRY_MAX_EXPONENTIAL_MS` per attempt. The delay is
+ *     `exp/2 + random()*exp/2`, so attempt N is guaranteed at least half
+ *     its exponential — a late 429 retry can no longer fire near-zero and
+ *     burn the chain budget before the rate-limit window spans. Jitter
+ *     still desynchronises racing daemons even though we're single-daemon
  *     today; the property generalises.
  */
 export function computeBackoffMs(opts: { retryAfterMs?: number; attempt: number; random: () => number }): number {
@@ -136,5 +139,6 @@ export function computeBackoffMs(opts: { retryAfterMs?: number; attempt: number;
     PROVIDER_RETRY_BASE_BACKOFF_MS * 2 ** (opts.attempt - 1),
     PROVIDER_RETRY_MAX_EXPONENTIAL_MS,
   );
-  return Math.floor(opts.random() * exponentialMs);
+  const half = exponentialMs / 2;
+  return Math.floor(half + opts.random() * half);
 }
