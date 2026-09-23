@@ -17,7 +17,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { OutputsValue } from "../types/outputs.ts";
-import { resolveOutputRef, UnpopulatedOutputError } from "./outputs-substitution.ts";
+import { classifyOutputRef, dedupeRefs, UnpopulatedOutputError, type UnpopulatedRef } from "./outputs-substitution.ts";
 
 export { outputReferences } from "./outputs-substitution.ts";
 
@@ -85,7 +85,7 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
   const inputs = args.inputs ?? {};
   const outputs = args.outputs ?? {};
-  const missing: string[] = [];
+  const missing: UnpopulatedRef[] = [];
   // ONE pass over the ORIGINAL template: a substituted value is never re-scanned,
   // so an input whose value literally contains `${{ outputs.X.f }}` (or an output
   // value containing `${{ inputs.x }}`) stays literal — each token is resolved
@@ -97,15 +97,15 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
     COMBINED_REF_RE,
     (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
       if (inName !== undefined) return fmt(resolveInputRef(inputs, inName.split(".")));
-      const rendered = resolveOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
-      if (rendered === undefined) {
-        missing.push(whole.trim());
+      const c = classifyOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
+      if (c.kind !== "value") {
+        missing.push({ ref: whole.trim(), kind: c.kind });
         return whole;
       }
-      return wrapOutputs && !escapeForShell ? wrapOutputValue(rendered) : rendered;
+      return wrapOutputs && !escapeForShell ? wrapOutputValue(c.rendered) : c.rendered;
     },
   );
-  if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);
+  if (missing.length > 0) throw new UnpopulatedOutputError(dedupeRefs(missing));
   return result;
 }
 

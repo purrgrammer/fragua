@@ -255,3 +255,65 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
     expect(result).not.toContain("fragua_output");
   });
 });
+
+describe("unpopulated diagnosis — producer-absent vs field-absent", () => {
+  test("a producer that never emitted is diagnosed as producer-absent", () => {
+    try {
+      substituteOutputs("x=${{ outputs.scope.pr }}", {});
+      throw new Error("expected UnpopulatedOutputError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UnpopulatedOutputError);
+      const e = err as UnpopulatedOutputError;
+      expect(e.refs).toEqual([{ ref: "${{ outputs.scope.pr }}", kind: "producer-absent" }]);
+      expect(e.message).toContain("emitted nothing on this run path");
+    }
+  });
+
+  test("a producer that ran but omitted the field is diagnosed as field-absent", () => {
+    try {
+      substituteOutputs("x=${{ outputs.scope.pr }}", { scope: { other: "v" } });
+      throw new Error("expected UnpopulatedOutputError");
+    } catch (err) {
+      const e = err as UnpopulatedOutputError;
+      expect(e.refs).toEqual([{ ref: "${{ outputs.scope.pr }}", kind: "field-absent" }]);
+      expect(e.message).toContain("left this field unpopulated");
+    }
+  });
+
+  test("an optional field emitted as null is field-absent, not producer-absent", () => {
+    try {
+      substituteOutputs("x=${{ outputs.scope.pr }}", { scope: { pr: null } });
+      throw new Error("expected UnpopulatedOutputError");
+    } catch (err) {
+      expect((err as UnpopulatedOutputError).refs[0]?.kind).toBe("field-absent");
+    }
+  });
+
+  test("both kinds in one template are reported with their own diagnosis", () => {
+    try {
+      substituteOutputs("${{ outputs.a.f }} ${{ outputs.b.g }}", { b: { other: 1 } });
+      throw new Error("expected UnpopulatedOutputError");
+    } catch (err) {
+      const e = err as UnpopulatedOutputError;
+      expect(e.refs).toEqual([
+        { ref: "${{ outputs.a.f }}", kind: "producer-absent" },
+        { ref: "${{ outputs.b.g }}", kind: "field-absent" },
+      ]);
+    }
+  });
+
+  test("a repeated reference is reported once", () => {
+    try {
+      substituteOutputs("${{ outputs.a.f }} and ${{ outputs.a.f }}", {});
+      throw new Error("expected UnpopulatedOutputError");
+    } catch (err) {
+      expect((err as UnpopulatedOutputError).refs).toHaveLength(1);
+    }
+  });
+
+  test("a falsy value is a value, not an absence", () => {
+    expect(substituteOutputs("x=${{ outputs.a.f }}", { a: { f: false } })).toBe("x=false");
+    expect(substituteOutputs("x=${{ outputs.a.f }}", { a: { f: 0 } })).toBe("x=0");
+    expect(substituteOutputs("x=${{ outputs.a.f }}", { a: { f: "" } })).toBe("x=");
+  });
+});
