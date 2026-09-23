@@ -269,6 +269,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       registry: new AbortRegistry(),
       tools: deps.tools,
       llmCall: deps.llmCall,
+      judgeClient: deps.judgeClient,
       maxConcurrentRuns: 1,
       shutdownSignal: shutdown.signal,
       provisioner,

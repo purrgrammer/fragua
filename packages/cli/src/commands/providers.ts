@@ -17,6 +17,8 @@ export {
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { AuthStorage, defaultModelPerProvider, getFraguaHome, ModelRegistry } from "@fragua/agent";
+import { JUDGE_DEFAULT_MODEL, JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
+import { makeJudgeClient } from "@fragua/core/handler";
 import chalk from "chalk";
 import prompts from "prompts";
 import { openGlobalStore } from "./open-global-store.ts";
@@ -63,6 +65,13 @@ export function providersListCommand(): number {
       return 0;
     }
 
+    // The judge provider is a System One endpoint, not an LLM catalogue entry,
+    // so pi-ai's registry carries no models for it and it never appeared in
+    // these rows — a credentialed `typesafe` read as "0/N credentialed" and the
+    // documented `fragua providers add typesafe` had no way to confirm itself.
+    // `providersAddCommand` already unions it into its known set; do the same.
+    if (!byProvider.has(JUDGE_DEFAULT_PROVIDER)) byProvider.set(JUDGE_DEFAULT_PROVIDER, 0);
+
     console.log(chalk.bold("Providers (via pi-ai registry):\n"));
     const rows = [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     let credentialed = 0;
@@ -72,7 +81,9 @@ export function providersListCommand(): number {
       const source = ready ? auth.describeAuthSource(name) : null;
       const mark = ready ? chalk.green("✓") : chalk.dim("·");
       const nameCol = name.padEnd(24);
-      const countCol = `${count} model${count === 1 ? "" : "s"}`.padEnd(12);
+      const countCol = (
+        name === JUDGE_DEFAULT_PROVIDER ? `judge (${JUDGE_DEFAULT_MODEL})` : `${count} model${count === 1 ? "" : "s"}`
+      ).padEnd(12);
       const sourceCol = source ? ` ${source}` : "";
       console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(sourceCol)}`);
     }
@@ -172,6 +183,7 @@ export async function providersTestCommand(
   const store = openGlobalStore();
   try {
     const auth = AuthStorage.fromStore(store);
+    if (provider === JUDGE_DEFAULT_PROVIDER) return await testJudgeProvider(auth, modelOverride);
     const registry = ModelRegistry.create(auth, store);
 
     // Resolve model: explicit override > provider default > first available
@@ -254,6 +266,44 @@ export async function providersTestCommand(
   }
 }
 
+/** `fragua providers test typesafe` — one `noul` call through the same client
+ * the judge handler uses; prints the resolved model id + latency. */
+async function testJudgeProvider(auth: AuthStorage, modelOverride: string | undefined): Promise<number> {
+  const provider = JUDGE_DEFAULT_PROVIDER;
+  if (!auth.hasAuth(provider)) {
+    console.error(chalk.red(`no credentials configured for "${provider}"`));
+    console.error(chalk.dim(`  run \`fragua providers add ${provider}\``));
+    return 1;
+  }
+  const model = modelOverride ?? JUDGE_DEFAULT_MODEL;
+  // One attempt on purpose: this is a credential check, and a 429 should read
+  // as "rate limited" now, not as a 3-attempt backoff.
+  const client = makeJudgeClient({ getApiKey: () => auth.getApiKey(provider), maxAttempts: 1 });
+  console.log(chalk.dim(`testing ${provider}/${model} …`));
+  const started = Date.now();
+  try {
+    const res = await client.ask(
+      {
+        model,
+        state: "The deployment finished and every health check is green.",
+        questions: { ok: { type: "noul", instructions: "Did the deployment succeed?" } },
+      },
+      AbortSignal.timeout(30_000),
+    );
+    const a = res.answers["ok"];
+    const noul = a?.type === "noul" ? a.noul.toFixed(2) : "?";
+    console.log(
+      chalk.green(
+        `✓ ${provider}/${res.model} responded — noul=${noul}, ${res.usage.input_tokens} input tokens, ${Date.now() - started}ms`,
+      ),
+    );
+    return 0;
+  } catch (err) {
+    console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
+    return 1;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // add (api_key)
 // ---------------------------------------------------------------------------
@@ -265,7 +315,7 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
     const auth = AuthStorage.fromStore(store);
     const registry = ModelRegistry.create(auth, store);
 
-    const knownProviders = [...new Set(registry.getAll().map((m) => m.provider))].sort();
+    const knownProviders = [...new Set([...registry.getAll().map((m) => m.provider), JUDGE_DEFAULT_PROVIDER])].sort();
 
     let provider = providerArg;
     if (!provider) {

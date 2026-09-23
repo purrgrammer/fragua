@@ -66,6 +66,23 @@ export function isOutputArray(p: OutputProfile): p is OutputArray {
   return p.kind === "array";
 }
 
+/** The profile a dotted path lands on inside an outputs decl, or `undefined`
+ * when a segment is missing or dots into a non-record. Shared by the parser
+ * (typing a `for-each` judge's items) and the validator (E049). */
+export function resolveOutputProfile(
+  decl: Record<string, OutputProfile>,
+  path: readonly string[],
+): OutputProfile | undefined {
+  const [top, ...rest] = path;
+  if (top === undefined) return undefined;
+  let cur: OutputProfile | undefined = decl[top];
+  for (const seg of rest) {
+    if (cur === undefined || !isOutputRecord(cur)) return undefined;
+    cur = cur.fields[seg];
+  }
+  return cur;
+}
+
 // ─────────────── Canonicalization ───────────────
 
 /** Sort `properties` keys, `required` entries, and `enum` values for a stable

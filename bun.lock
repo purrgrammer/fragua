@@ -23,6 +23,7 @@
         "@sinclair/typebox": "0.34.49",
       },
       "devDependencies": {
+        "@fragua/test-utils": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },
@@ -53,6 +54,7 @@
       },
       "devDependencies": {
         "@fragua/daemon": "workspace:*",
+        "@fragua/test-utils": "workspace:*",
         "@types/prompts": "2.4.9",
         "@types/react": "18.3.12",
         "typescript": "5.7.3",
@@ -126,6 +128,7 @@
       "name": "@fragua/test-utils",
       "version": "0.10.0",
       "devDependencies": {
+        "@earendil-works/pi-ai": "0.80.7",
         "typescript": "5.7.3",
       },
     },

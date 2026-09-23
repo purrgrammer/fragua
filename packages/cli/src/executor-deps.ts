@@ -32,6 +32,7 @@ import {
   PiSummariserBackend,
   SteeringRegistry,
 } from "@fragua/agent";
+import { JUDGE_DEFAULT_PROVIDER as JUDGE_PROVIDER } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { autoDispatcherResolver, Dispatcher, type GraphLoader, makeGraphLoader } from "@fragua/daemon";
 import type { SqliteStore } from "@fragua/store";
@@ -76,6 +77,10 @@ export interface ExecutorDeps {
   /** Legacy `LlmCallFn` path registry (the real llm path lives on the resolver). */
   tools: handler.InMemoryToolRegistry;
   llmCall: handler.LlmCallFn;
+  /** System One client for `type: judge` steps. Always built; the credential
+   * is resolved per call from the store so `fragua providers add typesafe`
+   * after boot is picked up without a restart. */
+  judgeClient: handler.JudgeClient;
   /** Credential + model registries (both store-backed). */
   modelRegistry: ModelRegistry;
   authStorage: AuthStorage;
@@ -280,9 +285,13 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       };
     };
   }
-  const defaultMaxMs: { llm?: number; tool?: number } = {};
+  const defaultMaxMs: { llm?: number; tool?: number; judge?: number } = {};
   if (timeouts.llm !== undefined) defaultMaxMs.llm = timeouts.llm;
   if (timeouts.tool !== undefined) defaultMaxMs.tool = timeouts.tool;
+  if (timeouts.judge !== undefined) defaultMaxMs.judge = timeouts.judge;
+  const judgeClient = handler.makeJudgeClient({
+    getApiKey: () => authStorage.getApiKey(JUDGE_PROVIDER),
+  });
   dispatcher.setResolver(
     autoDispatcherResolver({
       store,
@@ -297,6 +306,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
     graphLoader,
     tools,
     llmCall,
+    judgeClient,
     modelRegistry,
     authStorage,
     steeringRegistry,

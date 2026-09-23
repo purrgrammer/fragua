@@ -148,6 +148,9 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         billedTokens: 750,
         costEventCount: 2,
+        judgeCostUsd: 0,
+        judgeInputTokens: 0,
+        judgeCalls: 0,
       },
       {
         startSeq: 20,
@@ -158,6 +161,9 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         billedTokens: 0,
         costEventCount: 0,
+        judgeCostUsd: 0,
+        judgeInputTokens: 0,
+        judgeCalls: 0,
       },
     ]);
     expect(merged[0]!.cost).toEqual({
@@ -170,6 +176,30 @@ describe("eventsToSteps", () => {
     });
     // No cost events → no cost attached, even with a row present.
     expect(merged[1]!.cost).toBeUndefined();
+  });
+
+  test("attachStepAggregates carries a judge tool split beside the step's own buckets", () => {
+    const events = [
+      { type: "fact.node_started", ts: 900, seq: 5, payload: { nodeId: "n1" } },
+      { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1" } },
+    ];
+    const merged = attachStepAggregates(eventsToSteps(events), [
+      {
+        startSeq: 10,
+        costUsd: 0.2931,
+        inputTokens: 40,
+        outputTokens: 5000,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        billedTokens: 6240,
+        costEventCount: 3,
+        judgeCostUsd: 0.0002,
+        judgeInputTokens: 1200,
+        judgeCalls: 1,
+      },
+    ]);
+    expect(merged[0]!.cost?.judge).toEqual({ cost_usd: 0.0002, input_tokens: 1200, calls: 1 });
+    expect(merged[0]!.cost?.input_tokens).toBe(40);
   });
 
   test("a node paused then resumed coalesces into a single step (cost breakdown unifies pause/resume halves)", () => {
@@ -412,5 +442,26 @@ describe("fillOrphanDurations", () => {
     expect(before.durationMs).toBeUndefined();
     expect(filled[0]).not.toBe(before);
     expect(filled[0]!.durationMs).toBe(4_000); // 5000 − 1000
+  });
+});
+
+describe("eventsToSteps — judge steps", () => {
+  test("judge.requested opens a step with provider/model and suppresses the synthetic tool row", () => {
+    const events = [
+      ev("fact.node_started", 1000, { nodeId: "triage" }),
+      ev("judge.requested", 1010, { nodeId: "triage", iteration: 0, provider: "typesafe", model: "jev-latest" }),
+      ev("judge.answered", 1700, { nodeId: "triage", iteration: 0, provider: "typesafe", model: "jev-1.13.0" }),
+      ev("cost.recorded", 1701, { nodeId: "triage", iteration: 0, cost_usd: 0.00002, input_tokens: 509 }),
+      ev("fact.node_completed", 1702, { nodeId: "triage", nextNode: "report" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(1);
+    const s = steps[0]!;
+    expect(s.nodeId).toBe("triage");
+    expect(s.startSeq).toBe(1010);
+    expect(s.provider).toBe("typesafe");
+    // the answer's resolved model id replaces the requested alias
+    expect(s.model).toBe("jev-1.13.0");
+    expect(s.startedAt).toBe(new Date(1000).toISOString());
   });
 });

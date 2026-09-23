@@ -10,13 +10,20 @@ name: PR review
 # using GITHUB_TOKEN cannot post an APPROVED review state anyway, so there is no
 # bot verdict that could safely gate a merge; CI remains the hard required gate.)
 #
-# The review pins a released fragua (setup-fragua@<tag>) for a reproducible
-# review engine; `fragua ci --export` (shipped in 0.2.0) lands the run as a
+# The review pins a released fragua — the action by SHA, the binary by
+# `with: version:` — for a reproducible review engine; `fragua ci --export` (shipped in 0.2.0) lands the run as a
 # secret-free `.fragua` bundle. The engine is pinned, but the binary still reads
-# THIS PR's `.fragua/workflows/pr_review.yaml` from the checkout, so workflow
-# changes are still exercised. The trust boundary is unchanged: a same-repo PR
-# already controls pr_review.yaml and this file, and fork PRs (no secrets) are
-# skipped.
+# the workflow file from THIS PR's checkout, so workflow changes are still
+# exercised. The trust boundary is unchanged: a same-repo PR already controls
+# that file and this one, and fork PRs (no secrets) are skipped.
+#
+# It runs `pr_review_nojudge`, not `pr_review`. Because the engine is a RELEASED
+# binary and the workflow comes from the checkout, the tree may not hand it a
+# step type its release predates: `pr_review.yaml` now uses `judge` steps, which
+# no release parses yet, so pointing this job at it would fail every PR with
+# `unknown type "judge"` — including the PR introducing the step type. The
+# judge-free copy keeps the check running until a release ships `judge`; see the
+# retirement checklist at the top of `.fragua/workflows/pr_review_nojudge.yaml`.
 
 on:
   pull_request:
@@ -49,7 +56,12 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@v0.7.0
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@34895e207cccbc3bcc942fd8d05a6dd3773573c2 # v0.10.0
+        with:
+          # The SHA pins the ACTION; this pins the BINARY. Without it the action
+          # defaults to `version: latest` and resolves the newest release at run
+          # time, so the "reproducible engine" below floats with every release.
+          version: v0.10.0
 
       # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
       # tool subprocesses, which removes GH_TOKEN from the `gh pr diff/view/review`
@@ -57,11 +69,14 @@ jobs:
       # the value is still a scrub needle, so it stays redacted from the exported
       # bundle.
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN --export "$RUNNER_TEMP/pr-review.fragua"
+        run: fragua ci pr_review_nojudge --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The judge steps (scope / verify / verdict) call TypeSafe's Jev; without
+          # this the run halts at `scope` with "provider typesafe not credentialed".
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           GH_TOKEN: ${{ github.token }} # exempted via --allow-env for gh; still a scrub needle
 
       # No manual scrubbing step: `fragua ci`'s CI profile scrubs the bundle at

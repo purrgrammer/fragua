@@ -20,6 +20,7 @@ import {
   getRetry,
   goalGateOutcomeKey,
   goalGateStep,
+  isTerminalNextNode,
   OPERATOR_NOTES_KEY,
   OPERATOR_NOTES_MAX_BYTES,
   PAUSE_AFTER_DISPATCH_KEY,
@@ -402,11 +403,7 @@ export function applyGoalGate(args: {
   if (result.kind === "transition") {
     const completedNode = graph?.nodes[currentNode];
     if (graph != null && completedNode != null) {
-      const isTerminalNext =
-        result.nextNode === "__end__" ||
-        result.nextNode === "end" ||
-        result.nextNode === "done" ||
-        (result.nextNode != null && graph.nodes[result.nextNode]?.type === "exit");
+      const isTerminalNext = result.nextNode != null && isTerminalNextNode(result.nextNode, graph);
       // Synthetic outcome map: prior gates from routing + this turn's gate.
       const priorOutcomes = readGateOutcomes(state.routing);
       const synthOutcomes = new Map(priorOutcomes);

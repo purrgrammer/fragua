@@ -940,9 +940,11 @@ export interface IEventReader {
 
   // ─── Per-run aggregates
   /**
-   * Per-`llm.start` window summed cost / token totals plus the matching
-   * last `llm.done` (endedAt + stopReason). The window is
-   * `[this llm.start, next llm.start for the same nodeId)` so
+   * Per step-opener window (`llm.start` for an agent turn, `judge.requested`
+   * for a judge call) summed cost / token totals plus the matching last
+   * `llm.done` / `judge.answered` (endedAt + stopReason; `stopReason` is
+   * always null for a judge, which has no stop reason). The window is
+   * `[this opener, next opener for the same nodeId)` so
    * `cost.recorded` events that fire after `llm.done` (one llm.start
    * opens the step; the agent emits multiple message_end → cost.recorded
    * inside it on tool-using turns) still attribute to the right step.

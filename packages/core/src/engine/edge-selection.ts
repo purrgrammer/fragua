@@ -16,6 +16,16 @@ import type { Outcome } from "../types/outcome.ts";
 
 export type EdgeSelectionRule = "route" | "outcome";
 
+/** Does a transition to `nextNode` end the run? `__end__` is the executor's
+ * sentinel; `exit` is the reserved sink (parser E028 pins the name to
+ * `type: exit`, so the name alone suffices when no graph is in hand). No
+ * other name is terminal — a step called `done` or `end` is an ordinary
+ * step and must dispatch. */
+export function isTerminalNextNode(nextNode: string, graph: Graph | null): boolean {
+  if (nextNode === "__end__" || nextNode === "exit") return true;
+  return graph?.nodes[nextNode]?.type === "exit";
+}
+
 export interface EdgeSelection {
   edge: Edge;
   rule: EdgeSelectionRule;

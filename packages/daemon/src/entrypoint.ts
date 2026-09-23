@@ -22,6 +22,7 @@ export interface DaemonMainOpts {
   dispatcher: Dispatcher;
   tools: coreHandler.ToolRegistry;
   llmCall: coreHandler.LlmCallFn;
+  judgeClient?: coreHandler.JudgeClient;
   maxConcurrentRuns?: number;
   pid?: number;
   hostname?: string;
@@ -201,6 +202,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         maxConcurrentRuns: opts.maxConcurrentRuns ?? DEFAULT_CONCURRENCY,
         shutdownSignal: ctrl.signal,
       };
+      if (opts.judgeClient) executorOpts.judgeClient = opts.judgeClient;
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
       if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
       if (opts.graphLoader) executorOpts.graphLoader = opts.graphLoader;

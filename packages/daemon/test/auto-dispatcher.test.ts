@@ -59,6 +59,27 @@ steps:
     store.close();
   });
 
+  test("judge nodes resolve to a halting stub until the handler lands", async () => {
+    const src = `name: t
+steps:
+  j:
+    type: judge
+    state: x
+    questions:
+      ok: {type: noul, instructions: ok?}
+    next: exit
+`;
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", src, serializeGraph(parseWorkflow(src)), CURRENT_IR_VERSION);
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    const spec = dispatcher.get("sha", "j");
+    expect(spec.kind).toBe("judge");
+    const result = await spec.handler({} as never);
+    expect(result).toMatchObject({ kind: "halt", reason: "error" });
+    store.close();
+  });
+
   test("human node text comes from attrs.text", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(

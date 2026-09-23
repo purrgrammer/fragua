@@ -253,3 +253,38 @@ export function selectActiveThreads(db: Database): Array<{ runId: string; thread
   }
   return out;
 }
+
+/** One recorded judge call: the node that asked, the workflow it belongs to,
+ *  and the serialised `judge_node` message carrying the answers. Powers
+ *  `fragua judge calibrate`, which reads the answers back out of history to
+ *  show where a gate's reads actually landed relative to its authored bound. */
+export interface JudgeAnswerRow {
+  runId: string;
+  nodeId: string | null;
+  workflowName: string | null;
+  workflowSha: string;
+  content: string;
+}
+
+// `run_state.workflow_name` is the display label and is null for a run
+// enqueued straight from a file path, so fall back to the name minted with the
+// workflow itself — otherwise an ad-hoc run is invisible to a name filter.
+const SELECT_JUDGE_MESSAGES_SQL = `
+  SELECT m.run_id                              AS runId,
+         m.node_id                             AS nodeId,
+         COALESCE(rs.workflow_name, w.name)    AS workflowName,
+         rs.workflow_sha                       AS workflowSha,
+         m.content                             AS content
+    FROM messages m
+    JOIN run_state rs ON rs.run_id = m.run_id
+    LEFT JOIN workflows w ON w.sha = rs.workflow_sha
+   WHERE m.role = 'judge_node'
+     AND (?1 IS NULL OR COALESCE(rs.workflow_name, w.name) = ?1)
+   ORDER BY m.run_id, m.ordinal
+`;
+
+/** Every `judge_node` message in the store, optionally narrowed to one
+ *  workflow by its display name. */
+export function selectJudgeMessages(db: Database, workflowName?: string): JudgeAnswerRow[] {
+  return db.query<JudgeAnswerRow, [string | null]>(SELECT_JUDGE_MESSAGES_SQL).all(workflowName ?? null);
+}

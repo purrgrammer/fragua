@@ -36,7 +36,7 @@ export interface AutoDispatcherOpts {
   /** Per-kind fallback `maxMs` when the workflow node declares neither
    * `timeout` nor `max_ms`. Keyed by handler kind (`llm`, `tool`).
    * Absent kind → handler's own built-in default applies. */
-  defaultMaxMs?: { llm?: number; tool?: number };
+  defaultMaxMs?: { llm?: number; tool?: number; judge?: number };
 }
 
 /**
@@ -125,11 +125,18 @@ function specsForGraph(
     const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
     try {
-      const fallback = kind === "llm" ? defaultMaxMs?.llm : kind === "tool" ? defaultMaxMs?.tool : undefined;
+      const fallback =
+        kind === "llm"
+          ? defaultMaxMs?.llm
+          : kind === "tool"
+            ? defaultMaxMs?.tool
+            : kind === "judge"
+              ? defaultMaxMs?.judge
+              : undefined;
       resolvedMaxMs = resolveMaxMs(node.attrs, fallback);
     } catch (err) {
       if (err instanceof InvalidDurationError) {
-        specs.set(node.id, malformedTimeoutSpec(node.id, err.message));
+        specs.set(node.id, errorSpec(kind, node.id, err.message));
         continue;
       }
       throw err;
@@ -148,28 +155,18 @@ function specsForGraph(
   return specs;
 }
 
-function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
+/** A spec whose only job is to halt the run with a clean, named error — for a
+ * node whose attrs failed to resolve at dispatch (malformed timeout, a judge
+ * missing its blocks, a human step with no usable routes). */
+function errorSpec(kind: string, nodeId: string, message: string): HandlerSpec {
   return {
-    kind: "llm",
+    kind,
     sideEffect: "none",
     maxMs: 50,
     handler: async () => ({
       kind: "halt",
       reason: "error",
-      detail: `node "${nodeId}": ${message}`,
-    }),
-  };
-}
-
-function malformedHumanSpec(nodeId: string, message: string): HandlerSpec {
-  return {
-    kind: "human",
-    sideEffect: "none",
-    maxMs: 50,
-    handler: async () => ({
-      kind: "halt",
-      reason: "error",
-      detail: `human node "${nodeId}": ${message}`,
+      detail: `${kind} node "${nodeId}": ${message}`,
     }),
   };
 }
@@ -178,13 +175,7 @@ function specForNode(
   nodeId: string,
   kind: string,
   edges: Array<{ to: string; label?: string; route?: string }>,
-  attrs: {
-    prompt?: string;
-    label?: string;
-    text?: string;
-    routes?: string[];
-    tool_command?: string;
-  },
+  attrs: NodeAttrs,
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = edges[0]?.to ?? "__end__";
@@ -213,7 +204,7 @@ function specForNode(
           edges: humanEdges,
         });
       } catch (err) {
-        return malformedHumanSpec(nodeId, err instanceof Error ? err.message : String(err));
+        return errorSpec("human", nodeId, err instanceof Error ? err.message : String(err));
       }
     }
     case "tool": {
@@ -245,6 +236,29 @@ function specForNode(
         maxMs: 50,
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
+    case "judge": {
+      if (
+        attrs.judge_questions === undefined ||
+        (attrs.judge_state === undefined && attrs.judge_for_each === undefined)
+      ) {
+        return errorSpec("judge", nodeId, "missing judge_state / judge_questions (parsed without validation?)");
+      }
+      const judgeOpts: handler.JudgeConfig = {
+        nodeId,
+        questions: attrs.judge_questions,
+      };
+      if (attrs.judge_state !== undefined) judgeOpts.state = attrs.judge_state;
+      if (attrs.judge_for_each !== undefined) judgeOpts.forEach = attrs.judge_for_each;
+      if (attrs.judge_keep !== undefined) judgeOpts.keep = attrs.judge_keep;
+      if (attrs.judge_review !== undefined) judgeOpts.review = attrs.judge_review;
+      if (attrs.judge_composite !== undefined) judgeOpts.composites = attrs.judge_composite;
+      if (attrs.judge_for_each_max_items !== undefined) judgeOpts.forEachMaxItems = attrs.judge_for_each_max_items;
+      if (attrs.judge_decide !== undefined) judgeOpts.decide = attrs.judge_decide;
+      if (attrs.judge_state_max_bytes !== undefined) judgeOpts.stateMaxBytes = attrs.judge_state_max_bytes;
+      if (typeof attrs.model === "string") judgeOpts.model = attrs.model;
+      if (resolvedMaxMs !== undefined) judgeOpts.maxMs = resolvedMaxMs;
+      return handler.makeJudgeHandler(judgeOpts);
+    }
     default:
       return transitionSpec(kind, first);
   }

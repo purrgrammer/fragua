@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai/compat";
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
+import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 
@@ -40,8 +41,16 @@ const COPILOT_AMBIENT_ENV = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
  * alone. These are the LLM-provider creds fragua reads directly; they must never
  * reach a tool subprocess. (`_API_KEY` covers the shape virtually every provider
  * key follows; the explicit names cover non-`_API_KEY` creds like the OAuth token.)
+ *
+ * `TYPESAFE_API_KEY` is the judge (System One) credential. That provider is not
+ * in pi-ai's registry at all, so the context builder can never name it however
+ * late it runs — this set is the only thing that refuses it.
  */
-const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]);
+const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "TYPESAFE_API_KEY",
+]);
 
 // ---------------------------------------------------------------------------
 // CI env secret capture
@@ -367,6 +376,12 @@ export function daemonEnvDeny(
   return { names, predicate: ciEnvDenyPredicate(passthrough, ctx), passthrough };
 }
 
+/** Judge (System One) provider — not in pi-ai's registry, so its env var is
+ * seeded explicitly alongside the pi-ai providers. */
+const JUDGE_ENV: ReadonlyArray<readonly [provider: string, envVar: string]> = [
+  [JUDGE_DEFAULT_PROVIDER, "TYPESAFE_API_KEY"],
+];
+
 /**
  * Validate a `--allow-env` request: return the names that must NOT be exempted
  * from the CI env-strip. A provider-credential var (e.g. `ANTHROPIC_API_KEY`,
@@ -440,6 +455,12 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
       const sources = findEnvKeys(provider) ?? [];
       if (sources.every((s) => COPILOT_AMBIENT_ENV.has(s))) continue;
     }
+    auth.set(provider, { type: "api_key", key });
+    seeded.push(provider);
+  }
+  for (const [provider, envVar] of JUDGE_ENV) {
+    const key = process.env[envVar];
+    if (!key) continue;
     auth.set(provider, { type: "api_key", key });
     seeded.push(provider);
   }

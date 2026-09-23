@@ -74,6 +74,20 @@ confirm which one resolved.
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+### Judge provider (TypeSafe Jev)
+
+Workflows with `type: judge` steps need the judge provider's key alongside the
+LLM provider's. It is seeded the same way — env at startup, `creds seeded for
+typesafe` in the log — and, like every provider credential, is refused by
+`--allow-env` and scrubbed from the exported bundle:
+
+```yaml
+- run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+```
+
 ### Anthropic OAuth token (Claude subscription)
 
 Use a long-lived OAuth token from `claude setup-token` instead of an API key.

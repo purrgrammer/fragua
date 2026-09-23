@@ -905,6 +905,64 @@ steps:
     r.store.close();
   });
 
+  test("raise & resume on a fan-out budget pause lands the override on the first commit and proceeds (no livelock)", async () => {
+    // Observed in production: a budget pause inside `review_lenses`, then
+    // `intent.budget_adjusted` + `intent.resume`. The fan-out entry's cold
+    // budget barrier read the DURABLE routing (no override yet), re-paused
+    // with the stale cap, and the park commit carried no fold — so the
+    // watermark never advanced and wake-pending re-resumed forever (1,600+
+    // pause/resume cycles). The barrier must see the turn's routingDelta and
+    // the park must consume the fold.
+    const r = rig({ yaml: BUDGET_FANOUT_YAML });
+    const seen: Record<string, number> = {};
+    const c = counter(seen, "a_scan", "a_verify", "b_scan", "synth");
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    const spend = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => {
+          c[id]?.();
+          return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
+        },
+      });
+    for (const id of ["a_scan", "a_verify", "b_scan", "synth"]) spend(id);
+    enqueue(r, "bfo-raise", "begin");
+
+    await drive(r, "bfo-raise");
+    expect(r.store.getState("bfo-raise")!.status).toBe("paused");
+
+    // Operator: raise the node cap well above the closure's total, then resume.
+    r.store.appendIntent("bfo-raise", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 1 },
+    });
+    r.store.appendIntent("bfo-raise", { type: "intent.resume", payload: {} });
+    wakePending(r.store);
+    expect(r.store.getState("bfo-raise")!.status).toBe("queued");
+
+    await drive(r, "bfo-raise");
+    const final = r.store.getState("bfo-raise")!;
+    expect(final.status).toBe("completed");
+    // The override landed durably …
+    expect(final.routing["budget_override.node.cost"]).toBe(1);
+    // … exactly one pause and one resume: no re-pause at the stale cap, no
+    // re-resume of the same intent.
+    const types = r.store.getEvents("bfo-raise").map((e) => e.type);
+    expect(types.filter((t) => t === "fact.run_paused")).toHaveLength(1);
+    expect(types.filter((t) => t === "fact.run_resumed")).toHaveLength(1);
+    // … and the resume intent is applied (watermark advanced past it).
+    expect(r.store.getUnappliedIntents("bfo-raise")).toHaveLength(0);
+    expect(seen["synth"]).toBe(1);
+    r.store.close();
+  });
+
   test("a parallel node crossing 80% of its max-cost emits budget.warn ONCE (not silent, not repeated)", async () => {
     const r = rig({
       yaml: `name: wfo

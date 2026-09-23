@@ -3,6 +3,7 @@
 // a HandlerContext.
 
 import type { AgentMessage } from "@fragua/types";
+import type { JudgeClient } from "../handler/judge-contract.ts";
 import type { BudgetSnapshotInput } from "../handler/types.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
@@ -59,6 +60,10 @@ export interface LlmInput {
    * file loads instead of falling back to its construction-time env.
    * This is how per-run worktree isolation reaches the agent. */
   env?: ExecutionEnvironment;
+  /** The run's System One client, when a judge provider is credentialed.
+   * Reaches the `judge` agent tool through the per-node tool context; when
+   * absent the backend strips that tool from the toolset. */
+  judge?: JudgeClient;
   /** Snapshot of the budget state as of the start of this dispatch.
    * The executor computes this from `run_state.metrics` + the graph /
    * node ceilings; the backend embeds it verbatim into `llm.start.budget`

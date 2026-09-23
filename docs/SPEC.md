@@ -82,6 +82,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 | `llm` | LLM call (the implicit default when `type:` is omitted) |
 | `human` | operator-gated routing |
 | `tool` | graph-level shell step (`run:`) |
+| `judge` | turn-less typed judgment: `state:` + `questions:` (`choice` / `score` / `noul`) asked of a System One model in one call; outputs derived from the questions; optional `decide:` binds a `choice` to route-case edge selection or a `noul` to `success` / `fail`; `for-each:` asks every question once per item of an array output in one call and `keep:` splits the list into typed `kept` / `dropped`; `composite:` declares weighted means over `noul` / `score` answers as `number` outputs that `decide.outcome` / `keep` may threshold (see [`proposals/judge-step.md`](proposals/judge-step.md)) |
 | `parallel` | fork-all into ≥2 concurrent branch sub-pipelines, joined by `wait_all` (§3.1.1) |
 | `exit` | reserved graceful-halt sink |
 
@@ -101,7 +102,13 @@ This is a **topology** change, not a second scheduler — three properties make 
 
 The branch set is **static per run** — materialised at parse time, never grown during dispatch. A dynamic ("fork N at runtime") variant, if ever added, would still materialise the full branch set *before* executing the region (plan-time), never stream branches mid-dispatch — static-per-run is what keeps the possibility space, and the log, a pure fold. `parallel` is composition *within* a run; composition across *runs* still happens via separate runs sharing artifacts. Well-formedness is enforced by validator codes E036–E045 (ARCH §6.2). See [`docs/proposals/archive/fan-out-nodes.md`](proposals/archive/fan-out-nodes.md) for the execution model.
 
-Loops are **backward edges** bounded by `max-retries` on the target node — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, and its `max-retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`). The `retry: <step>` shorthand collapses the goal-gate-and-retarget idiom into one line.
+Loops are **backward edges** — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, or declares `retry: <step>`, which compiles to `goal_gate: true` + `retry_target: <step>`.
+
+**Only the goal-gate form is bounded by `max-retries`.** The per-node counter (`internal.retry_count.<node>`) is bumped in exactly one place — the retry gate, which runs when a handler returns `outcomeStatus: "retry"` — and is **reset to 0 whenever the node succeeds**. A goal gate produces that outcome, so its loop is capped and the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise via `intent.max_retries_adjusted`).
+
+A plain `on: {fail: <step>}` back-edge does **not** produce a `retry` outcome — a `tool` step yields `success`/`fail` from its exit code, and edge selection simply routes. So the counter is never bumped, and if the edge's target succeeds on each pass it is also reset every time. `max-retries` on such a node is inert: the cycle is bounded only by the run `budget` and the executor's per-run dispatch ceiling (`max_loops`, default 1000, raisable via `intent.max_loops_adjusted`), both of which surface as operator gates rather than a clean halt.
+
+> Status: known gap. The bound authors most often want — "cap this check→fix cycle" — is not expressible on a plain back-edge today. Either the retry gate should count fail-edge re-entries, or `max-loops` should become authorable per workflow. Until one of those lands, prefer `retry:` when you need a cap.
 
 Workflows are uploaded via `POST /workflows { name, source }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha; `workflow_sha` is pinned at enqueue time.
 
@@ -191,7 +198,7 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`).
 
-**Route case** — when the source node declares `routes:`, it is a *routing node*. The llm backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
+**Route case** — when the source node declares `routes:`, it is a *routing node*. For an `llm` node the backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. For a `judge` node the route is the `choice` answer named by `decide.route` (or its `below:` landing when a declared `min-confidence` / `min-probability` floor fails) — no tool, no turn. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 

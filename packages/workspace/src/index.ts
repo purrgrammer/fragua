@@ -4,6 +4,7 @@ export * from "./edit-diff.ts";
 export * from "./find.ts";
 export * from "./grep.ts";
 export * from "./ignore.ts";
+export * from "./judge-tool.ts";
 export * from "./local-env.ts";
 export * from "./ls.ts";
 export * from "./mcp/index.ts";

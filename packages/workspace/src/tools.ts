@@ -461,6 +461,7 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
 };
 
 import { abortTool } from "./abort-tool.ts";
+import { judgeTool } from "./judge-tool.ts";
 import { skillTool } from "./skill-tool.ts";
 import { webFetchTool } from "./web-fetch.ts";
 
@@ -482,6 +483,7 @@ export const CORE_TOOLS: AnyTool[] = [
   findTool,
   lsTool,
   webFetchTool,
+  judgeTool,
   skillTool,
   abortTool,
 ];

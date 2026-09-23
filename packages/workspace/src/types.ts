@@ -6,7 +6,7 @@
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@fragua/core";
-import type { HttpClient } from "@fragua/core/handler";
+import type { HttpClient, JudgeClient } from "@fragua/core/handler";
 import type { Skill } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 
@@ -25,6 +25,9 @@ export interface FraguaToolContext {
   /** The run's resolved skill catalog. The `skill` tool resolves its
    *  `name` argument against this set. */
   readonly skillCatalog?: readonly Skill[];
+  /** The run's System One client, when a judge provider is credentialed. The
+   *  `judge` tool calls it; the backend drops the tool when this is absent. */
+  readonly judge?: JudgeClient;
 }
 
 /** Per-tool truncation policy (applied before the value goes to the LLM). */

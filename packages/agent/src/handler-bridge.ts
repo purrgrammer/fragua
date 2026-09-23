@@ -230,6 +230,7 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
+      ...(ctx.judge !== undefined ? { judge: ctx.judge } : {}),
       ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
       persistMessage: (message) => {
         // Dedup system + initial-user messages against the most
@@ -401,9 +402,14 @@ function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): read
   const byNode = graphLevel.filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : graphLevel;
   if (rows.length === 0) return undefined;
-  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
+  const messages = rows.map((row) => row.content).filter((m) => !NON_LLM_CONTEXT_ROLES.has(m.role));
   return messages.length > 0 ? messages : undefined;
 }
+
+/** Rows persisted for the operator / the UI, never for the model: the
+ * re-seeded system prompt, tool-node captures, judge answers. Both hydration
+ * paths drop exactly this set. */
+const NON_LLM_CONTEXT_ROLES: ReadonlySet<string> = new Set(["system", "tool_node", "judge_node"]);
 
 // Hydration source for a synthetic per-node thread: this node's own rows
 // for the current iteration. Iteration-scoped so a resumed dispatch restores
@@ -416,7 +422,7 @@ function loadPriorMessagesForNode(ctx: HandlerContext, pass: number): readonly A
     .since(0)
     .filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass);
   if (rows.length === 0) return undefined;
-  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
+  const messages = rows.map((row) => row.content).filter((m) => !NON_LLM_CONTEXT_ROLES.has(m.role));
   return messages.length > 0 ? messages : undefined;
 }
 

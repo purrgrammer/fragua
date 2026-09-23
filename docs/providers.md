@@ -35,6 +35,17 @@ Omit `model:` and fragua uses that provider's default (see
 pi-ai's registry before starting — bad combos fail immediately with a
 list of valid ids, not after 30 retries.
 
+## The judge provider
+
+`type: judge` steps do not use an inference provider. They call a System One
+model — TypeSafe's Jev — through the `typesafe` provider id: one endpoint,
+typed `choice` / `score` / `noul` answers with probabilities, no chat, no
+tools. It never enters the model registry (`fragua providers ls` lists it only
+once credentialed), it takes no `model:` beyond `jev-latest` / `jev-preview`,
+and it is billed per input token only. Credential: `fragua providers add
+typesafe`; smoke test: `fragua providers test typesafe` (one `noul` call,
+prints the resolved model id and latency). In CI: `TYPESAFE_API_KEY`.
+
 ## Credentials
 
 Credentials live in the global fragua store (`~/.fragua/fragua.db`,

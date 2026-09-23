@@ -4,17 +4,19 @@
 # the inbox, where the per-bump rationale lives in the run transcript.
 #
 # Shape:
-#   update → changed? → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
-#               ↓none      ↑retry            ↓fail   ↓fail
-#              exit        update             fix ←───┘ → typecheck
+#   update → changed? → lockfile_check → manifest_rules → review → typecheck → ci → exit   (green ⇒ done, uncommitted)
+#               ↓none         ↓fail       ↑retry            ↓fail   ↓fail
+#              exit          update       update             fix ←───┘ → typecheck
 #
 # Principles:
 #   - `update` touches MANIFESTS ONLY (package.json + lockfile). Adapting source
 #     to a new API is the downstream `fix` step's job — keeps the bump diff
 #     reviewable and the gate's job crisp.
-#   - `review` is an independent judge: it reads the manifest diff fresh (exact
-#     pins, scope respected, no `workspace:` deps touched), never the author's
-#     reasoning. REJECT is a goal-gate retarget back to `update`.
+#   - `review` is an independent judge — literally a `judge` step over the
+#     manifest diff a tool step materialises (exact pins, scope respected, no
+#     `workspace:` deps touched), never the author's reasoning; the lockfile
+#     consistency check is the tool step itself (`bun install --frozen-lockfile`).
+#     A failed gate is a goal-gate retarget back to `update`.
 #   - `update` + `fix` share `thread: bump` so the fixer sees WHICH deps moved
 #     and the stated breaking changes; the type/CI gates re-derive from the env.
 #   - "Nothing in scope to update" is a graceful no-op → `exit`, not a halt —
@@ -67,27 +69,59 @@ steps:
     type: tool
     run: test -n "$(git status --porcelain)"
     on:
-      success: review
+      success: lockfile_check
       fail: exit
 
-  review:
-    type: llm
-    retry: update
-    max-retries: 2
+  lockfile_check:                      # (d) of the old review prompt is a command, so it is a tool step: a stale lockfile fails here
+    type: tool
+    run: |
+      set -eu
+      out=.fragua/scratch/deps
+      rm -rf "$out" && mkdir -p "$out"
+      git diff HEAD --stat > "$out/stat.txt"
+      git diff HEAD -- '*package.json' '**/package.json' > "$out/manifests.diff"
+      bun install --frozen-lockfile
+    on:
+      success: manifest_rules
+      # NOT capped by max-retries (SPEC §3.5): the retry counter is bumped only
+      # on outcomeStatus="retry", a tool step yields success|fail, and the
+      # counter resets on success — which `update` produces each pass. So this
+      # back-edge and manifest_rules' below are bounded only by `budget` (6.00,
+      # policy pause) and the executor's 1000-dispatch ceiling — operator gates.
+      fail: update                     # lockfile drifted from the manifests ⇒ back to update
+
+  manifest_rules:                      # (a)(b)(c) are a regex, a semver comparison, and a path filter — code, not judgment
+    type: tool
+    # Pass the scratch dir explicitly rather than leaning on the script's
+    # default: `lockfile_check` writes it, this script reads it, and the
+    # `review` judge reads a `{file:}` under it. Renaming it in one place
+    # silently gave zero violations and a missing judge file — no error.
+    run: bun .fragua/scripts/dependencies/check-manifests.ts ${{ inputs.scope }} .fragua/scratch/deps
+    on:
+      success: review
+      fail: update                     # a range, an out-of-scope bump, or a stray file ⇒ back to update, stderr names the rule
+
+  review:                              # the one question that needs reading — a pure producer, no gate
+    type: judge
+    state:
+      scope:     ${{ inputs.scope }}
+      manifests: {file: .fragua/scratch/deps/manifests.diff}
+    questions:
+      breaking_risk:
+        type: score
+        instructions: How likely is it that a bump in `manifests` carries a known breaking change a consumer must adapt to?
+        criteria:
+          - none — patch-level or clearly additive bumps only
+          - possible — a minor bump on a library with a history of behavioural changes
+          - likely — a major bump, or a bump across a documented breaking release
     next: typecheck
-    allowed-tools: [read, grep, bash]
-    prompt: |
-      Judge `git diff HEAD` — the dependency bumps only (package.json files + lockfile). Fresh read; ignore any prose, trust the diff.
-        (a) every changed pin is EXACT — no `^` / `~` / ranges.
-        (b) each bump respects scope `${{ inputs.scope }}` (no surprise majors when scope is patch/minor).
-        (c) no `workspace:` internal dep altered; no source files changed.
-        (d) the lockfile is consistent with the manifest edits (`bun install --frozen-lockfile` succeeds).
-      Call out any major with known breaking changes in your one line.
-      `APPROVE: <one line>`, or `abort` with `REJECT: <one line>`.
 
   typecheck:
     type: tool
     run: bun run typecheck
+    # Inert today: max-retries bounds only a goal-gate (`retry:`) loop, not a
+    # plain `on: {fail:}` back-edge (SPEC §3.5). Kept as the intended bound for
+    # when that gap closes; the live bounds are `budget` and max_loops.
     max-retries: 3
     on:
       success: ci
@@ -96,6 +130,9 @@ steps:
   ci:
     type: tool
     run: bun run ci
+    # Inert today: max-retries bounds only a goal-gate (`retry:`) loop, not a
+    # plain `on: {fail:}` back-edge (SPEC §3.5). Kept as the intended bound for
+    # when that gap closes; the live bounds are `budget` and max_loops.
     max-retries: 5
     on:
       success: exit

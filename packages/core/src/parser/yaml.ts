@@ -90,6 +90,7 @@
 
 import * as YAML from "yaml";
 import { OutputsProfileError, parseOutputsDecl, parseProfileNode } from "../engine/outputs-profile.ts";
+import { outputReferences } from "../engine/outputs-substitution.ts";
 import type {
   Edge,
   EdgeAttrs,
@@ -101,6 +102,20 @@ import type {
   NodeType,
   RunOutputDecl,
 } from "../types/graph.ts";
+import { deriveJudgeOutputs } from "../types/judge.ts";
+import { resolveOutputProfile } from "../types/outputs.ts";
+import {
+  JudgeParseError,
+  parseJudgeComposite,
+  parseJudgeDecide,
+  parseJudgeForEach,
+  parseJudgeForEachMaxItems,
+  parseJudgeKeep,
+  parseJudgeQuestions,
+  parseJudgeReview,
+  parseJudgeState,
+  parseJudgeStateMaxBytes,
+} from "./judge.ts";
 
 export type { InputDecl } from "../types/graph.ts";
 
@@ -115,7 +130,7 @@ export class ParseError extends Error {
   }
 }
 
-const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit", "parallel"] as const);
+const KNOWN_TYPES: ReadonlySet<NodeType> = new Set(["llm", "human", "tool", "exit", "parallel", "judge"] as const);
 
 // ---- Authoring-key → IR-key rename table ------------------------------
 //
@@ -168,7 +183,44 @@ const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
 export const DEFAULT_TOOL_MAX_MS = 5 * 60 * 1000;
 
 // Keys consumed by the parser at the step level (not stored in attrs):
-const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes", "outputs"]);
+const STEP_RESERVED = new Set([
+  "type",
+  "next",
+  "on",
+  "routes",
+  "retry",
+  "timeout-minutes",
+  "outputs",
+  "state",
+  "questions",
+  "decide",
+  "state-max-bytes",
+  "for-each",
+  "keep",
+  "review",
+  "for-each-max-items",
+  "composite",
+]);
+
+/** Step keys a `judge` may not carry — they configure an agent turn it never runs. */
+const JUDGE_FORBIDDEN_IR_ATTRS: ReadonlySet<string> = new Set([
+  "prompt",
+  "text",
+  "system_prompt",
+  "context_files",
+  "thread_id",
+  "summary",
+  "reasoning_effort",
+  "allowed_tools",
+  "denied_tools",
+  "mcp_servers",
+  "skills",
+  "skills_disabled",
+  "tool_command",
+  "branches",
+  "concurrency",
+]);
+const JUDGE_ONLY_STEP_KEYS = ["state", "questions", "decide", "state-max-bytes"] as const;
 // Keys consumed at the graph level (not stored in attrs):
 const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults", "outputs"]);
 
@@ -414,6 +466,150 @@ function parseDefaults(node: unknown, lineCounter: YAML.LineCounter): Record<str
   return out;
 }
 
+// ---- Judge blocks -------------------------------------------------------
+
+function parseJudgeBlocks(
+  stepId: string,
+  body: YAML.YAMLMap,
+  attrs: Record<string, unknown>,
+  lineCounter: YAML.LineCounter,
+): void {
+  for (const k of Object.keys(attrs)) {
+    if (JUDGE_FORBIDDEN_IR_ATTRS.has(k)) {
+      const authored = Object.entries(STEP_KEY_TO_IR).find(([, ir]) => ir === k)?.[0] ?? k;
+      throw new ParseError(
+        `judge step "${stepId}" declares \`${authored}:\` — a judge runs no agent turn; it takes \`state:\` + \`questions:\` (+ \`decide:\`) only`,
+        ...locArr(locOf(body.get(authored, true) ?? body, lineCounter)),
+      );
+    }
+  }
+  const block = (key: string): { node: unknown; raw: unknown } => {
+    const node = body.get(key, true);
+    return { node, raw: YAML.isNode(node) ? node.toJSON() : scalarValue(node) };
+  };
+  const lift = <T>(key: string, node: unknown, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof JudgeParseError) {
+        throw new ParseError(
+          `judge step "${stepId}" \`${key}:\` — ${err.message}`,
+          ...locArr(locOf(node ?? body, lineCounter)),
+        );
+      }
+      throw err;
+    }
+  };
+
+  const forEach = block("for-each");
+  if (forEach.node !== undefined) {
+    attrs["judge_for_each"] = lift("for-each", forEach.node, () => parseJudgeForEach(forEach.raw));
+  }
+
+  const state = block("state");
+  if (state.node === undefined && forEach.node === undefined) {
+    throw new ParseError(`judge step "${stepId}" needs a \`state:\` block`, ...locArr(locOf(body, lineCounter)));
+  }
+  if (state.node !== undefined) attrs["judge_state"] = lift("state", state.node, () => parseJudgeState(state.raw));
+
+  const questions = block("questions");
+  if (questions.node === undefined) {
+    throw new ParseError(`judge step "${stepId}" needs a \`questions:\` block`, ...locArr(locOf(body, lineCounter)));
+  }
+  const parsedQuestions = lift("questions", questions.node, () => parseJudgeQuestions(questions.raw));
+  attrs["judge_questions"] = parsedQuestions;
+
+  const composite = block("composite");
+  const composites =
+    composite.node === undefined ? [] : lift("composite", composite.node, () => parseJudgeComposite(composite.raw));
+  if (composite.node !== undefined) attrs["judge_composite"] = composites;
+
+  const keep = block("keep");
+  if (keep.node !== undefined) {
+    if (forEach.node === undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares \`keep:\` without \`for-each:\` — keep is the per-item decision of a list judge`,
+        ...locArr(locOf(keep.node, lineCounter)),
+      );
+    }
+    attrs["judge_keep"] = lift("keep", keep.node, () => parseJudgeKeep(keep.raw));
+  }
+
+  const review = block("review");
+  if (review.node !== undefined) {
+    if (keep.node === undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares \`review:\` without \`keep:\` — the review band sits between kept and dropped`,
+        ...locArr(locOf(review.node, lineCounter)),
+      );
+    }
+    attrs["judge_review"] = lift("review", review.node, () => parseJudgeReview(review.raw));
+  }
+
+  const decide = block("decide");
+  if (decide.node !== undefined) {
+    if (forEach.node !== undefined) {
+      throw new ParseError(
+        `judge step "${stepId}" declares both \`for-each:\` and \`decide:\` — a list judge decides per item with \`keep:\`; a run-level decision over the list is a second judge or the consumer's threshold`,
+        ...locArr(locOf(decide.node, lineCounter)),
+      );
+    }
+    attrs["judge_decide"] = lift("decide", decide.node, () => parseJudgeDecide(decide.raw));
+  }
+
+  const maxItems = block("for-each-max-items");
+  if (maxItems.node !== undefined && forEach.node === undefined) {
+    throw new ParseError(
+      `judge step "${stepId}" declares \`for-each-max-items:\` without \`for-each:\``,
+      ...locArr(locOf(maxItems.node, lineCounter)),
+    );
+  }
+  if (forEach.node !== undefined) {
+    attrs["judge_for_each_max_items"] = lift("for-each-max-items", maxItems.node, () =>
+      parseJudgeForEachMaxItems(maxItems.raw),
+    );
+  }
+
+  // A plain judge's outputs derive from its questions alone. A `for-each`
+  // judge's `kept` / `dropped` carry the producer's item fields, which are
+  // known only once every step is parsed — `attachForEachOutputs` fills them.
+  attrs["outputs"] =
+    forEach.node === undefined
+      ? deriveJudgeOutputs(parsedQuestions, undefined, composites)
+      : deriveJudgeOutputs(
+          parsedQuestions,
+          { itemProfile: undefined, keep: keep.node !== undefined, review: review.node !== undefined },
+          composites,
+        );
+
+  const smb = block("state-max-bytes");
+  attrs["judge_state_max_bytes"] = lift("state-max-bytes", smb.node, () => parseJudgeStateMaxBytes(smb.raw));
+}
+
+/** Second pass for `for-each` judges: type `kept` / `dropped` items with the
+ * producer's declared item profile. An unresolvable reference leaves the
+ * fallback decl in place — the validator names the problem (E049). */
+function attachForEachOutputs(nodes: Record<string, Node>): void {
+  for (const n of Object.values(nodes)) {
+    if (n.type !== "judge") continue;
+    const ref = n.attrs.judge_for_each;
+    const questions = n.attrs.judge_questions;
+    if (ref === undefined || questions === undefined) continue;
+    const parsed = outputReferences(ref)[0];
+    const producer = parsed === undefined ? undefined : nodes[parsed.producer];
+    const profile =
+      parsed === undefined || producer?.attrs.outputs === undefined
+        ? undefined
+        : resolveOutputProfile(producer.attrs.outputs, parsed.path);
+    const itemProfile = profile !== undefined && profile.kind === "array" ? profile.items : undefined;
+    n.attrs.outputs = deriveJudgeOutputs(
+      questions,
+      { itemProfile, keep: n.attrs.judge_keep !== undefined, review: n.attrs.judge_review !== undefined },
+      n.attrs.judge_composite ?? [],
+    );
+  }
+}
+
 // ---- Top-level parser -------------------------------------------------
 
 export function parseWorkflow(source: string): Graph {
@@ -512,7 +708,7 @@ export function parseWorkflow(source: string): Graph {
     const typeStr = typeof typeRaw === "string" ? typeRaw : "llm"; // implicit llm
     if (!KNOWN_TYPES.has(typeStr as NodeType)) {
       throw new ParseError(
-        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit / parallel)`,
+        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit / parallel / judge)`,
         ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
@@ -675,6 +871,21 @@ export function parseWorkflow(source: string): Graph {
       }
     }
 
+    // ---- judge blocks (state / questions / decide) ----
+    if (nodeType === "judge") {
+      parseJudgeBlocks(stepId, body, attrs, lineCounter);
+    } else {
+      for (const k of JUDGE_ONLY_STEP_KEYS) {
+        const n = body.get(k, true);
+        if (n !== undefined) {
+          throw new ParseError(
+            `step "${stepId}" declares \`${k}:\` but has type "${nodeType}" — \`${k}:\` is only supported on \`judge\` steps`,
+            ...locArr(locOf(n, lineCounter)),
+          );
+        }
+      }
+    }
+
     // ---- mcp-servers (llm steps only) ----
     if (attrs["mcp_servers"] !== undefined && nodeType !== "llm") {
       const mcpNode = body.get("mcp-servers", true);
@@ -692,6 +903,8 @@ export function parseWorkflow(source: string): Graph {
       loc: locOf(stepBodies.get(stepId), lineCounter),
     };
   }
+
+  attachForEachOutputs(nodes);
 
   // Synthesise the reserved exit sink iff anything routes to it.
   if (needExit && !nodes["exit"]) {

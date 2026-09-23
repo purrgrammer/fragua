@@ -258,6 +258,10 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     return this.repoRoot;
   }
 
+  fileSize(path: string): Promise<number> {
+    return this.local.fileSize(path);
+  }
+
   readFile(path: string): Promise<string> {
     return this.local.readFile(path);
   }

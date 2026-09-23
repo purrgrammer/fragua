@@ -18,6 +18,7 @@ import { doctorCommand } from "../src/commands/doctor.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
+import { judgeCalibrateCommand } from "../src/commands/judge.ts";
 import { mcpCheckCommand, mcpHelp, mcpLoginCommand, mcpLogoutCommand, mcpLsCommand } from "../src/commands/mcp.ts";
 import {
   acceptCommand,
@@ -491,6 +492,30 @@ cli
   .action(async (options: Record<string, unknown>) => {
     const db = typeof options["db"] === "string" ? (options["db"] as string) : undefined;
     const code = await doctorCommand(db !== undefined ? { dbPath: db } : {});
+    process.exit(code);
+  });
+
+cli
+  .command("judge [action] [workflow]", "Judge-step tooling: `calibrate` reports where each gate's answers landed")
+  .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
+  .option("--margin <n>", "calibrate: half-width of the flip-risk window around a bound (default 0.10)")
+  .action(async (action: string | undefined, workflow: string | undefined, options: Record<string, unknown>) => {
+    if (action !== "calibrate") {
+      console.error(action === undefined ? "usage: fragua judge calibrate [workflow]" : `unknown action "${action}"`);
+      process.exit(action === undefined ? 0 : 1);
+    }
+    const db = typeof options["db"] === "string" ? (options["db"] as string) : undefined;
+    const rawMargin = options["margin"];
+    const margin = typeof rawMargin === "string" || typeof rawMargin === "number" ? Number(rawMargin) : undefined;
+    if (margin !== undefined && (!Number.isFinite(margin) || margin < 0 || margin > 1)) {
+      console.error("--margin must be a number in [0, 1]");
+      process.exit(1);
+    }
+    const code = await judgeCalibrateCommand({
+      ...(db !== undefined ? { dbPath: db } : {}),
+      ...(workflow !== undefined ? { workflow } : {}),
+      ...(margin !== undefined ? { margin } : {}),
+    });
     process.exit(code);
   });
 

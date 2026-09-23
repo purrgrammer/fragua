@@ -1,42 +1,55 @@
-// `skill` tool \u2014 wire-level execute() against a stub env + catalogue.
+// `skill` tool — wire-level execute() against a real catalogue on disk.
 // Pins the structured `data` payload that drives the UI's Skill card
-// (rides on tool.execution_end.data.result.details.data).
+// (rides on tool.execution_end.data.result.details.data), and that the
+// tool reads catalogue files where discovery found them — never through
+// the run env, whose path gate would refuse anything outside a worktree.
 
-import { describe, expect, test } from "bun:test";
-import type { ExecutionEnvironment } from "@fragua/core";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalEnvironment } from "../src/local-env.ts";
 import { skillTool } from "../src/skill-tool.ts";
 import type { Skill } from "../src/skills/types.ts";
 import type { FraguaToolContext } from "../src/types.ts";
 
-function skill(name: string, body: string, extras: Partial<Skill> = {}): Skill {
+let skillsRoot: string;
+let runCwd: string;
+
+beforeEach(async () => {
+  skillsRoot = await mkdtemp(join(tmpdir(), "fragua-skills-"));
+  runCwd = await mkdtemp(join(tmpdir(), "fragua-run-"));
+});
+
+afterEach(async () => {
+  await rm(skillsRoot, { recursive: true, force: true });
+  await rm(runCwd, { recursive: true, force: true });
+});
+
+async function skill(name: string, body: string, extras: Partial<Skill> = {}): Promise<Skill> {
+  const dir = join(skillsRoot, name);
+  await mkdir(dir, { recursive: true });
+  const location = join(dir, "SKILL.md");
+  await writeFile(location, body, "utf8");
   return {
     name,
     description: `desc for ${name}`,
-    location: `/abs/${name}/SKILL.md`,
-    skill_dir: `/abs/${name}`,
+    location,
+    skill_dir: dir,
     sha256: "a".repeat(64),
     bytes: body.length,
-    scope: "user",
-    source_dir: "/abs",
+    scope: "project",
+    source_dir: skillsRoot,
     ...extras,
   };
 }
 
-function envFor(files: Record<string, string>): ExecutionEnvironment {
-  // Tool only reads `readFile`; cast the stub through `unknown` so we
-  // don't have to scaffold the rest of the ExecutionEnvironment surface
-  // for a unit test.
-  return {
-    readFile: async (path: string) => {
-      if (path in files) return files[path]!;
-      throw new Error(`ENOENT: ${path}`);
-    },
-  } as unknown as ExecutionEnvironment;
+/** A path-gated env rooted somewhere else — the worktree shape. */
+function env(): LocalEnvironment {
+  return new LocalEnvironment({ cwd: runCwd });
 }
 
 function ctx(catalog: readonly Skill[]): FraguaToolContext {
-  // We don't exercise http in these tests — cast through unknown so we
-  // don't have to scaffold a full HttpClient.
   return {
     runId: "r",
     nodeId: "n",
@@ -48,11 +61,10 @@ function ctx(catalog: readonly Skill[]): FraguaToolContext {
 }
 
 describe("skill tool", () => {
-  test("execute resolves a known skill via fraguaContext.skillCatalog", async () => {
+  test("resolves a catalogue skill that lives outside the run's cwd", async () => {
     const md = `---\nname: frontend\ndescription: React patterns\n---\nuse react`;
-    const env = envFor({ "/abs/frontend/SKILL.md": md });
-    const cat = [skill("frontend", md, { location: "/abs/frontend/SKILL.md", description: "React patterns" })];
-    const out = await skillTool.execute({ name: "frontend" }, env, { fraguaContext: ctx(cat) });
+    const s = await skill("frontend", md, { description: "React patterns" });
+    const out = await skillTool.execute({ name: "frontend" }, env(), { fraguaContext: ctx([s]) });
     expect(out.is_error).toBeFalsy();
     expect(out.text).toContain("# Skill: frontend");
     expect(out.text).toContain("_React patterns_");
@@ -60,34 +72,53 @@ describe("skill tool", () => {
     expect(out.data).toEqual({
       name: "frontend",
       description: "React patterns",
-      path: "/abs/frontend/SKILL.md",
+      path: s.location,
       content: "use react",
     });
   });
 
-  test("execute on a name not in the catalogue returns is_error with available names", async () => {
-    const md = `---\nname: a\ndescription: A\n---\nbody-a`;
-    const env = envFor({ "/abs/a/SKILL.md": md });
-    const cat = [skill("a", md, { location: "/abs/a/SKILL.md" })];
-    const out = await skillTool.execute({ name: "z" }, env, { fraguaContext: ctx(cat) });
+  test("a name not in the catalogue returns is_error with available names", async () => {
+    const s = await skill("a", `---\nname: a\ndescription: A\n---\nbody-a`);
+    const out = await skillTool.execute({ name: "z" }, env(), { fraguaContext: ctx([s]) });
     expect(out.is_error).toBe(true);
     expect(out.text).toContain("unknown skill");
     expect(out.text).toContain('"z"');
     expect(out.text).toContain("a");
   });
 
-  test("execute when fraguaContext is omitted falls back to is_error with empty-catalogue message", async () => {
-    const env = envFor({});
-    const out = await skillTool.execute({ name: "x" }, env, {});
+  test("without fraguaContext the catalogue is empty", async () => {
+    const out = await skillTool.execute({ name: "x" }, env(), {});
     expect(out.is_error).toBe(true);
     expect(out.text).toContain("catalogue is empty");
   });
 
+  test("a project skill is read from the run's own tree when it carries one", async () => {
+    // The worktree shape: the catalogue points at the main checkout, the run
+    // works in a copy that has its own (edited) copy of the same skill.
+    const s = await skill("local", `---\nname: local\ndescription: d\n---\nmain copy`, {
+      scope: "project",
+      project_cwd: skillsRoot,
+    });
+    await mkdir(join(runCwd, "local"), { recursive: true });
+    await writeFile(join(runCwd, "local", "SKILL.md"), `---\nname: local\ndescription: d\n---\nworktree copy`, "utf8");
+    const out = await skillTool.execute({ name: "local" }, env(), { fraguaContext: ctx([s]) });
+    expect(out.is_error).toBeFalsy();
+    expect(out.data?.content).toBe("worktree copy");
+  });
+
+  test("a project skill the run's tree lacks still loads from the discovery path", async () => {
+    const s = await skill("added-later", `---\nname: added-later\ndescription: d\n---\nfrom main`, {
+      scope: "project",
+      project_cwd: skillsRoot,
+    });
+    const out = await skillTool.execute({ name: "added-later" }, env(), { fraguaContext: ctx([s]) });
+    expect(out.is_error).toBeFalsy();
+    expect(out.data?.content).toBe("from main");
+  });
+
   test("substitutes arguments and surfaces the substituted body on data.content", async () => {
-    const md = `---\nname: x\ndescription: d\n---\nhello $ARGUMENTS`;
-    const env = envFor({ "/abs/x/SKILL.md": md });
-    const cat = [skill("x", md, { location: "/abs/x/SKILL.md" })];
-    const out = await skillTool.execute({ name: "x", arguments: "world" }, env, { fraguaContext: ctx(cat) });
+    const s = await skill("x", `---\nname: x\ndescription: d\n---\nhello $ARGUMENTS`);
+    const out = await skillTool.execute({ name: "x", arguments: "world" }, env(), { fraguaContext: ctx([s]) });
     expect(out.is_error).toBeFalsy();
     expect(out.data?.content).toBe("hello world");
     expect(out.text).toContain("hello world");

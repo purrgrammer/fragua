@@ -8,7 +8,72 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`type: judge` steps — experimental.** A turn-less decision step: `state:` (literal text,
+  `${{ inputs }}` / `${{ outputs }}`, or `{file: <path>}` leaves read from the
+  worktree) plus `questions:` of `choice` / `score` / `noul`, asked of a System
+  One model (TypeSafe Jev) in one call. Every question becomes a typed output
+  (`${{ outputs.<judge>.<q>.choice }}`, `.confidence`, `.probabilities.<opt>`,
+  `.noul`, `.score` / `.level`). An optional `decide:` binds a `choice` to
+  routing (`decide.route` with a `min-confidence` and/or `min-probability` floor + a
+  `below:` landing) or a `noul`
+  to success / fail (`decide.outcome`), so `routes:`, `on:`, `retry:` and
+  `goal-gate` compose unchanged. Judges may run as `parallel` branches.
+  Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add
+  typesafe` (or `TYPESAFE_API_KEY` for `fragua ci`); `fragua providers test
+  typesafe` makes one call. See `docs/proposals/judge-step.md`.
+- **`for-each:` on judge steps — experimental.** Point a judge at an array-typed output and every
+  question is asked once per item in one call; `` `item.field` `` in a question
+  addresses the current item. Outputs: `answers` aligned with the input, and with
+  `keep: {<noul>: <min> | {min, max}, …}` the input split into `kept` / `dropped`, each
+  item carrying its fields plus the answers under `judge`. Empty list ⇒ no call.
+  Lists over the provider's request budget are sent in chunks and merged.
+  `for-each-max-items` caps the list (default 200). Validator E049.
+- **Per-question thresholds.** `decide.outcome` and `keep` take a mapping of noul
+  id → `<min>` or `{min, max}`; every rule must hold. A hazard gates with `max`.
+- **`review:` — the uncertainty band on a `for-each` judge.** `review: {<noul>:
+  {min, max}, …}` (same grammar as `keep:`) gives a third typed output beside
+  `kept` and `dropped`: an item that fails `keep` but holds the band lands in
+  `review` instead of being dropped, so an answer the model reports as unsure
+  is set aside for a second look rather than silently lost. Requires `keep:`.
+- **`fragua judge calibrate [workflow]`.** Reads every judge answer back out of
+  the store and reports, per gate, how many reads landed within a margin of the
+  authored bound and how many fell inside the model's uncertain band. Bounds
+  come from the graph each run executed, so editing a threshold does not
+  rewrite history. `--margin` sets the window (default 0.10).
+- **`composite:` on judge steps.** `composite: {<name>: {<question>: <weight>, …}}`
+  declares weighted means over `noul` / `score` answers (each mapped to [0, 1]);
+  every composite is a `number` output beside the answers, per item on a
+  `for-each` judge, and `decide.outcome` / `keep` threshold it like a noul.
+  Validator E052.
+- **`min-probability` on `decide.route`.** Floors the chosen option's own
+  probability, beside (or instead of) `min-confidence`; `below` is taken when any
+  declared floor fails.
+- **`judge` agent tool.** The same primitives inside any `llm` step:
+  `judge({ state, questions })` asks a batch of typed questions over evidence
+  the agent has gathered and returns the answers with probabilities; cost lands
+  on the calling step. Present in the default toolset only when a judge
+  provider is credentialed. The conversation view renders each call as a card:
+  the state as a tree, every question with its answer as probability bars, the
+  model and cost.
+- **Judge card shows its thresholds.** The decision line names the confidence and
+  the floor it was held to, or each outcome rule with its value and bound; a
+  gated noul's bar carries a tick at the bound; for-each groups are titled by
+  the item's location or claim.
+- A judge `{file}` leaf over `state-max-bytes` is refused by size before it is
+  read; the Cost tab's billed total for a step no longer counts judge tool
+  tokens twice.
+- **Cost tab: judge tool spend per step.** An llm step's cost popover shows the
+  `judge` tool calls it made as their own row (calls, input tokens, recorded
+  cost) instead of folding their tokens into the step's model buckets at the
+  wrong rate; the step total still includes them.
+
 ### Changed
+
+- **Judge steps pin `jev-1.13.0` by default** instead of the `jev-latest` alias.
+  An alias moves when a release ships, and every threshold a workflow authors is
+  read against one version's answers. Set `model:` on the step to move.
 
 - **The HTTP server binds loopback (`127.0.0.1`) by default.** The API is
   unauthenticated, so exposing it to the network is now opt-in: pass
@@ -36,6 +101,20 @@ guarantee.
   no default model choices changed. `radius` is
   a purely dynamic provider with no static catalog default, so `--provider
   radius` without an explicit `--model` has no built-in fallback.
+- **`dependencies`: the pin, scope, and manifests-only rules run in code**
+  (`check-manifests.ts`) as a tool step; the judge keeps the breaking-risk score.
+- **`review` / `pr_review` lenses judge per finding.** On the full tier each lens
+  is now scan → read → judge: the read step opens the cited code and records the
+  evidence without a verdict, a `for-each` judge asks whether the finding holds
+  and how severe it is (pr_review also: is it concrete, is it in changed code),
+  and `keep` drops what falls under 0.6; every gate noul carries true / false
+  criteria, an injection-guard noul marks evidence that addresses the reviewer
+  (the synthesiser escalates it, it is never dropped), `pr_review`'s read step
+  looks up whether a finding sits in the diff, and
+  the routers' options carry what / not-for / examples. `synthesize` receives the kept findings
+  with the judge's probabilities and applies stated thresholds for weak evidence
+  and contested severity.
+
 - **`web_fetch` is now raw-markdown only.** The `prompt` parameter is removed; a
   workflow that passed `prompt` to get a summary now receives raw markdown and
   must summarise in the consuming step. HTML→markdown conversion strips site
@@ -76,6 +155,24 @@ guarantee.
   delivery without silent truncation.
 
 ### Fixed
+
+- **`skill` tool inside a worktree.** Loading a project-scope skill failed with
+  a path-escape error because the catalogue's path points at the project root,
+  outside the worktree. The tool now reads the run's own copy when its tree
+  carries one (so a worktree sees skill edits it made) and falls back to the
+  discovery path otherwise.
+- `review` on a merged PR now diffs the PR's own change (its head over the point
+  it forked from the base) instead of `origin/main..HEAD`, which ran backwards
+  once the PR had merged; the worktree lands on the merge commit.
+- `intent.dropped` is in the typed event list, so SSE consumers that register
+  per event type now see it.
+
+- A step named `done` or `end` now executes. Both names were silent terminal
+  aliases in the executor, so a workflow that validated clean skipped such a step
+  and ended the run. Only `exit` (and the internal `__end__`) end a run.
+- Per-step cost breakdown now includes judge steps (their spend already counted
+  in run totals but had no step row).
+
 
 - Accepting a run whose tail renamed or deleted tracked files no longer leaves
   the old paths on disk as untracked copies. The worktree is now brought in line

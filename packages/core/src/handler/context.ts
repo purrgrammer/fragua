@@ -4,6 +4,7 @@ import { readGoalGateRetries } from "../routing.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
+import type { JudgeClient } from "./judge-contract.ts";
 import type {
   ArtifactRef,
   ArtifactScope,
@@ -65,6 +66,8 @@ export interface BuildContextOpts {
   /** Budget snapshot for `llm.start.budget`. Optional; the executor only
    * sets this when a graph or node ceiling is configured. */
   budgetSnapshot?: BudgetSnapshotInput;
+  /** System One client for judge steps; passed through to `ctx.judge`. */
+  judge?: JudgeClient;
 }
 
 /**
@@ -178,6 +181,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
     ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
     ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
+    ...(opts.judge !== undefined ? { judge: opts.judge } : {}),
   };
   return ctx;
 }

@@ -109,6 +109,18 @@ const FANOUT_COMMIT_ATTEMPTS = 8;
 
 type FanoutAppendOpts = { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number };
 
+/** The optional per-run context fields, applied identically at the linear
+ * and the fan-out-branch dispatch sites so a field added to one can't be
+ * silently missing inside a `parallel` branch. */
+function applyOptionalCtxFields(
+  ctxOpts: core.BuildContextOpts,
+  runEnv: ExecutionEnvironment | undefined,
+  judgeClient: core.JudgeClient | undefined,
+): void {
+  if (runEnv !== undefined) ctxOpts.env = runEnv;
+  if (judgeClient !== undefined) ctxOpts.judge = judgeClient;
+}
+
 /** Outcome of a serialized fan-out commit. A tagged `false`: `occ` is genuine
  * OCC exhaustion (feed the conflict controller), `status` is the run leaving
  * `running` under us (don't — it's already parked). */
@@ -198,6 +210,9 @@ export interface ExecutorOpts {
   registry: AbortRegistry;
   tools: core.ToolRegistry;
   llmCall: LlmCallFn;
+  /** System One client for `type: judge` steps; absent ⇒ judge nodes halt
+   * with a "not configured" error. */
+  judgeClient?: core.JudgeClient;
   maxConcurrentRuns: number;
   /** Upper bound on node-less poll waits in ms. Tests inject a smaller value. */
   pollIntervalMs?: number;
@@ -857,8 +872,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Production ceiling on handler dispatches. A workflow that loops
     // without ever aborting (so ABORT_LOOP_CEILING never fires) would
     // otherwise run until budget or wall-clock killed it. This is the
-    // last-resort guard; workflow authors should bound loops via
-    // `max_retries` on backward edges.
+    // last-resort guard. Note it is NOT merely last-resort for a plain
+    // `on: {fail:}` back-edge: `max_retries` does not bound those (the counter
+    // is bumped only on an `outcomeStatus: "retry"`, and reset on success), so
+    // for that shape this ceiling and the budget are the ONLY bounds. Only a
+    // goal gate (`retry:`) is capped per node.
     //
     // The override key is read on every iteration so a Raise & Resume
     // adjustment takes effect on the next dispatch — `dispatches` is
@@ -1013,7 +1031,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const pendingSteer = readPendingSteer(effectiveRouting);
     const mergedSteer = [pendingSteer, decision.steering].filter((s): s is string => s != null && s.length > 0);
     if (mergedSteer.length > 0) ctxOpts.steering = mergedSteer.join("\n");
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     // Budget snapshot at dispatch time. The backend embeds this verbatim
     // into `llm.start.budget` so the UI can render "X of Y used" without
     // cross-referencing the graph attrs. Only populated when at least one
@@ -1381,7 +1399,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     };
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
-    if (runEnv !== undefined) ctxOpts.env = runEnv;
+    applyOptionalCtxFields(ctxOpts, runEnv, opts.judgeClient);
     // Deliver steer to the branch handler, mirroring the linear path's merge of
     // the run-start pending steer (`internal.pending_steer`, carried in routing)
     // with this turn's freshly folded steer (`decision.steering` for a mid-run
@@ -1533,7 +1551,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // so a resume that immediately re-pauses (the budget check re-tripping in
     // the same turn) still advances `last_applied_seq` past the resume intent
     // and lands the budget override — else the intents stay unapplied and
-    // wake-pending re-wakes the run forever (the parallel-node budget loop).
+    // wake-pending re-wakes the run forever (the parallel-node budget loop,
+    // observed at 1,600+ pause/resume cycles). This holds even when the park
+    // is the turn's FIRST commit, which is why the fold rides it here rather
+    // than a later one.
     const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
       const res = await commitFanoutFact(facts, takeFold());
       if (!res.ok && res.reason === "occ") {

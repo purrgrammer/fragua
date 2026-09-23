@@ -178,7 +178,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     store,
     ports,
     preflightProviders: registryPreflight({
-      hasAnyAuth: () => modelRegistry.getAvailable().length > 0,
+      // `getAvailable()` counts pi-ai MODELS, so a judge-only operator — whose
+      // single credential is `typesafe`, which contributes no models — read as
+      // "no provider credentials configured" and could not create a run at
+      // all, though a workflow of `judge` + `tool` steps needs no LLM provider.
+      // This is a setup check ("you have nothing configured"), not a
+      // per-workflow capability check: a workflow that does need an llm step
+      // still fails at that step, with a message naming it.
+      hasAnyAuth: () => modelRegistry.getAvailable().length > 0 || authStorage.list().length > 0,
     }),
     validateWorkflowModels: (yamlSource: string) => validateWorkflowModels(yamlSource, modelRegistry),
     authStorage,

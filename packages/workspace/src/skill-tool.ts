@@ -14,8 +14,12 @@
 // (`tool.execution_end.data.result.details.data`) — same place every
 // other built-in tool lands its UI-friendly metadata.
 
+import { readFile } from "node:fs/promises";
+import { isAbsolute, relative } from "node:path";
+import type { ExecutionEnvironment } from "@fragua/core";
 import { Type } from "@sinclair/typebox";
 import { loadSkill } from "./skills/load.ts";
+import type { Skill } from "./skills/types.ts";
 import type { Tool } from "./types.ts";
 
 export interface SkillToolArgs {
@@ -52,7 +56,12 @@ export const skillTool: Tool<SkillToolArgs, SkillToolData> = {
   truncation: { max_chars: 200_000, mode: "head_tail" },
   async execute(args, env, opts) {
     const catalog = opts?.fraguaContext?.skillCatalog ?? [];
-    const out = await loadSkill(env, args.name, args.arguments, catalog);
+    const out = await loadSkill(
+      { readFile: (path) => readSkillFile(env, catalog, path) },
+      args.name,
+      args.arguments,
+      catalog,
+    );
     if (!out.ok) {
       return {
         text: out.message,
@@ -66,3 +75,39 @@ export const skillTool: Tool<SkillToolArgs, SkillToolData> = {
     };
   },
 };
+
+/**
+ * Read a catalogue skill's `SKILL.md`.
+ *
+ * A project skill lives IN the working tree, so a run gets its own
+ * checkout's copy — a worktree that edits a skill sees the edit, and the
+ * env's path gate is honoured. That read is by the path relative to the
+ * project the skill was discovered under, so it lands inside the worktree
+ * rather than on the discovery path (which points at the main checkout and
+ * the gate would refuse).
+ *
+ * Everything else — user-scope skills under `~/.agents`, and a project skill
+ * the run's tree does not carry (a worktree branched before it was added) —
+ * is catalogue content on the daemon's filesystem, read directly. Discovery
+ * put it there; it is not the run's to gate.
+ */
+async function readSkillFile(
+  env: Pick<ExecutionEnvironment, "readFile">,
+  catalog: readonly Skill[],
+  location: string,
+): Promise<string> {
+  const skill = catalog.find((s) => s.location === location);
+  const anchor = skill?.project_cwd;
+  if (anchor !== undefined) {
+    const rel = relative(anchor, location);
+    if (rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel)) {
+      try {
+        return await env.readFile(rel);
+      } catch {
+        // Not in this run's tree (or refused) — fall through to the
+        // discovery path, so a stale worktree still loads the skill.
+      }
+    }
+  }
+  return readFile(location, "utf8");
+}

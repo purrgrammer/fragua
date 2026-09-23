@@ -283,6 +283,20 @@ steps:
     expect(container.querySelector("[data-testid='graphview']")).toBeNull();
   });
 
+  it("names the parse error when the source is present but this build's parser rejects it", () => {
+    const detail = makeDetail();
+    const unparseable: RunDetail = {
+      ...detail,
+      workflowSource:
+        "name: wf\nsteps:\n  s:\n    type: judge\n    state: x\n    questions:\n      q: {type: noul, instructions: q?}\n    decide:\n      outcome: {q: {min: 0.5, frobnicate: 1}}\n    next: exit\n",
+    };
+    const { container } = render(<GraphView detail={unparseable} />);
+    const empty = within(container).getByTestId("graphview-parse-error");
+    expect(empty.textContent ?? "").toMatch(/cannot parse/i);
+    expect(empty.textContent ?? "").toMatch(/frobnicate/);
+    expect(container.querySelector("[data-testid='graphview-nograph']")).toBeNull();
+  });
+
   it("renders start and exit nodes in a compact form (header only, no metadata rows)", async () => {
     const { container } = render(<GraphView detail={makeDetail()} />);
     const canvas = await waitFor(() => within(container).getByTestId("graphview"));
