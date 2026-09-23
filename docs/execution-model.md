@@ -28,6 +28,16 @@ The `cwd()` method on `WorktreeEnvironment` returns `this.worktreePath` — the 
 
 **Non-git projects** — runs enqueued from a directory that is not a git repository get a `LocalEnvironment` rooted at `<run.cwd>` directly (no worktree, no git). The same cwd-consistency rule holds; there is simply no isolation layer.
 
+**Worktree retention & reclamation.** A run's worktree is torn down by the daemon the moment the run reaches a settled state *and* its terminal snapshot has been recorded. Three things keep a worktree on disk past that point:
+
+1. **Non-settled runs retain by design.** `queued` / `running` / `paused` / `paused_human` / `paused_auto` all keep their worktree so execution (or a resume across a HITL pause) picks up exactly where it left off. Never reclaimed while the run is live.
+2. **Retained for recovery.** If the terminal snapshot fails to capture (or its fact loses an OCC race), the daemon deliberately keeps the worktree rather than dispose work the projection can't point at.
+3. **Daemon crash.** A run interrupted by a crash is quarantined by the startup sweep; its worktree survives for a later `unquarantine`.
+
+`fragua gc --worktrees` reclaims category 2 (and any category-1 leftover whose run has since settled): it removes the worktree directory **and its git registration** for every *settled* run — `completed` / `halted` / `cancelled`, not awaiting an inbox decision — older than the retention window (default 30d). `quarantined` and `paused*` runs are left alone, so in-flight and resumable work is never destroyed. The age window is what distinguishes a retained-for-recovery worktree from a genuine leak.
+
+The sweep always finishes with `git worktree prune`, which clears any *registration* whose directory is already gone. This matters because a stale registration outlives an `rm -rf` of the directory and makes git refuse `git checkout <branch>`, `git branch -D <branch>`, and non-detached `git worktree add … <branch>` with *"already checked out at `<path>`"* — a workflow that manages its own branches would otherwise hit it. See [`docs/cli.md`](cli.md) § maintenance.
+
 ---
 
 ## 2. Fresh shell per `bash` call

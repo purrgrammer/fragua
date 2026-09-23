@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
@@ -32,7 +32,20 @@ function refExists(cwd: string, ref: string): boolean {
  * `refs/fragua/{snapshots,heads}/<id>`, backdated by `ageMs`. When `pending`,
  * the run's terminal snapshot leaves recoverable work (inbox_status=pending,
  * so GC must keep it). */
-function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?: boolean }): string {
+function worktreeRegistered(cwd: string, runId: string): boolean {
+  const out = git(cwd, "worktree", "list", "--porcelain");
+  return out
+    .split("\n")
+    .some((line) => line.startsWith("worktree ") && line.trimEnd().endsWith(`/.fragua/worktrees/${runId}`));
+}
+
+function makeRepoWithSnapshotRun(opts: {
+  runId: string;
+  ageMs: number;
+  pending?: boolean;
+  status?: "completed" | "paused_human";
+  worktree?: boolean;
+}): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-gc-"));
   workdirs.push(cwd);
   mkdirSync(join(cwd, ".fragua"), { recursive: true });
@@ -47,6 +60,9 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
   const head = git(cwd, "rev-parse", "HEAD");
   git(cwd, "update-ref", `refs/fragua/snapshots/${opts.runId}`, head);
   git(cwd, "update-ref", `refs/fragua/heads/${opts.runId}`, head);
+  if (opts.worktree === true) {
+    git(cwd, "worktree", "add", "--detach", join(cwd, ".fragua/worktrees", opts.runId), head);
+  }
 
   const dbPath = join(cwd, ".fragua/fragua.db");
   const store = new SqliteStore({ path: dbPath });
@@ -76,11 +92,19 @@ function makeRepoWithSnapshotRun(opts: { runId: string; ageMs: number; pending?:
     s0.version,
   );
   const s1 = store.getState(opts.runId)!;
-  store.appendFact(
-    opts.runId,
-    [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }],
-    s1.version,
-  );
+  if (opts.status === "paused_human") {
+    store.appendFact(
+      opts.runId,
+      [{ type: "fact.run_paused", payload: { reason: "human", nodeId: "work", text: "?", routes: [] } }],
+      s1.version,
+    );
+  } else {
+    store.appendFact(
+      opts.runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }],
+      s1.version,
+    );
+  }
   if (opts.pending === true) {
     const s2 = store.getState(opts.runId)!;
     store.appendFact(
@@ -118,7 +142,7 @@ const MONTH = 30 * 24 * 60 * 60 * 1000;
 describe("fragua gc --snapshots", () => {
   test("dry-run reports eligible refs without deleting", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
-    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH, dryRun: true });
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH, dryRun: true });
     expect(code).toBe(0);
     expect(refExists(cwd, "refs/fragua/snapshots/old-run")).toBe(true);
     expect(refExists(cwd, "refs/fragua/heads/old-run")).toBe(true);
@@ -126,7 +150,7 @@ describe("fragua gc --snapshots", () => {
 
   test("deletes both refs for a settled run outside the retention window", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
-    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
     expect(refExists(cwd, "refs/fragua/snapshots/old-run")).toBe(false);
     expect(refExists(cwd, "refs/fragua/heads/old-run")).toBe(false);
@@ -134,17 +158,82 @@ describe("fragua gc --snapshots", () => {
 
   test("refs inside the retention window survive", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000 });
-    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
     expect(refExists(cwd, "refs/fragua/snapshots/fresh-run")).toBe(true);
   });
 
   test("pending (inbox) runs are kept regardless of age", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "pending-run", ageMs: 60 * 24 * 60 * 60 * 1000, pending: true });
-    const code = await gcCommand({ target: "snapshots", cwd, olderThanMs: MONTH });
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
     expect(code).toBe(0);
     expect(refExists(cwd, "refs/fragua/snapshots/pending-run")).toBe(true);
     expect(refExists(cwd, "refs/fragua/heads/pending-run")).toBe(true);
+  });
+
+  test("requires at least one target", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
+    const code = await gcCommand({ cwd, olderThanMs: MONTH });
+    expect(code).toBe(1);
+  });
+});
+
+const YEAR = 365 * 24 * 60 * 60 * 1000;
+
+describe("fragua gc --worktrees", () => {
+  test("reaps the worktree directory and registration for a settled run outside the window", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000, worktree: true });
+    expect(worktreeRegistered(cwd, "old-run")).toBe(true);
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".fragua/worktrees/old-run"))).toBe(false);
+    expect(worktreeRegistered(cwd, "old-run")).toBe(false);
+  });
+
+  test("retains the worktree for a run inside the retention window", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000, worktree: true });
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".fragua/worktrees/fresh-run"))).toBe(true);
+    expect(worktreeRegistered(cwd, "fresh-run")).toBe(true);
+  });
+
+  test("retains the worktree for a paused run regardless of age", async () => {
+    const cwd = makeRepoWithSnapshotRun({
+      runId: "paused-run",
+      ageMs: YEAR,
+      worktree: true,
+      status: "paused_human",
+    });
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".fragua/worktrees/paused-run"))).toBe(true);
+    expect(worktreeRegistered(cwd, "paused-run")).toBe(true);
+  });
+
+  test("git worktree prune clears a registration whose directory was hand-deleted", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000, worktree: true });
+    rmSync(join(cwd, ".fragua/worktrees/fresh-run"), { recursive: true, force: true });
+    expect(worktreeRegistered(cwd, "fresh-run")).toBe(true);
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(worktreeRegistered(cwd, "fresh-run")).toBe(false);
+  });
+
+  test("dry-run reports without removing the worktree", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000, worktree: true });
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH, dryRun: true });
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".fragua/worktrees/old-run"))).toBe(true);
+    expect(worktreeRegistered(cwd, "old-run")).toBe(true);
+  });
+
+  test("retained-for-recovery worktree (no snapshot fact) is reaped once past the window", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "recover-run", ageMs: 60 * 24 * 60 * 60 * 1000, worktree: true });
+    const code = await gcCommand({ worktrees: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".fragua/worktrees/recover-run"))).toBe(false);
+    expect(worktreeRegistered(cwd, "recover-run")).toBe(false);
   });
 });
 
