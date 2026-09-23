@@ -38,6 +38,7 @@ import {
   isMcpToolName,
   mcpToolPrefix,
   normalizeMcpToolRef,
+  reanchorSkillsToRunTree,
   renderSkillsCatalog,
   sanitiseUnpairedToolCalls,
   toCatalogRecord,
@@ -330,7 +331,11 @@ export class PiLlmBackend implements LlmBackend {
     // scope by name within the slice. Without this, a run in project A
     // would see project B's project-scope skills.
     const runProjectCwd = effectiveEnv.projectCwd();
-    const runCwdSkills = filterCatalogueForRun(this.skills, runProjectCwd);
+    const runCwdSkills = reanchorSkillsToRunTree(
+      filterCatalogueForRun(this.skills, runProjectCwd),
+      runProjectCwd,
+      effectiveEnv.cwd(),
+    );
 
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt. The catalog drives both

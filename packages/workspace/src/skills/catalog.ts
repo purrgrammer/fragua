@@ -5,6 +5,8 @@
 // $ARGUMENTS, and returns the rendered body — work the model would
 // otherwise spend tokens doing inline against a `read` result.
 
+import { existsSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 import { byName } from "@fragua/core";
 import type { Skill, SkillCatalogRecord } from "./types.ts";
 
@@ -76,6 +78,40 @@ export function filterCatalogueForRun(skills: readonly Skill[], runCwd: string):
   const slice = skills.filter((s) => s.scope === "user" || s.project_cwd === runCwd);
   const projectNames = new Set(slice.filter((s) => s.scope === "project").map((s) => s.name));
   return slice.filter((s) => s.scope === "project" || !projectNames.has(s.name));
+}
+
+/** Re-anchor project-scope skills from the discovery checkout to the run's own
+ * working tree.
+ *
+ * A run in a worktree executes under `execCwd` (`.fragua/worktrees/<id>`), but
+ * project skills are discovered from the project root (`projectCwd`), so their
+ * absolute `location` — and every bundled resource path (`references/`,
+ * `scripts/`, `assets/`) the agent resolves against it — points at the main
+ * checkout, outside `execCwd`. The run env's path gate then refuses any `read`
+ * of those files. A worktree is a checkout of the same files, so we rewrite the
+ * location prefix to the worktree copy when it actually exists there. A stale
+ * worktree that predates the skill keeps the discovery path and still fails the
+ * gate — narrower than before, but not yet fixed.
+ *
+ * No-op when `execCwd === projectCwd` (a non-worktree local run) or for
+ * user-scope skills (their tree is not the run's to re-anchor).
+ */
+export function reanchorSkillsToRunTree(skills: readonly Skill[], projectCwd: string, execCwd: string): Skill[] {
+  if (execCwd === projectCwd) return skills.slice();
+  return skills.map((s) => {
+    if (s.scope !== "project" || s.project_cwd === undefined) return s;
+    const locRel = relative(s.project_cwd, s.location);
+    if (locRel.length === 0 || locRel.startsWith("..") || isAbsolute(locRel)) return s;
+    const candidate = join(execCwd, locRel);
+    if (!existsSync(candidate)) return s;
+    return {
+      ...s,
+      location: candidate,
+      skill_dir: join(execCwd, relative(s.project_cwd, s.skill_dir)),
+      source_dir: join(execCwd, relative(s.project_cwd, s.source_dir)),
+      project_cwd: execCwd,
+    };
+  });
 }
 
 /** Project a skill down to the event-log subset. Only visible skills end up

@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { LocalEnvironment } from "../../src/local-env.ts";
 import {
   filterCatalogueForRun,
   filterSkillsForNode,
+  reanchorSkillsToRunTree,
   renderSkillsCatalog,
   toCatalogRecord,
 } from "../../src/skills/catalog.ts";
@@ -162,5 +167,80 @@ describe("filterCatalogueForRun", () => {
 
   test("empty input → empty slice", () => {
     expect(filterCatalogueForRun([], "/anywhere")).toEqual([]);
+  });
+});
+
+describe("reanchorSkillsToRunTree (issue #109)", () => {
+  let repo: string;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), "fragua-repo-"));
+  });
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  async function seed(root: string): Promise<void> {
+    const dir = join(root, ".agents/skills/design/references");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(root, ".agents/skills/design/SKILL.md"),
+      "---\nname: design\ndescription: d\n---\nbody",
+      "utf8",
+    );
+    await writeFile(join(dir, "guide.md"), "GUIDE", "utf8");
+  }
+
+  function discovered(root: string): Skill {
+    const skillDir = join(root, ".agents/skills/design");
+    return skill("design", {
+      scope: "project",
+      project_cwd: root,
+      location: join(skillDir, "SKILL.md"),
+      skill_dir: skillDir,
+      source_dir: join(root, ".agents/skills"),
+    });
+  }
+
+  test("a project skill's bundled file is readable through the run's worktree env", async () => {
+    // Discovery layout: the skill lives in the main checkout.
+    await seed(repo);
+    // The run executes in a worktree under the repo — a checkout of the same files.
+    const worktree = join(repo, ".fragua/worktrees/run1");
+    await seed(worktree);
+
+    // What the run sees: the backend slices by env.projectCwd() (the repo root),
+    // then re-anchors to the run's execution cwd (the worktree).
+    const slice = filterCatalogueForRun([discovered(repo)], repo);
+    const [runSkill] = reanchorSkillsToRunTree(slice, repo, worktree);
+    expect(runSkill).toBeDefined();
+
+    // The catalog instructs the agent to resolve a skill's bundled files
+    // (references/, scripts/, assets/) against the <location> directory using
+    // absolute paths. In a worktree that path must resolve inside cwd, or the
+    // path gate refuses the read.
+    const env = new LocalEnvironment({ cwd: worktree });
+    const bundled = join(dirname(runSkill!.location), "references/guide.md");
+    expect(await env.readFile(bundled)).toBe("GUIDE");
+  });
+
+  test("a non-worktree run (execCwd === projectCwd) is left untouched", () => {
+    const s = discovered(repo);
+    const out = reanchorSkillsToRunTree([s], repo, repo);
+    expect(out[0]?.location).toBe(s.location);
+    expect(out[0]?.project_cwd).toBe(repo);
+  });
+
+  test("a stale worktree lacking the skill keeps the discovery path", () => {
+    const worktree = join(repo, ".fragua/worktrees/run1"); // never seeded
+    const s = discovered(repo);
+    const out = reanchorSkillsToRunTree([s], repo, worktree);
+    expect(out[0]?.location).toBe(s.location);
+  });
+
+  test("user-scope skills are not re-anchored", () => {
+    const s = skill("pdf"); // scope: user, no project_cwd
+    const out = reanchorSkillsToRunTree([s], repo, join(repo, ".fragua/worktrees/run1"));
+    expect(out[0]?.location).toBe(s.location);
   });
 });
