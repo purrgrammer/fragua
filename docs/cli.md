@@ -234,12 +234,24 @@ fragua validate <workflow.yaml>          # parse + lint, no execution; reports t
 fragua init [--cwd <path>]               # write <cwd>/.fragua/config.yaml
 fragua doctor                            # liveness: store path, daemon lock, server endpoint, providers
 fragua upgrade [--to <version>]          # self-update the installed binary from GitHub Releases
-fragua gc --snapshots [--older-than 30d] [--dry-run]
+fragua gc [--snapshots] [--worktrees] [--older-than 30d] [--dry-run]
 fragua db vacuum                         # reclaim free pages
 fragua db gc-blobs [--limit N]           # delete orphaned blob rows
 fragua db backup --to <path>             # online backup to a file
 fragua db migrate [--to <version>] [--dry-run] [--allow-data-loss] [--no-backup]
 ```
+
+`gc` is an operator-invoked sweep over settled runs (`completed` / `halted` /
+`cancelled`, not awaiting an inbox decision) older than `--older-than` (default
+30d). `--snapshots` reclaims each run's worktree snapshot refs
+(`refs/fragua/{snapshots,heads}/<id>`). `--worktrees` removes each run's leftover
+worktree directory *and* its git registration, then runs `git worktree prune` to
+clear any registration whose directory was already hand-deleted — a stale
+registration otherwise survives an `rm -rf` and blocks `git checkout <branch>`.
+`quarantined` and `paused*` runs are never touched (their work is live or
+resumable). At least one of `--snapshots` / `--worktrees` is required; both may be
+combined, and `--dry-run` reports without changing anything. See
+[`docs/execution-model.md`](execution-model.md) § 1 for worktree retention.
 
 `validate` is **store-free**: it never opens `~/.fragua/fragua.db` (or any
 store), so it works in CI and editor contexts with no DB present. Model ids
