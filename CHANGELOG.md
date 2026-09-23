@@ -8,6 +8,55 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- **`pr_review` converges.** The CI review pipeline was rebuilt around one
+  property: it always terminates and always posts. The lens fan-out — 92% of
+  the job's wall clock, with a single lens at 17.5 minutes — no longer roams the
+  repository: a new `prep_pack` step materialises a review pack (the diff with
+  context, the post-image of each changed file, removed lines, external
+  references to changed exported symbols, and the security-sensitive hunks) in
+  seconds of shell, and each lens reads that instead. Five lenses became three
+  (`correctness`, `integration`, `risk`), and each lens's separate scan, read,
+  and judge steps became one substantiating turn plus its judge. Findings are
+  capped per lens and across the review.
+- **`pr_review` is bounded end to end.** Every step declares `timeout-minutes`;
+  `budget-policy` is `stop` rather than the default `pause` (a paused run in CI
+  has no responder and posts nothing); the `verify` goal gate is gone for the
+  same reason; and `verdict` is now a deterministic tool step that writes a
+  fallback body when none exists and classifies by grepping the review's own
+  severity headings. Failure edges route every path to a post.
+- **The CI review job wraps `fragua ci` in `timeout(1)`.** A fan-out timeout is
+  an abort, not a failure — the branch re-dispatches with a fresh timer up to
+  five times and then pauses the run — so per-node timeouts cannot bound it.
+  The wrapper sends `SIGINT`, which lets fragua run its own shutdown path and
+  still export the run bundle; the job timeout is now a backstop above it. A
+  `failure()`-gated fallback step posts a pointer to the bundle when the review
+  does not complete.
+
+- **`review` converges too.** The local review workflow gets the same treatment:
+  six lenses become four (`correctness`, `integration`, `risk`, and `craft` —
+  quality and coherence merged), each collapsed from a scan / read / judge
+  pipeline into one substantiating turn plus its judge, all reading a
+  pre-materialised pack instead of searching the repository. Every step declares
+  `timeout-minutes`, `budget-policy` is `stop`, the `verify` goal gate is gone
+  (the human `signoff` is the gate), and a dead lens or synthesiser routes
+  forward to `signoff` rather than halting the run.
+- **`.fragua/scripts/review/build-pack.sh`.** One review-pack builder behind both
+  workflows, in two entry forms — `pr <n>` resolves a PR's own change from
+  `refs/pull/<n>/head`, `spec <diff-spec>` takes any range, sha, or `HEAD` for
+  uncommitted work. Patch context scales down with the size of the change and
+  the patch is capped, so a large diff cannot blow the pack past a usable
+  context window.
+
+### Removed
+
+- **`pr_review_nojudge.yaml`.** The judge-free copy existed only while no
+  release parsed `judge` steps; 0.11.0 does, and the CI review job now runs the
+  canonical `pr_review`. A guard test pins the invariant it was working around:
+  the version in the job's `with: version:` must be a release that parses every
+  step type the workflow uses.
+
 ## [0.11.0] — 2026-09-23
 
 ### Added
