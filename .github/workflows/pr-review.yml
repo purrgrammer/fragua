@@ -11,19 +11,28 @@ name: PR review
 # bot verdict that could safely gate a merge; CI remains the hard required gate.)
 #
 # The review pins a released fragua — the action by SHA, the binary by
-# `with: version:` — for a reproducible review engine; `fragua ci --export` (shipped in 0.2.0) lands the run as a
-# secret-free `.fragua` bundle. The engine is pinned, but the binary still reads
-# the workflow file from THIS PR's checkout, so workflow changes are still
-# exercised. The trust boundary is unchanged: a same-repo PR already controls
-# that file and this one, and fork PRs (no secrets) are skipped.
+# `with: version:` — for a reproducible review engine; `fragua ci --export`
+# lands the run as a secret-free `.fragua` bundle. The engine is pinned, but the
+# binary still reads the workflow file from THIS PR's checkout, so workflow
+# changes are still exercised. That is also the failure mode to watch: a tree
+# that uses a step type the PINNED release predates fails every PR. When
+# `pr_review.yaml` gains a new step type, cut a release FIRST and bump both pins
+# here — `pr-review-engine-pin.test.ts` fails the build if the two drift.
 #
-# It runs `pr_review_nojudge`, not `pr_review`. Because the engine is a RELEASED
-# binary and the workflow comes from the checkout, the tree may not hand it a
-# step type its release predates: `pr_review.yaml` now uses `judge` steps, which
-# no release parses yet, so pointing this job at it would fail every PR with
-# `unknown type "judge"` — including the PR introducing the step type. The
-# judge-free copy keeps the check running until a release ships `judge`; see the
-# retirement checklist at the top of `.fragua/workflows/pr_review_nojudge.yaml`.
+# ── Never stall ─────────────────────────────────────────────────────────────
+#
+# The run is wrapped in `timeout(1)`, and that wrapper — not the job timeout and
+# not fragua's per-node `timeout-minutes` — is what guarantees this job
+# terminates. Inside a fan-out a node timeout is an ABORT: the executor
+# re-dispatches the branch with a fresh timer up to five times and then PAUSES
+# the run, and a paused run in CI has no responder. `--signal=INT` sends SIGINT
+# so `fragua ci`'s own shutdown path runs and its `finally` still writes the
+# export bundle; `--kill-after` gives that 120s before SIGKILL. Previously the
+# only watchdog was GitHub's external kill, which lands mid-syscall — the run
+# that most needed a bundle produced zero artifacts.
+#
+# The job timeout is set ABOVE the wrapper on purpose: fragua must always win
+# the race, so the external kill is a backstop rather than the mechanism.
 
 on:
   pull_request:
@@ -47,21 +56,20 @@ jobs:
     # post — skip them. Same-repo PRs only.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # The fragua review pipeline (6 concurrent lenses + verify) runs ~15-20m on
-    # a mid-size diff; 20m was too tight and got cancelled mid-review. 35m gives
-    # headroom without letting a genuinely wedged run burn a full hour.
-    timeout-minutes: 35
+    # Backstop only — must stay ABOVE the `timeout` wrapper below plus its
+    # --kill-after, so fragua's own shutdown always runs first.
+    timeout-minutes: 38
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@34895e207cccbc3bcc942fd8d05a6dd3773573c2 # v0.10.0
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@0a27a9aeb83cb8778baa00b657d2e15f79a13148 # v0.11.0
         with:
           # The SHA pins the ACTION; this pins the BINARY. Without it the action
           # defaults to `version: latest` and resolves the newest release at run
-          # time, so the "reproducible engine" below floats with every release.
-          version: v0.10.0
+          # time, so the "reproducible engine" above floats with every release.
+          version: v0.11.0
 
       # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
       # tool subprocesses, which removes GH_TOKEN from the `gh pr diff/view/review`
@@ -69,15 +77,40 @@ jobs:
       # the value is still a scrub needle, so it stays redacted from the exported
       # bundle.
       - name: "Review PR #${{ github.event.pull_request.number }}"
-        run: fragua ci pr_review_nojudge --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN --export "$RUNNER_TEMP/pr-review.fragua"
+        id: review
+        run: |
+          timeout --signal=INT --kill-after=120s 30m \
+            fragua ci pr_review \
+              --input pr=${{ github.event.pull_request.number }} \
+              --allow-env GH_TOKEN \
+              --export "$RUNNER_TEMP/pr-review.fragua"
         env:
           # Swap for ANTHROPIC_OAUTH_TOKEN to draw on a Claude subscription
           # instead of API billing (setup-fragua/README.md § Credentials).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # The judge steps (scope / verify / verdict) call TypeSafe's Jev; without
-          # this the run halts at `scope` with "provider typesafe not credentialed".
+          # The judge steps (scope / the per-lens judges) call TypeSafe's Jev;
+          # without this the run halts at `scope` with "provider typesafe not
+          # credentialed".
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           GH_TOKEN: ${{ github.token }} # exempted via --allow-env for gh; still a scrub needle
+
+      # Last net. Every pause class (budget, goal gate, max retries, the fan-out
+      # abort loop) is unreachable from inside the graph and exits non-zero
+      # without posting, and so does the `timeout` wrapper. The run's own
+      # `pr-review.md` lives in a worktree fragua disposes on the way out, so
+      # this posts a pointer to the bundle rather than a body.
+      #
+      # `failure()` is load-bearing twice over: an `if:` with no status function
+      # is implicitly `success() && …` (dead after a failed step), and gating on
+      # `always()` would post on a concurrency cancellation — the routine case
+      # where a newer commit superseded this review and a comment is noise.
+      - name: Post fallback review
+        if: failure() && steps.review.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body \
+            "🤖 The fragua review did not complete (\`${{ github.job }}\` failed). The run bundle is attached to [this job](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}); inspect it with \`fragua show\` / \`fragua import\`."
 
       # No manual scrubbing step: `fragua ci`'s CI profile scrubs the bundle at
       # export — it redacts provider-credential values + secret-named env vars
@@ -85,12 +118,14 @@ jobs:
       # messages / artifacts, with generic `[REDACTED]` markers — and FAILS the
       # job (exit 80) if a live secret value reached the bundle path (the
       # perimeter-leak alarm). So the review step's exit code IS the fail-closed
-      # gate, and the uploaded bundle is scrubbed regardless of outcome. This is
-      # strictly stronger than the old single-key grep (all creds + env + patterns,
-      # and it redacts rather than just detecting one literal).
+      # gate, and the uploaded bundle is scrubbed regardless of outcome.
 
       # Post-mortem locally: `fragua show <download>` to summarize, then
       # `fragua import <download>` + `fragua runs status|events|messages <run-id>`.
+      #
+      # `warn`, not `error`: a concurrency cancellation kills the job before the
+      # export runs, and that is a routine, correct outcome — failing the upload
+      # would turn every superseded review into a red check.
       - name: Upload run bundle
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

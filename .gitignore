@@ -41,3 +41,10 @@ temp/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# Review artifacts — written into the run's worktree by `review` / `pr_review`
+# (the review pack, the diff they read, the review body they post).
+/pack/
+/pr-review.md
+/review.md
+/pr-review-diff.patch

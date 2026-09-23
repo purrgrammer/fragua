@@ -30,7 +30,14 @@ const BASHISMS: ReadonlyArray<{ re: RegExp; name: string; posix: string }> = [
     name: "set -o pipefail",
     posix: "drop it (`set -eu`); with a real pipeline, check the producer's status explicitly",
   },
-  { re: /\[\[/, name: "[[ ]]", posix: "use [ ] / test" },
+  // `[[` is a bash conditional — but `[[:space:]]` and friends are POSIX
+  // character classes inside a bracket expression, and they are exactly what a
+  // portable `grep -E` reaches for. Only flag `[[` that does NOT open one.
+  {
+    re: /\[\[(?!:(alpha|alnum|blank|cntrl|digit|graph|lower|print|punct|space|upper|xdigit):\])/,
+    name: "[[ ]]",
+    posix: "use [ ] / test",
+  },
   { re: /<<</, name: "here-string", posix: "use printf ... | cmd" },
   { re: /\bfunction\s+\w+\s*(\(|\{)/, name: "function keyword", posix: "use name() { ... }" },
   { re: /\becho\s+-e\b/, name: "echo -e", posix: "use printf" },
@@ -77,6 +84,11 @@ describe("shipped workflows — tool `run:` bodies are POSIX sh", () => {
 });
 
 describe("the bashism scan itself", () => {
+  test("still flags a real bash conditional", () => {
+    const hit = BASHISMS.find(({ re }) => re.test('if [[ -n "$x" ]]; then'));
+    expect(hit?.name).toBe("[[ ]]");
+  });
+
   test("flags the construct that broke the Doc drift job", () => {
     const hit = BASHISMS.find(({ re }) => re.test("      set -euo pipefail"));
     expect(hit?.name).toBe("set -o pipefail");
@@ -89,6 +101,9 @@ describe("the bashism scan itself", () => {
       '  jq -e . "$out/x.json" > /dev/null',
       'head -c 8192 -- "$f" >> "$out/p.diff" || true',
       "git diff 2>&1 > /dev/null",
+      // POSIX character classes open with `[[:`, which is not the bash `[[`.
+      "grep -qE '^## (Critical|High)[[:space:]]*$' pr-review.md",
+      "sed -E 's/[[:alpha:]]+//'",
     ]) {
       expect(BASHISMS.filter(({ re }) => re.test(line)).map((b) => b.name)).toEqual([]);
     }
