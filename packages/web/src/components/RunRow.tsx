@@ -1,8 +1,8 @@
 // Compact row component for run summaries. Two variants share the
-// same three-element shape: title (link), workflow (neutral badge), and
-// status (right-aligned pill). Any per-run detail — started-at, cost,
-// tokens, events, duration — lives on the run detail page, not the
-// list row. This keeps the list easy to scan at a glance.
+// same shape: title (link), workflow (neutral badge), and status
+// (right-aligned pill). The default (table) variant also shows a
+// started-at cell; cost, tokens, events, and duration still live on
+// the run detail page to keep the list easy to scan at a glance.
 //
 // Variants:
 //   - `"default"` — table-row layout used by `RunsList` inside a
@@ -22,6 +22,7 @@
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { shortRunId } from "../lib/runId.ts";
+import { formatRelative, toIsoTitle } from "../lib/time.ts";
 import { ImportedBadge } from "./ImportedBadge.tsx";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -59,6 +60,11 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
         </Link>
       </td>
       <td className="py-2 pr-4 max-w-0">{wf ? <WorkflowLink name={wf} variant="badge" /> : null}</td>
+      <td className="py-2 pr-4 text-sw-muted">
+        <span data-testid={`run-started-${row.runId}`} title={toIsoTitle(row.startedAt)}>
+          {formatRelative(row.startedAt)}
+        </span>
+      </td>
       <td className="py-2 pr-4 text-right">
         <span className="inline-flex items-center gap-1.5 justify-end">
           {row.imported && <ImportedBadge />}

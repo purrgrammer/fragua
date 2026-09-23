@@ -46,7 +46,7 @@ import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } fr
 import { mapStatus } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
-import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
+import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { mergeDetail } from "../lib/useDetailOverlay.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useNow } from "../lib/useNow.ts";
@@ -488,6 +488,18 @@ const DetailHeader = memo(function DetailHeader({
             </div>
           )}
         </div>
+        {detail && (
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-sw-muted">
+            <span data-testid="detail-started">
+              started <span title={toIsoTitle(detail.startedAt)}>{formatRelative(detail.startedAt)}</span>
+            </span>
+            {detail.endedAt && (
+              <span data-testid="detail-ended">
+                ended <span title={toIsoTitle(detail.endedAt)}>{formatRelative(detail.endedAt)}</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <StatsStrip detail={detail} liveCost={liveCost} />
     </header>

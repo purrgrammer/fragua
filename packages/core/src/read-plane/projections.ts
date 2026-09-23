@@ -7,7 +7,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
-import { HALT_REASONS, type HaltReason, mapStatus, RUN_STATE_FACT_TYPES, TERMINAL_RUN_FACT_TYPES } from "@fragua/types";
+import {
+  HALT_REASONS,
+  type HaltReason,
+  isSettled,
+  mapStatus,
+  RUN_STATE_FACT_TYPES,
+  TERMINAL_RUN_FACT_TYPES,
+} from "@fragua/types";
 import { fanoutBranchClosures } from "../engine/fanout.ts";
 import { projectRunOutput } from "../engine/outputs-substitution.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
@@ -39,6 +46,11 @@ export function runStateToSummary(
     cacheReadTokens: m.totalCacheReadTokens,
     cacheWriteTokens: m.totalCacheWriteTokens,
   };
+  summary.enqueuedAt = new Date(state.enqueuedAt).toISOString();
+  // Only a settled run has an end. A live run's last event is just its most
+  // recent one, and rendering that as "ended" contradicts the ticking duration
+  // beside it. Gated here so every consumer inherits the guard.
+  if (last != null && isSettled(state.status)) summary.endedAt = new Date(last.ts).toISOString();
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
@@ -73,6 +85,8 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
     cacheReadTokens: row.totalCacheReadTokens,
     cacheWriteTokens: row.totalCacheWriteTokens,
   };
+  summary.enqueuedAt = new Date(row.enqueuedAt).toISOString();
+  if (row.lastEventTs != null && isSettled(row.status)) summary.endedAt = new Date(row.lastEventTs).toISOString();
   if (row.workflowSha) summary.workflow = row.workflowSha;
   if (row.workflowName != null) summary.workflowName = row.workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
