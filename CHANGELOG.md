@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-23
+
 ### Added
 
 - **`type: judge` steps — experimental.** A turn-less decision step: `state:` (literal text,
