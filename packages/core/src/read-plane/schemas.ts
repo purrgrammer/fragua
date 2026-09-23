@@ -58,6 +58,13 @@ export const RunSummary = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
+  /** Queue-entry ISO timestamp (`run_state.enqueued_at`). Distinct from
+   * `startedAt`, which folds this in only as a fallback — the gap between
+   * the two is the queue-wait time. */
+  enqueuedAt: Type.Optional(Type.String()),
+  /** Last-event ISO timestamp — the run's end time. Absent for a run with
+   * no events yet (`startedAt` then falls back to `enqueuedAt`). */
+  endedAt: Type.Optional(Type.String()),
   status: UiStatus,
   runStatus: RawRunStatus,
   eventCount: Type.Integer({ minimum: 0 }),
@@ -165,6 +172,11 @@ export const RunDetail = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
+  /** Queue-entry ISO timestamp — mirrors `RunSummary.enqueuedAt`. */
+  enqueuedAt: Type.Optional(Type.String()),
+  /** Last-event ISO timestamp — mirrors `RunSummary.endedAt`. Absent for a
+   * live run with no terminal event yet. */
+  endedAt: Type.Optional(Type.String()),
   status: UiStatus,
   runStatus: RawRunStatus,
   lastEventSeq: Type.Integer({ minimum: 0 }),

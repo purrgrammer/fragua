@@ -21,7 +21,7 @@ function mount(client = createTestQueryClient(), path = "/runs") {
 describe("RunsList", () => {
   afterEach(() => cleanup());
 
-  it("renders a three-column header: Title / Workflow / Status (nothing else)", async () => {
+  it("renders a four-column header: Title / Workflow / Started / Status (nothing else)", async () => {
     const client = createTestQueryClient();
     client.setQueryData(queries.runs.list().queryKey, [
       summaryRow({ runId: "r1", workflow: "wf-A", status: "success" }),
@@ -37,11 +37,28 @@ describe("RunsList", () => {
       (th.textContent ?? "").trim(),
     );
 
-    expect(headers).toEqual(["Title", "Workflow", "Status"]);
+    expect(headers).toEqual(["Title", "Workflow", "Started", "Status"]);
 
-    for (const dropped of ["Run", "Started", "Cost", "Tokens", "Events"]) {
+    for (const dropped of ["Run", "Cost", "Tokens", "Events"]) {
       expect(headers).not.toContain(dropped);
     }
+  });
+
+  it("renders started-at as relative text with an absolute ISO title tooltip", async () => {
+    const client = createTestQueryClient();
+    client.setQueryData(queries.runs.list().queryKey, [
+      summaryRow({ runId: "r1", workflow: "wf-A", status: "success", startedAt: "2024-01-02T00:00:00Z" }),
+    ] satisfies RunSummary[]);
+
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("runs-table")).toBeTruthy();
+    });
+
+    const cell = q.getByTestId("run-started-r1");
+    expect(cell.getAttribute("title")).toBe("2024-01-02T00:00:00.000Z");
+    expect((cell.textContent ?? "").trim().length).toBeGreaterThan(0);
   });
 
   it("renders one row per run with title link, workflow badge, and a status pill on the right", async () => {

@@ -39,6 +39,8 @@ export function runStateToSummary(
     cacheReadTokens: m.totalCacheReadTokens,
     cacheWriteTokens: m.totalCacheWriteTokens,
   };
+  summary.enqueuedAt = new Date(state.enqueuedAt).toISOString();
+  if (last != null) summary.endedAt = new Date(last.ts).toISOString();
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
@@ -73,6 +75,8 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
     cacheReadTokens: row.totalCacheReadTokens,
     cacheWriteTokens: row.totalCacheWriteTokens,
   };
+  summary.enqueuedAt = new Date(row.enqueuedAt).toISOString();
+  if (row.lastEventTs != null) summary.endedAt = new Date(row.lastEventTs).toISOString();
   if (row.workflowSha) summary.workflow = row.workflowSha;
   if (row.workflowName != null) summary.workflowName = row.workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
