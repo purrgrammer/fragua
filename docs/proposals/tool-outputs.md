@@ -1,14 +1,28 @@
 ---
 title: Tool-node production — typed `outputs:` on `tool` steps
 summary: "A `tool` step may declare typed `outputs:` over the same grammar as `llm` steps and emit a struct forward without spending a model turn. The engine allocates a scratch file through a new `ExecutionEnvironment` capability, hands its path to the process in `$FRAGUA_OUTPUT`; the process writes one JSON document there in place (`command > "$FRAGUA_OUTPUT"`); the engine reads it back from the fd it retained (`O_CLOEXEC`) when it created the scratch inode — never re-opening the child-controlled path, so a child that swaps a symlink, FIFO, or device onto the path reads back empty (the retained fd stays pinned to the regular inode the engine created) and fails closed, bounded by `maxBytes+1` independently of any stat, and with an abort discriminated in the read-back catch so a mid-read cancel lands as a terminal halt instead of being mislabeled a fault that advances past the cancel — validates against the node's TypeBox schema, and attaches it to `fact.node_completed.payload.outputs` — the same fact field, index, blob-spill, and `${{ outputs.X.f }}` resolver the `llm` producer already uses. A declared output the process never leaves on the retained inode (absent/oversized/unparseable/invalid) is a node failure, not an empty struct — the producer-side dual of the fail-closed read. The scratch path is deterministic in `(run, node, iteration)` and, at allocation, unlinked then re-created `O_CREAT|O_EXCL|O_CLOEXEC` with the fd retained for read-back — a failed create is a hard node failure, so a re-run answers "did this dispatch emit?" without a nonce and without an orphan-GC sweep (a bounded, self-healing `SIGKILL` leak is deferred behind a Door). No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump: the touch surface is an optional scratch capability on `ExecutionEnvironment` (both `LocalEnvironment` and `WorktreeEnvironment` in `@fragua/workspace`), the tool handler, the daemon plumbing that threads the node's `outputs:` decl into the tool handler, a parser type-gate loosening, and an `ir_version` bump plus a converter. A producing tool stays side-effect-bearing (`external`) and stays outside fan-out branches; provable purity, and data-driven routing on the emitted value, are named as separate future doors."
-status: proposal
-maturity: draft
+status: shipped
+maturity: shipped
 last-reviewed: 2026-06-16
 ---
 
 # Tool-node production — typed `outputs:` on `tool` steps
 
-> **Status: proposal, UNREVIEWED.** Produced by a `propose` run that paused on
+> **Status: SHIPPED (#80).** `type: tool` now accepts typed `outputs:` and emits
+> a struct forward by writing one JSON document to `$FRAGUA_OUTPUT`, read back
+> after the process exits through a retained scratch-file fd (never re-opening
+> the child-controlled path) and validated against the declared schema; a tool
+> that exits 0 without a parseable, valid struct fails the node. The parser gate
+> widened to admit `tool` (mint E053 for any other type); `ir_version` bumped to
+> 5 with an identity converter; no fact type, reducer, or `EVENT_CONTRACT_VERSION`
+> change. The landed design follows this proposal's retained-fd channel; two
+> nuances below are simplified in the shipped code — the scratch fd relies on
+> Node's default close-on-exec rather than an explicit `O_CLOEXEC` flag, and the
+> `renamed` diagnosis is a metadata-only inode comparison run before `dispose()`.
+> The deferred Doors (proactive scratch-root GC, remote-backend read-back,
+> data-driven routing on the emitted value) remain open.
+>
+> **Status (original): proposal, UNREVIEWED.** Produced by a `propose` run that paused on
 > its cost budget at the `feasibility` node before a human read it, and checked
 > in as-is so the design isn't lost. Treat every claim as a candidate, not a
 > settled decision. Its own arbitration pass returned `revise` from three of

@@ -226,7 +226,7 @@ Many steps need no upstream artifact — they re-derive from git / fs / a script
 
 ### Typed outputs (`outputs:`)
 
-An `llm` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.
+An `llm` or `tool` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.
 
 ```yaml
   review_security:
@@ -260,7 +260,7 @@ The type grammar is the same one `inputs:` uses — `type:` of `string` / `numbe
 - **Conditionally present, read inside a whole record/array → `optional:`.** A per-element `fix` that only some findings carry is `optional:` *because* the consumer reads the enclosing `findings` array **whole** — absence is just omitted JSON, never a fail-closed read.
 - **Don't direct-read an optional leaf.** `${{ outputs.X.rec.optfield }}` fails closed whenever the producer omits the field; the validator flags it **W016**. There's no fallback syntax yet, so model it as one of the two shapes above.
 
-**Rules:** `outputs:` is **`llm`-only to produce** (`tool`/`human` consume but never produce) and **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). The producer emits via a forced `emit_output` tool, validated post-emit.
+**Rules:** `outputs:` is produced by **`llm` or `tool`** steps (`human` consumes but never produces) and is **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). An `llm` producer emits via a forced `emit_output` tool; a `tool` producer writes one JSON document to the file named by `$FRAGUA_OUTPUT` (set only when the step declares `outputs:`) and the engine reads + validates it after the process exits — a tool that exits 0 without a parseable, valid struct **fails the node**. Both are validated post-emit.
 
 **Reach for `outputs:` only when:**
 - a **mechanical consumer takes the value verbatim** — a `tool` runs it (`gh pr merge ${{ outputs.scope.pr_number }}`), or a step passes it through unchanged; getting it wrong is a bug, not a re-read; **or**

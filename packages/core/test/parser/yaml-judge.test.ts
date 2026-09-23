@@ -306,7 +306,7 @@ describe("parseWorkflow — judge step rejections", () => {
     [
       "authored outputs on a judge",
       `    state: hi\n${Q}    outputs:\n      x: {type: string}\n`,
-      /outputs are only supported on `llm` steps/,
+      /outputs are only supported on `llm` and `tool` steps/,
     ],
     ["prompt on a judge", `    state: hi\n${Q}    prompt: hello\n`, /declares `prompt:` — a judge runs no agent turn/],
     ["allowed-tools on a judge", `    state: hi\n${Q}    allowed-tools: [read]\n`, /declares `allowed-tools:`/],
