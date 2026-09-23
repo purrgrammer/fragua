@@ -9,10 +9,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuthStorage } from "@fragua/agent";
+import { AuthStorage, getFraguaHome, ModelRegistry } from "@fragua/agent";
 import { JUDGE_DEFAULT_MODEL, JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
+import { registryPreflight } from "@fragua/server";
 import { openGlobalStore } from "../src/commands/open-global-store.ts";
 import { providersListCommand } from "../src/commands/providers.ts";
+import { resolveStorePath } from "../src/store-client.ts";
 
 describe("providers add", () => {
   let tmp: string;
@@ -129,5 +131,73 @@ describe("providers ls — the judge provider", () => {
     // The tally must move: it read "0/N credentialed" with the key stored.
     expect(lines.some((l) => /(?:^|\s)0\/\d+ providers credentialed/.test(l))).toBe(false);
     expect(lines.some((l) => /[1-9]\d*\/\d+ providers credentialed/.test(l))).toBe(true);
+  });
+});
+
+describe("the judge provider is first-class", () => {
+  let tmp: string;
+  let prevFraguaHome: string | undefined;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "fragua-judge-firstclass-"));
+    prevFraguaHome = process.env["FRAGUA_HOME"];
+    process.env["FRAGUA_HOME"] = tmp;
+  });
+
+  afterEach(() => {
+    if (prevFraguaHome === undefined) delete process.env["FRAGUA_HOME"];
+    else process.env["FRAGUA_HOME"] = prevFraguaHome;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  // A workflow of `judge` + `tool` steps needs no LLM provider, so `typesafe`
+  // alone is a complete setup. The server's preflight counted pi-ai MODELS,
+  // and typesafe contributes none — so that operator was told "no provider
+  // credentials configured" and could not create a run at all.
+  test("a judge-only credential satisfies the run-creation preflight", () => {
+    const store = openGlobalStore();
+    try {
+      const auth = AuthStorage.fromStore(store);
+      auth.set(JUDGE_DEFAULT_PROVIDER, { type: "api_key", key: "sk-typesafe-test" });
+      const registry = ModelRegistry.create(auth, store);
+
+      // The old gate, kept here so the regression is visible rather than implied.
+      expect(registry.getAvailable().length).toBe(0);
+
+      const gate = registryPreflight({
+        hasAnyAuth: () => registry.getAvailable().length > 0 || auth.list().length > 0,
+      });
+      expect(gate().ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("no credentials at all still fails the preflight", () => {
+    const store = openGlobalStore();
+    try {
+      const auth = AuthStorage.fromStore(store);
+      const registry = ModelRegistry.create(auth, store);
+      const gate = registryPreflight({
+        hasAnyAuth: () => registry.getAvailable().length > 0 || auth.list().length > 0,
+      });
+      const res = gate();
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.detail).toContain("no provider credentials configured");
+    } finally {
+      store.close();
+    }
+  });
+
+  // `providers` resolved the home through getFraguaHome(); every store-client
+  // command hard-coded ~/.fragua, so FRAGUA_HOME moved one surface and not the
+  // other and the two could report on different stores.
+  test("store-client and providers resolve the same FRAGUA_HOME", () => {
+    expect(resolveStorePath({})).toBe(join(tmp, "fragua.db"));
+    expect(resolveStorePath({})).toBe(join(getFraguaHome(), "fragua.db"));
+  });
+
+  test("an explicit --db still wins over FRAGUA_HOME", () => {
+    expect(resolveStorePath({ dbPath: join(tmp, "other.db") })).toBe(join(tmp, "other.db"));
   });
 });

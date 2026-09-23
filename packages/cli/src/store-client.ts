@@ -9,8 +9,8 @@
 // which `withStoreClient` turns into an actionable CLI error.
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { getFraguaHome } from "@fragua/agent";
 import { type IntentPlane, makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane, type ReadPlane } from "@fragua/core/read-plane";
 import { newRunId, SqliteStore, type SqliteStore as SqliteStoreType } from "@fragua/store";
@@ -33,9 +33,14 @@ export interface StoreClient {
   close(): void;
 }
 
-/** Resolve the store path: `--db`, else the harness global store. */
+/** Resolve the store path: `--db`, else the harness global store.
+ *
+ * The default goes through `getFraguaHome()` — the same resolver `fragua
+ * providers` uses — so `FRAGUA_HOME` redirects every CLI surface together.
+ * Hard-coding `~/.fragua` here meant `providers ls` and `doctor` could report
+ * on two different stores under the same override. */
 export function resolveStorePath(opts: StoreClientOpts): string {
-  return opts.dbPath ? resolve(opts.dbPath) : resolve(homedir(), ".fragua/fragua.db");
+  return opts.dbPath ? resolve(opts.dbPath) : resolve(getFraguaHome(), "fragua.db");
 }
 
 /** Open the store read/write as a client (no schema migration) and build the
