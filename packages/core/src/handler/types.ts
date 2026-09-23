@@ -361,6 +361,6 @@ export type HandlerResult =
       errorMessage: string;
       /** Provider-supplied `Retry-After` (ms). When set, the daemon honours
        * it exactly — no jitter, no exponential cap. Absent → daemon falls
-       * back to its own full-jitter exponential schedule. */
+       * back to its own equal-jitter exponential schedule. */
       retryAfterMs?: number;
     };

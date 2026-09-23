@@ -194,11 +194,11 @@ describe("computeBackoffMs", () => {
     expect(computeBackoffMs({ retryAfterMs: 12_345, attempt: 4, random: () => 0.5 })).toBe(12_345);
   });
 
-  test("full jitter is in [0, exponential_cap]", () => {
+  test("equal jitter floors each attempt at half the exponential", () => {
     const exponential = PROVIDER_RETRY_BASE_BACKOFF_MS * 2 ** 2; // attempt=3 → 4× base
     const min = computeBackoffMs({ attempt: 3, random: () => 0 });
     const max = computeBackoffMs({ attempt: 3, random: () => 0.999999 });
-    expect(min).toBe(0);
+    expect(min).toBe(exponential / 2);
     expect(max).toBeLessThan(exponential);
     expect(max).toBeGreaterThan(exponential * 0.9);
   });

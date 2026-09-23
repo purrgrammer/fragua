@@ -161,7 +161,7 @@ return {
 };
 ```
 
-`retryAfterMs` carries the provider's `Retry-After` header (or its in-body equivalent) normalised to milliseconds. When set, the daemon's auto-retry policy honours it exactly — no jitter, no exponential cap. Absent → the daemon falls back to its own full-jitter exponential schedule. Source: `packages/core/src/handler/types.ts` (the `kind: "pause_provider"` arm).
+`retryAfterMs` carries the provider's `Retry-After` header (or its in-body equivalent) normalised to milliseconds. When set, the daemon's auto-retry policy honours it exactly — no jitter, no exponential cap. Absent → the daemon falls back to its own equal-jitter exponential schedule (`exp/2 + random()*exp/2`, so each attempt waits at least half its exponential). Source: `packages/core/src/handler/types.ts` (the `kind: "pause_provider"` arm).
 
 ---
 
