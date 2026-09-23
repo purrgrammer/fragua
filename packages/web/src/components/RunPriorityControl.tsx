@@ -6,7 +6,7 @@
 // mount it unconditionally in the header.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { adjustPriority, type RunDetail } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { toast, toastError } from "../lib/toast.ts";
@@ -28,6 +28,10 @@ export function RunPriorityControl({
 }: RunPriorityControlProps): JSX.Element | null {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<string>(String(priority));
+  // The prop moves under us when an SSE push or a CLI `runs priority` lands
+  // while the run is on screen. Without this the input keeps showing the old
+  // value and Set stays enabled, so a click silently reverts the change.
+  useEffect(() => setDraft(String(priority)), [priority]);
 
   const adjustM = useMutation({
     mutationFn: (newPriority: number) => adjustPriority(runId, newPriority),
