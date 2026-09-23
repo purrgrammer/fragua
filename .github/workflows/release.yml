@@ -93,42 +93,36 @@ jobs:
             dist/fragua-headless-${{ matrix.target }} \
             --clobber
 
-  # After all 8 binaries are uploaded, download them all, generate a single
-  # SHA256SUMS covering every asset, upload it to the release, and emit build
-  # provenance attestations via actions/attest-build-provenance (Sigstore).
-  # Running in one job after the matrix ensures a complete, authoritative
-  # checksum file rather than 4 partial ones racing to the release.
+  # After all 8 binaries are uploaded: publish a single SHA256SUMS covering
+  # every asset, then emit build provenance attestations via
+  # actions/attest-build-provenance (Sigstore). Running in one job after the
+  # matrix ensures a complete, authoritative checksum file rather than 4
+  # partial ones racing to the release.
   checksums-and-attest:
     needs: binaries
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Download all release binaries
+      # SHA256SUMS is generated from the API's own per-asset `digest`, NOT by
+      # downloading 775MB and hashing it. Two reasons, one of them load-bearing:
+      # `gh release download` resolves the release through a projection that
+      # lags the upload path by minutes, so this step reliably failed with "no
+      # assets to download" seconds after four jobs had uploaded successfully —
+      # and `setup-fragua` refuses to install without SHA256SUMS, so a release
+      # would publish binaries nobody could install. The digests come from the
+      # same API that stored the bytes; hashing them locally adds nothing.
+      - name: Generate SHA256SUMS from the release API
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .id)"
           mkdir -p dist
-          for target in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64; do
-            gh release download "$GITHUB_REF_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
-              --pattern "fragua-$target" \
-              --pattern "fragua-headless-$target" \
-              --dir dist \
-              --clobber
-          done
-
-      - name: Generate SHA256SUMS
-        run: |
-          cd dist
-          sha256sum fragua-bun-linux-x64 \
-                    fragua-headless-bun-linux-x64 \
-                    fragua-bun-linux-arm64 \
-                    fragua-headless-bun-linux-arm64 \
-                    fragua-bun-darwin-arm64 \
-                    fragua-headless-bun-darwin-arm64 \
-                    fragua-bun-darwin-x64 \
-                    fragua-headless-bun-darwin-x64 \
-            > SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/$id/assets" --paginate \
+            --jq '.[] | select(.name != "SHA256SUMS") | "\(.digest | sub("^sha256:"; ""))  \(.name)"' \
+            | sort -k2 > dist/SHA256SUMS
+          test "$(wc -l < dist/SHA256SUMS)" -eq 8
+          cat dist/SHA256SUMS
 
       - name: Upload SHA256SUMS to release
         env:
@@ -138,6 +132,29 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             dist/SHA256SUMS \
             --clobber
+
+      # Attestation DOES need the bytes, so it waits for the projection to
+      # catch up rather than racing it. Bounded: ~5 minutes, then give up
+      # loudly.
+      - name: Download all release binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            listed="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+            [ "$listed" -ge 9 ] && break
+            echo "release lists $listed assets; waiting for the projection (attempt $attempt/10)"
+            sleep 30
+          done
+          for target in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64; do
+            gh release download "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "fragua-$target" \
+              --pattern "fragua-headless-$target" \
+              --dir dist \
+              --clobber
+          done
 
       # Emit a Sigstore build provenance attestation for every binary.
       # actions/attest-build-provenance links each file's digest to this

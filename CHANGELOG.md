@@ -8,6 +8,17 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Releases publish `SHA256SUMS` again.** The checksums job downloaded every
+  asset to hash it, but `gh release download` resolves a release through a
+  projection that lags the upload path by minutes — so it failed with "no assets
+  to download" seconds after four jobs had uploaded successfully, and the
+  release shipped binaries `setup-fragua` refuses to install. The file is now
+  generated from the release API's own per-asset digest, which needs no
+  download; the attestation step, which does need the bytes, waits for the
+  listing to catch up instead of racing it.
+
 ## [0.11.1] — 2026-09-23
 
 ### Changed
