@@ -46,6 +46,56 @@ describe("SteeringRegistry — basics", () => {
     expect(a.received).toEqual(["live"]);
   });
 
+  test("steer broadcasts to every live agent registered for the run", () => {
+    // The fan-out regression: five concurrent llm branches under one runId.
+    // A mid-flight steer must reach all of them, not just the last to begin.
+    const reg = new SteeringRegistry();
+    const branches = [new FakeAgent(), new FakeAgent(), new FakeAgent(), new FakeAgent(), new FakeAgent()];
+    branches.forEach((a, i) => {
+      reg.beginRun("fo", a, { nodeId: `lens${i}`, iteration: 0 });
+    });
+
+    reg.steer("fo", "tighten the scope");
+
+    for (const a of branches) expect(a.received).toEqual(["tighten the scope"]);
+    expect(reg.activeCount("fo")).toBe(5);
+  });
+
+  test("steer returns a delivered outcome listing each branch's node and iteration", () => {
+    const reg = new SteeringRegistry();
+    reg.beginRun("fo", new FakeAgent(), { nodeId: "adversarial", iteration: 0 });
+    reg.beginRun("fo", new FakeAgent(), { nodeId: "scope", iteration: 1 });
+
+    const delivery = reg.steer("fo", "go");
+
+    expect(delivery.disposition).toBe("delivered");
+    expect(delivery.targets).toEqual([
+      { nodeId: "adversarial", iteration: 0 },
+      { nodeId: "scope", iteration: 1 },
+    ]);
+  });
+
+  test("steer with no live agent returns a buffered outcome", () => {
+    const reg = new SteeringRegistry();
+    const delivery = reg.steer("r1", "later");
+    expect(delivery).toEqual({ disposition: "buffered", targets: [] });
+  });
+
+  test("endRun removes only the ending agent; a surviving sibling still receives steers", () => {
+    const reg = new SteeringRegistry();
+    const a1 = new FakeAgent();
+    const a2 = new FakeAgent();
+    reg.beginRun("fo", a1, { nodeId: "b1", iteration: 0 });
+    reg.beginRun("fo", a2, { nodeId: "b2", iteration: 0 });
+
+    reg.endRun("fo", a1);
+    expect(reg.activeCount("fo")).toBe(1);
+
+    reg.steer("fo", "still going");
+    expect(a1.received).toEqual([]);
+    expect(a2.received).toEqual(["still going"]);
+  });
+
   test("endRun clears the slot only when the agent matches", () => {
     const reg = new SteeringRegistry();
     const a1 = new FakeAgent();

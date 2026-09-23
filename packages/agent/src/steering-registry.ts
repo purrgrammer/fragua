@@ -1,22 +1,30 @@
 // Per-run registry of live agents + buffered steer messages.
 //
 // Extracted from PiLlmBackend so the concurrency-critical slot-
-// management logic lives in one focused ~60-line class, independent of
-// pi-ai / pi-agent-core. This makes property-based tests tractable: the
-// PBT can exercise the registry directly with a minimal fake agent
-// instead of spinning up the full LLM stack.
+// management logic lives in one focused class, independent of pi-ai /
+// pi-agent-core. This makes property-based tests tractable: the PBT can
+// exercise the registry directly with a minimal fake agent instead of
+// spinning up the full LLM stack.
+//
+// A run may have MORE THAN ONE live agent at once: a `type: parallel`
+// fan-out dispatches N concurrent `llm` branches under the SAME runId,
+// each calling `beginRun(runId, agent)`. The registry therefore holds a
+// SET of live agents per run, and a steer BROADCASTS to every one of
+// them — fan-out branches are independent sub-pipelines and a steer
+// applies to the run, not to whichever branch happened to register last.
 //
 // Semantics:
-//   - `beginRun(runId, agent)` registers the live agent for a run and
-//     drains any messages that were buffered while no agent was active
-//     for that run. Drains in FIFO order.
-//   - `endRun(runId, agent)` clears the slot iff the registered agent is
-//     still the same instance (defensive; a re-entrant begin/end cycle
-//     for the same runId would otherwise risk erasing the wrong agent).
-//   - `steer(runId, message)` injects into the live agent for `runId` if
-//     one exists; otherwise buffers. Empty strings are ignored.
-//   - `forgetRun(runId)` drops both the live slot (if any) and the
-//     buffer (if any) for `runId`. Idempotent.
+//   - `beginRun(runId, agent, target)` adds `agent` to the run's live
+//     set (tagged with its `(nodeId, iteration)` for delivery records)
+//     and drains any messages buffered while no agent was active. Drains
+//     in FIFO order into the beginning agent.
+//   - `endRun(runId, agent)` removes `agent` from the run's live set;
+//     the last agent out drops the run's set entry.
+//   - `steer(runId, message)` injects into EVERY live agent for `runId`
+//     if any exist (returning a `delivered` outcome listing them);
+//     otherwise buffers (returning `buffered`). Empty strings are dropped.
+//   - `forgetRun(runId)` drops both the live set (if any) and the buffer
+//     (if any) for `runId`. Idempotent.
 //
 // Concurrency: every op is synchronous; there's no `await` anywhere.
 // Under a single-threaded JS runtime this makes the registry safe to
@@ -24,20 +32,29 @@
 // locking — the only cross-call state is the two Maps, and Map ops
 // don't yield mid-mutation.
 
+import type { SteerDelivery, SteerTarget } from "@fragua/types";
+
 /** Minimal contract the registry needs on an agent. The real
  * pi-agent-core `Agent` satisfies this; tests provide a fake. */
 export interface SteerableAgent {
   steer(message: { role: "user"; content: [{ type: "text"; text: string }]; timestamp: number }): void;
 }
 
+const UNTAGGED_TARGET: SteerTarget = { nodeId: "", iteration: 0 };
+
 export class SteeringRegistry {
-  private readonly activeAgents = new Map<string, SteerableAgent>();
+  private readonly activeAgents = new Map<string, Map<SteerableAgent, SteerTarget>>();
   private readonly pendingSteers = new Map<string, string[]>();
 
-  /** Register `agent` as the live agent for `runId` and drain any
-   * messages that were buffered while no agent was active. */
-  beginRun(runId: string, agent: SteerableAgent): void {
-    this.activeAgents.set(runId, agent);
+  /** Register `agent` as a live agent for `runId` (tagged with the branch
+   * it runs) and drain any messages buffered while no agent was active. */
+  beginRun(runId: string, agent: SteerableAgent, target: SteerTarget = UNTAGGED_TARGET): void {
+    let agents = this.activeAgents.get(runId);
+    if (agents === undefined) {
+      agents = new Map();
+      this.activeAgents.set(runId, agents);
+    }
+    agents.set(agent, target);
     const buffered = this.pendingSteers.get(runId);
     if (buffered !== undefined) {
       this.pendingSteers.delete(runId);
@@ -45,24 +62,33 @@ export class SteeringRegistry {
     }
   }
 
-  /** Clear the live slot for `runId` iff the registered agent is still
-   * `agent`. Defensive against re-entrant begin/end cycles. */
+  /** Remove `agent` from the run's live set. The last agent out drops the
+   * run's entry so `hasActive` and `activeSize` stay accurate. */
   endRun(runId: string, agent: SteerableAgent): void {
-    if (this.activeAgents.get(runId) === agent) this.activeAgents.delete(runId);
+    const agents = this.activeAgents.get(runId);
+    if (agents === undefined) return;
+    agents.delete(agent);
+    if (agents.size === 0) this.activeAgents.delete(runId);
   }
 
-  /** Inject `message` into the live agent for `runId`, or buffer it for
-   * the run's next `beginRun`. Empty strings are dropped. */
-  steer(runId: string, message: string): void {
-    if (!message) return;
-    const agent = this.activeAgents.get(runId);
-    if (agent !== undefined) {
-      this.inject(agent, message);
-      return;
+  /** Inject `message` into EVERY live agent for `runId`, or buffer it for
+   * the run's next `beginRun`. Empty strings are dropped (returns a
+   * `buffered` outcome with no targets and no state change). */
+  steer(runId: string, message: string): SteerDelivery {
+    if (!message) return { disposition: "buffered", targets: [] };
+    const agents = this.activeAgents.get(runId);
+    if (agents !== undefined && agents.size > 0) {
+      const targets: SteerTarget[] = [];
+      for (const [agent, target] of agents) {
+        this.inject(agent, message);
+        targets.push(target);
+      }
+      return { disposition: "delivered", targets };
     }
     const existing = this.pendingSteers.get(runId);
     if (existing !== undefined) existing.push(message);
     else this.pendingSteers.set(runId, [message]);
+    return { disposition: "buffered", targets: [] };
   }
 
   /** Drop every per-run entry for `runId`. Called when a run reaches a
@@ -73,9 +99,15 @@ export class SteeringRegistry {
     this.pendingSteers.delete(runId);
   }
 
-  /** Is an agent currently registered for `runId`? */
+  /** Is at least one agent currently registered for `runId`? */
   hasActive(runId: string): boolean {
-    return this.activeAgents.has(runId);
+    return (this.activeAgents.get(runId)?.size ?? 0) > 0;
+  }
+
+  /** Number of live agents registered for `runId` (0 when none). Exposed
+   * for the broadcast invariant checks in tests. */
+  activeCount(runId: string): number {
+    return this.activeAgents.get(runId)?.size ?? 0;
   }
 
   /** Return the buffer size for `runId` (0 when no buffer exists).
@@ -84,7 +116,7 @@ export class SteeringRegistry {
     return this.pendingSteers.get(runId)?.length ?? 0;
   }
 
-  /** Number of runs with a live agent registered. Exposed for tests. */
+  /** Number of runs with at least one live agent registered. Exposed for tests. */
   activeSize(): number {
     return this.activeAgents.size;
   }

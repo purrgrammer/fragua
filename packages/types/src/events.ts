@@ -507,6 +507,19 @@ export type ChangeStat = {
 /** Inbox lifecycle for a terminal run carrying recoverable work. */
 export type InboxStatus = "pending" | "acted" | "discarded";
 
+/** What happened to a steer when the supervisor forwarded it mid-flight:
+ * `delivered` — injected into ≥1 live LLM agent for the run (broadcast to
+ * every in-flight branch, `targets` lists them); `buffered` — no agent was
+ * active, so it was queued for the next `beginRun` (the durable fold path also
+ * carries it to the next dispatch via `ctx.steering`). */
+export type SteerDisposition = "delivered" | "buffered";
+
+/** An LLM branch a steer reached, identified by its `(nodeId, iteration)`. */
+export type SteerTarget = { nodeId: string; iteration: number };
+
+/** Outcome the steer registry returns for one `steer(runId, text)` call. */
+export type SteerDelivery = { disposition: SteerDisposition; targets: SteerTarget[] };
+
 /** Payload of the `snapshot.captured` observability event — a per-step (nodeId
  * set) or HITL (nodeId null) worktree snapshot. Addressed by `commitSha`; the
  * run's single tip ref keeps it reachable. `committed` / `uncommitted` stats
@@ -670,6 +683,20 @@ export type FactEvent =
   | {
       type: "fact.side_effect_failed";
       payload: { idempotencyKey: string; errorCode: string; retriable: boolean };
+    }
+  | {
+      /** A steer the supervisor forwarded mid-flight, and what became of it
+       * (delivery to every in-flight branch, or buffering). `intentSeq` is the
+       * originating `intent.steering_requested` seq so an operator can join the
+       * request to its outcome; `targets` names the branches a `delivered`
+       * steer reached. Observability only — the reducer folds it to a no-op.
+       *
+       * contract: no-bump — projection-neutral observability fact; the reducer
+       * returns `next` unchanged for it and any reader in the compat range
+       * falls through the switch to the same no-op, so run_state fold semantics
+       * are unchanged across [MIN_COMPATIBLE, EVENT_CONTRACT_VERSION]. */
+      type: "fact.steering_applied";
+      payload: { intentSeq: number; disposition: SteerDisposition; targets: SteerTarget[] };
     }
   | {
       type: "fact.tool_completed";

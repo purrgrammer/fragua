@@ -50,6 +50,7 @@ const IO_ALLOWED = new Set<string>([
   "recorder.ts",
   "schedule-dispatcher.ts",
   "snapshot-service.ts",
+  "steer-delivery.ts",
   "snapshotter.ts",
   "supervisor.ts",
   "wake-pending.ts",

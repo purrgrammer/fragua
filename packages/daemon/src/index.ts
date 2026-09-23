@@ -25,6 +25,8 @@ export {
   startScheduleDispatcher,
 } from "./schedule-dispatcher.ts";
 export { InvalidScheduleIntervalError, parseScheduleInterval, SCHEDULE_INTERVALS } from "./schedule-interval.ts";
+export type { SteerForwarder } from "./steer-delivery.ts";
+export { buildSteerDelivery } from "./steer-delivery.ts";
 export type { SupervisorOpts } from "./supervisor.ts";
 export { HandlerLeakedError, IntentArrivedError, startSupervisor } from "./supervisor.ts";
 export type { WakePendingResult } from "./wake-pending.ts";

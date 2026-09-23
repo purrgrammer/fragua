@@ -355,6 +355,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.handler_timeout_leaked":
     case "fact.daemon_takeover":
     case "fact.provider_retry_attempted":
+    case "fact.steering_applied":
       return next;
     case "fact.snapshot_recorded": {
       // Terminal worktree snapshot → inbox + diff projection.

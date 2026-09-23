@@ -1,0 +1,55 @@
+// Steer delivery + observability — the daemon side of a mid-flight steer.
+//
+// The supervisor forwards an `intent.steering_requested` into the shared
+// steer registry via `onSteer`; the registry injects the text into every
+// in-flight LLM branch (or buffers it) and reports the outcome. This module
+// turns that outcome into a durable `fact.steering_applied` so an operator
+// can see whether the model actually saw the steer — the intent alone only
+// records that the request was appended, not that it landed.
+//
+// Fact writing lives here (the daemon is the sole fact writer, ground rule 5)
+// rather than in the agent package, which has no store handle. The append is
+// OCC-checked against `run_state.version`; a fan-out steer competes with the
+// branches' own commits, so a bounded retry re-reads the live version. The
+// fact is projection-neutral, so a conflict that outlives the budget is
+// swallowed rather than crashing the supervisor fiber.
+
+import { ConcurrencyError, type IEventReader, type IEventWriter, type SteerDelivery } from "@fragua/store";
+
+/** Structural view of the steer registry — the daemon needs only its
+ * broadcast entry point, so it doesn't take a hard dependency on
+ * `@fragua/agent`'s `SteeringRegistry`. */
+export interface SteerForwarder {
+  steer(runId: string, text: string): SteerDelivery;
+}
+
+const STEER_FACT_APPEND_ATTEMPTS = 8;
+
+export function buildSteerDelivery(deps: {
+  store: IEventWriter & IEventReader;
+  registry: SteerForwarder;
+}): (runId: string, text: string, intentSeq: number) => void {
+  const { store, registry } = deps;
+  return (runId, text, intentSeq) => {
+    const delivery = registry.steer(runId, text);
+    for (let attempt = 0; attempt < STEER_FACT_APPEND_ATTEMPTS; attempt++) {
+      const state = store.getState(runId);
+      if (state == null || state.status !== "running") return;
+      try {
+        store.appendFact(
+          runId,
+          [
+            {
+              type: "fact.steering_applied",
+              payload: { intentSeq, disposition: delivery.disposition, targets: delivery.targets },
+            },
+          ],
+          state.version,
+        );
+        return;
+      } catch (err) {
+        if (!(err instanceof ConcurrencyError)) throw err;
+      }
+    }
+  };
+}
