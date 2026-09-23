@@ -299,6 +299,21 @@ describe("api — control channel", () => {
     expect(JSON.parse(bodies[0] ?? "")).toEqual({ reason: "wrong branch" });
   });
 
+  it("adjustPriority POSTs to /runs/:id/priority with { newPriority } and returns { seq }", async () => {
+    const bodies: string[] = [];
+    mock = installFetchMock({
+      "/api/runs/run-7/priority": ({ init }) => {
+        bodies.push(init?.body as string);
+        return json({ seq: 21 });
+      },
+    });
+    const res = await api.adjustPriority("run-7", 5);
+    expect(res).toEqual({ seq: 21 });
+    expect(mock.calls[0]?.method).toBe("POST");
+    expect(mock.calls[0]?.url).toBe("/api/runs/run-7/priority");
+    expect(JSON.parse(bodies[0] ?? "")).toEqual({ newPriority: 5 });
+  });
+
   it("non-2xx responses throw ApiError with the status", async () => {
     mock = mockResponse(
       "/api/runs/ghost/steer",
