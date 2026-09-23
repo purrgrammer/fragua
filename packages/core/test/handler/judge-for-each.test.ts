@@ -287,6 +287,34 @@ describe("judge handler — for-each", () => {
     expect(c.events.filter((e) => e.type === "cost.recorded")).toHaveLength(0);
   });
 
+  test("an empty list declares the same keys a populated one does", async () => {
+    // Output reads are fail-closed, so a key that appears only when the list
+    // was non-empty fails its consumer on the CLEAN path — exactly the path a
+    // review lens takes when it finds nothing. A synthesiser reading
+    // `${{ outputs.j.review }}` died this way while every lens had run fine.
+    const c = fresh();
+    const cfg = {
+      nodeId: "j",
+      forEach: "${{ outputs.read.findings }}",
+      questions: { holds: HOLDS },
+      keep: { rules: [{ question: "holds", min: 0.6 }] },
+      review: { rules: [{ question: "holds", min: 0.3, max: 0.6 }] },
+    };
+
+    const emptyRes = await makeJudgeHandler({ ...cfg }).handler(
+      ctxWith(c, { read: { findings: [] } }, stubJudge(perItem, c)),
+    );
+    if (emptyRes.kind !== "transition") throw new Error(emptyRes.kind);
+    expect(emptyRes.outputs).toEqual({ answers: [], kept: [], dropped: [], review: [] });
+
+    const c2 = fresh();
+    const fullRes = await makeJudgeHandler({ ...cfg }).handler(
+      ctxWith(c2, { read: { findings: FINDINGS } }, stubJudge(perItem, c2)),
+    );
+    if (fullRes.kind !== "transition") throw new Error(fullRes.kind);
+    expect(Object.keys(fullRes.outputs ?? {}).sort()).toEqual(Object.keys(emptyRes.outputs ?? {}).sort());
+  });
+
   test("over the item cap is a routable fail", async () => {
     const c = fresh();
     const h = makeJudgeHandler({

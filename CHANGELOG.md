@@ -49,6 +49,15 @@ guarantee.
   the patch is capped, so a large diff cannot blow the pack past a usable
   context window.
 
+### Fixed
+
+- **A `for-each` judge over an empty list now declares `review`.** With `keep:`
+  and `review:` both set, the empty-list short-circuit emitted only `answers`,
+  `kept` and `dropped`. Output reads are fail-closed, so a consumer reading
+  `${{ outputs.<judge>.review }}` failed whenever a judge had nothing to
+  judge — the CLEAN path. In a review pipeline that meant one lens finding
+  nothing took down the synthesiser and the run posted a placeholder.
+
 ### Removed
 
 - **`pr_review_nojudge.yaml`.** The judge-free copy existed only while no

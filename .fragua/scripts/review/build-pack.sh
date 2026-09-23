@@ -30,7 +30,7 @@ set -euo pipefail
 MAX_FILES=40
 MAX_FILE_LINES=1500
 MAX_CALLER_LINES=200
-MAX_PATCH_LINES=5000
+MAX_PATCH_LINES=3000
 
 mode="${1:?usage: build-pack.sh pr <n> | spec <diff-spec>}"
 arg="${2:?usage: build-pack.sh pr <n> | spec <diff-spec>}"

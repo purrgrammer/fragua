@@ -96,11 +96,16 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       }
       if (items.length === 0) {
         // Nothing to judge: no call, no cost. The outputs are the empty lists
-        // a consumer expects, so `${{ outputs.X.kept }}` reads as `[]`.
+        // a consumer expects, so `${{ outputs.X.kept }}` reads as `[]`. This
+        // must declare EXACTLY the keys the populated path declares — output
+        // reads are fail-closed, so a key present only when the list was
+        // non-empty fails its consumer on the clean path, which is the path a
+        // lens takes when it finds nothing.
         const empty: OutputsValue = { answers: [] };
         if (cfg.keep !== undefined) {
           empty["kept"] = [];
           empty["dropped"] = [];
+          if (cfg.review !== undefined) empty["review"] = [];
         }
         return { kind: "transition", tokens: 0, costUsd: 0, outputs: empty };
       }

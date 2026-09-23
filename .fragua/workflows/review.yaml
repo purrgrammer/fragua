@@ -98,7 +98,7 @@ defaults:
 steps:
   resolve:                             # resolve target + checkout; emit the review context as typed outputs
     type: llm
-    timeout-minutes: 6
+    timeout-minutes: 12
     effort: low
     allowed-tools: [read, grep, find, bash]
     next: classify_diff
@@ -281,16 +281,19 @@ steps:
     concurrency: 4
     # PER-BRANCH-SUB-NODE deadline, and it is SHAPING, not a bound: a fan-out
     # timeout is an abort, and the executor re-dispatches the branch with a
-    # fresh timer up to five times before pausing the run. Locally that pause is
+    # fresh timer up to five times before pausing the run. Set ABOVE what a
+    # lens actually needs (measured: 3-11 min on a 3.4k-line diff) precisely so
+    # it does NOT fire on a normal run — an abort here costs a full re-read of
+    # the pack, which is more expensive than the overrun it interrupts. Locally that pause is
     # answerable (unlike in CI), so this workflow keeps no wrapper — but the
     # shaping still keeps a wedged lens from holding the join for an hour.
-    timeout-minutes: 6
+    timeout-minutes: 12
 
   # ── Lens: correctness — does the code do what it claims?
   correctness_lens:
     type: llm
     effort: medium
-    allowed-tools: [read, grep]
+    allowed-tools: [read]
     on:
       success: correctness_judge
       # A dead lens JOINS instead of halting the run. `synthesize` reads this
@@ -315,7 +318,7 @@ steps:
     prompt: |
       Review the change through the **correctness** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
 
-      Your evidence is already on disk in `pack/`. Work from `pack/context.patch` (the change, with context), `pack/files/<path>` (the post-image of each changed file), and `pack/removed.txt` (every line this change deleted). **Do NOT search the repository** — no `grep` over `packages/`, no opening files outside `pack/`. Budget: at most 4 tool calls. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
+      Your evidence is already on disk in `pack/`. Work from `pack/context.patch` (the change, with context), `pack/files/<path>` (the post-image of each changed file), and `pack/removed.txt` (every line this change deleted). `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
       Ask of each changed hunk: what input, state, timing, or platform makes this wrong? Hunt: inverted or wrong conditions, off-by-one, null/undefined deref, missing `await` / unhandled rejection, falsy-zero checks, wrong-variable copy-paste, errors swallowed in a catch, races on shared state, broken invariants, unsound type assertions hiding a real gap.
 
@@ -376,7 +379,7 @@ steps:
   integration_lens:
     type: llm
     effort: medium
-    allowed-tools: [read, grep]
+    allowed-tools: [read]
     on:
       success: integration_judge
       # A dead lens JOINS instead of halting the run. `synthesize` reads this
@@ -401,7 +404,7 @@ steps:
     prompt: |
       Review the change through the **integration** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
 
-      Your evidence is already on disk in `pack/`. Work from `pack/callers.txt` (every reference to a changed exported symbol from a file this change did NOT touch), `pack/removed.txt`, `pack/context.patch`, and `pack/files/<path>`. **Do NOT search the repository** — no `grep` over `packages/`, no opening files outside `pack/`. Budget: at most 4 tool calls. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
+      Your evidence is already on disk in `pack/`. Work from `pack/callers.txt` (every reference to a changed exported symbol from a file this change did NOT touch), `pack/removed.txt`, `pack/context.patch`, and `pack/files/<path>`. `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
       `pack/callers.txt` is the grep already done for you — start there, not from a search. Hunt: a caller left on the old signature, semantics, or return shape; a removed export or field something still reads; a changed default, enum literal, event type, or error contract that a consumer branches on; a migration the write path needs and the read path doesn't have; a config or env var read somewhere the change didn't update.
 
@@ -462,7 +465,7 @@ steps:
   risk_lens:
     type: llm
     effort: medium
-    allowed-tools: [read, grep]
+    allowed-tools: [read]
     on:
       success: risk_judge
       # A dead lens JOINS instead of halting the run. `synthesize` reads this
@@ -487,7 +490,7 @@ steps:
     prompt: |
       Review the change through the **risk** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
 
-      Your evidence is already on disk in `pack/`. Work from `pack/risk-surface.txt` (every added line on a security-, IO-, or resource-sensitive surface — or the single word `NONE`), then `pack/context.patch` and `pack/files/<path>` for anything it points at. **Do NOT search the repository** — no `grep` over `packages/`, no opening files outside `pack/`. Budget: at most 4 tool calls. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
+      Your evidence is already on disk in `pack/`. Work from `pack/risk-surface.txt` (every added line on a security-, IO-, or resource-sensitive surface — or the single word `NONE`), then `pack/context.patch` and `pack/files/<path>` for anything it points at. `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
       **If `pack/risk-surface.txt` is `NONE`, stop: emit an empty `findings` array and say so in one line.** That file is computed from the change; do not re-derive it. Hunt, in this order: injection and unsafe interpolation (SQL, shell, path), missing authorization or a widened permission, a secret or credential that reaches a log / an error / an artifact, unvalidated input crossing a trust boundary, an unbounded loop / allocation / query on a reachable path, and a concrete structural break with a real maintenance cost (a dependency cycle, a leaked internal, duplication of a shared mechanism that will demonstrably drift — name BOTH locations and what drifts).
 
@@ -548,7 +551,7 @@ steps:
   craft_lens:
     type: llm
     effort: medium
-    allowed-tools: [read, grep]
+    allowed-tools: [read]
     on:
       success: craft_judge
       # A dead lens JOINS instead of halting the run. `synthesize` reads this
@@ -573,7 +576,7 @@ steps:
     prompt: |
       Review the change through the **craft** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
 
-      Your evidence is already on disk in `pack/`. Work from `pack/context.patch`, `pack/files/<path>`, `pack/callers.txt` (for an existing mechanism the change re-implements), and `pack/names.txt` (what the change did and did NOT touch). **Do NOT search the repository** — no `grep` over `packages/`, no opening files outside `pack/`. Budget: at most 4 tool calls. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
+      Your evidence is already on disk in `pack/`. Work from `pack/context.patch`, `pack/files/<path>`, `pack/callers.txt` (for an existing mechanism the change re-implements), and `pack/names.txt` (what the change did and did NOT touch). `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
       This is the lens that makes a review holistic: a change can be bug-free and still wrong. Two questions, in one pass. QUALITY — is this the right change? Does it duplicate a mechanism that already exists (name BOTH locations), fix a symptom where the cause is one layer down, or add an abstraction the codebase has no use for? COHERENCE — is it complete? Behaviour changed with no test pinning it, a contract changed with its documentation left stale, a convention the surrounding code follows and this does not. `pack/callers.txt` is where a duplicated helper shows up; `pack/names.txt` is where a missing test or doc shows up as a file that should have changed and didn't. NOT naming, NOT formatting, NOT "consider extracting" for its own sake, NOT API-stability opinions (this is a pre-1.0 monorepo).
 
