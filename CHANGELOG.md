@@ -10,7 +10,7 @@ guarantee.
 
 ### Added
 
-- **`type: judge` steps.** A turn-less decision step: `state:` (literal text,
+- **`type: judge` steps — experimental.** A turn-less decision step: `state:` (literal text,
   `${{ inputs }}` / `${{ outputs }}`, or `{file: <path>}` leaves read from the
   worktree) plus `questions:` of `choice` / `score` / `noul`, asked of a System
   One model (TypeSafe Jev) in one call. Every question becomes a typed output
@@ -22,8 +22,8 @@ guarantee.
   `goal-gate` compose unchanged. Judges may run as `parallel` branches.
   Validator codes E047 / E048 and W020 / W021. Credential: `fragua providers add
   typesafe` (or `TYPESAFE_API_KEY` for `fragua ci`); `fragua providers test
-  typesafe` makes one call. Experimental — see `docs/proposals/judge-step.md`.
-- **`for-each:` on judge steps.** Point a judge at an array-typed output and every
+  typesafe` makes one call. See `docs/proposals/judge-step.md`.
+- **`for-each:` on judge steps — experimental.** Point a judge at an array-typed output and every
   question is asked once per item in one call; `` `item.field` `` in a question
   addresses the current item. Outputs: `answers` aligned with the input, and with
   `keep: {<noul>: <min> | {min, max}, …}` the input split into `kept` / `dropped`, each
