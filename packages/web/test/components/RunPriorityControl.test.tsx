@@ -85,3 +85,30 @@ describe("RunPriorityControl", () => {
     }
   });
 });
+
+describe("RunPriorityControl — prop re-sync", () => {
+  afterEach(() => cleanup());
+
+  test("draft follows a priority change that arrives while the run is on screen", () => {
+    const { restore } = installFetchMock({});
+    try {
+      const { container, rerender } = renderWithClient(
+        <MemoryRouter>
+          <RunPriorityControl runId="run-1" status="queued" priority={0} />
+        </MemoryRouter>,
+      );
+      const input = () => container.querySelector<HTMLInputElement>(`[data-testid="run-priority-input"]`);
+      expect(input()?.value).toBe("0");
+
+      // An SSE push / CLI `runs priority` raises it underneath us.
+      rerender(
+        <MemoryRouter>
+          <RunPriorityControl runId="run-1" status="queued" priority={5} />
+        </MemoryRouter>,
+      );
+      expect(input()?.value).toBe("5");
+    } finally {
+      restore();
+    }
+  });
+});

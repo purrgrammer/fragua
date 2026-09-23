@@ -151,7 +151,11 @@ function RunCapControlsInner({
   }
 
   const parsed = Number(draft);
-  const positive = Number.isFinite(parsed) && parsed > 0;
+  // Only a cost ceiling is fractional. The other four caps are counts, and
+  // `step="1"` on the input is advisory — it does not stop a pasted or
+  // scripted "2.5" from dispatching a fractional limit.
+  const positive =
+    openCap === "budget_cost" ? Number.isFinite(parsed) && parsed > 0 : Number.isInteger(parsed) && parsed > 0;
   const canSubmit = openCap === "max_retries" ? positive && nodeId.length > 0 : positive;
 
   function submit(): void {
