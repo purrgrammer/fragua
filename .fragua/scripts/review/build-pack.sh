@@ -23,7 +23,8 @@
 # spec — a range, a sha, or `HEAD` for uncommitted work) share one builder:
 #
 #   bash .fragua/scripts/review/build-pack.sh pr   <pr-number>
-#   bash .fragua/scripts/review/build-pack.sh spec <diff-spec>
+#   bash .fragua/scripts/review/build-pack.sh spec  <diff-spec>
+#   bash .fragua/scripts/review/build-pack.sh files <path-list-file>
 
 set -euo pipefail
 
@@ -79,18 +80,81 @@ case "$mode" in
     esac
     label="\`$spec\`"
     ;;
+  files)
+    # FILES mode: there is no diff — the review target IS a set of paths. A
+    # `spec` of `HEAD` on a clean tree produces an empty diff and an empty
+    # pack, which used to silently route a legitimate path review straight to
+    # the human gate with zero lens output. Instead, synthesize a pseudo-diff
+    # in which every line of every named file is an added line, so the whole
+    # pipeline below works unchanged.
+    #
+    # `arg` is a file of newline-separated paths, and in `review` those paths
+    # come from an LLM step — so contain each one under the worktree before
+    # reading it. `--` stops flag injection but not traversal; resolve the
+    # dirname AND the leaf (a symlink leaf still sits under the root) and
+    # refuse anything that escapes. Fail closed.
+    [ -r "$arg" ] || { echo "not a readable path list: $arg" >&2; exit 2; }
+    root="$(pwd -P)"
+    : > "$out/.pseudo.diff"
+    kept_paths=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      d="$(dirname -- "$f")"
+      b="$(basename -- "$f")"
+      rd="$(cd "$d" 2>/dev/null && pwd -P)" || { echo "refusing unreadable path: $f" >&2; exit 2; }
+      case "$rd/$b" in "$root"/*) : ;; *) echo "refusing path outside the worktree: $f" >&2; exit 2 ;; esac
+      if [ -L "$rd/$b" ]; then
+        real="$(readlink -f -- "$rd/$b" 2>/dev/null)" || real=""
+        case "${real:-/nonexistent}" in "$root"/*) : ;; *) echo "refusing symlink leaving the worktree: $f" >&2; exit 2 ;; esac
+      fi
+      [ -f "$f" ] || continue
+      printf '+++ b/%s\n' "$f" >> "$out/.pseudo.diff"
+      sed 's/^/+/' < "$f" >> "$out/.pseudo.diff"
+      kept_paths=$((kept_paths + 1))
+    done < "$arg"
+    [ "$kept_paths" -gt 0 ] || { echo "no readable files in $arg" >&2; exit 4; }
+    spec=""
+    head=""
+    label="$kept_paths file(s)"
+    ;;
   *)
-    echo "usage: build-pack.sh pr <n> | spec <diff-spec>" >&2
+    echo "usage: build-pack.sh pr <n> | spec <diff-spec> | files <path-list-file>" >&2
     exit 2
     ;;
 esac
 
-# Context width scales DOWN with the size of the change. 40 lines of context
-# puts the enclosing function in front of the lens for free, but on a large PR
-# it explodes: a 22k-line diff at -U40 is a 1.2MB patch, far past any useful
-# context window. Big diffs get narrow context plus `pack/files/` for the full
-# post-image; small ones get the generous view that removes the read loop.
-changed_lines="$(git diff --numstat "$spec" | awk '{a+=$1; d+=$2} END {print a+d+0}')"
+# One reader for the change, whatever produced it: a real `git diff` for the
+# `pr` / `spec` forms, the pseudo-diff for `files`. Everything below consumes
+# this and nothing below knows which mode it is in.
+pseudo_diff() {
+  case "${1:-}" in
+    --numstat)
+      awk '/^\+\+\+ b\//{if(f!="")print n"\t0\t"f; f=substr($0,7); n=0; next} /^\+[^+]/{n++} END{if(f!="")print n"\t0\t"f}' "$out/.pseudo.diff"
+      ;;
+    --name-only)
+      awk '/^\+\+\+ b\//{print substr($0,7)}' "$out/.pseudo.diff"
+      ;;
+    --name-status)
+      awk '/^\+\+\+ b\//{print "A\t" substr($0,7)}' "$out/.pseudo.diff"
+      ;;
+    --stat)
+      awk '/^\+\+\+ b\//{if(f!="")printf " %s | %d +\n", f, n; f=substr($0,7); n=0; next} /^\+[^+]/{n++} END{if(f!="")printf " %s | %d +\n", f, n}' "$out/.pseudo.diff"
+      ;;
+    *)
+      cat "$out/.pseudo.diff"
+      ;;
+  esac
+}
+
+emit_diff() {
+  if [ "$mode" = files ]; then
+    pseudo_diff "$@"
+  else
+    git diff "$@" "$spec"
+  fi
+}
+
+changed_lines="$(emit_diff --numstat | awk '{a+=$1; d+=$2} END {print a+d+0}')"
 if [ "$changed_lines" -gt 4000 ]; then
   ctx=3
 elif [ "$changed_lines" -gt 1500 ]; then
@@ -98,7 +162,7 @@ elif [ "$changed_lines" -gt 1500 ]; then
 else
   ctx=40
 fi
-git diff "-U$ctx" "$spec" > "$out/context.patch.full"
+emit_diff "-U$ctx" > "$out/context.patch.full"
 if [ "$(wc -l < "$out/context.patch.full")" -gt "$MAX_PATCH_LINES" ]; then
   head -n "$MAX_PATCH_LINES" "$out/context.patch.full" > "$out/context.patch"
   {
@@ -111,8 +175,8 @@ else
   patch_truncated=no
 fi
 rm -f "$out/context.patch.full"
-git diff --stat "$spec" > "$out/stat.txt"
-git diff --name-status "$spec" > "$out/names.txt"
+emit_diff --stat > "$out/stat.txt"
+emit_diff --name-status > "$out/names.txt"
 
 if [ ! -s "$out/context.patch" ]; then
   echo "empty diff for $label ($spec)" >&2
@@ -133,15 +197,23 @@ while IFS= read -r p; do
   if [ -n "$head" ]; then
     git show "$head:$p" 2>/dev/null | head -n "$MAX_FILE_LINES" > "$out/files/$p" || true
   else
-    head -n "$MAX_FILE_LINES" -- "$p" > "$out/files/$p" 2>/dev/null || true
+    head -n "$MAX_FILE_LINES" < "$p" > "$out/files/$p" 2>/dev/null || true
   fi
   files_written=$((files_written + 1))
-done < <(git diff --name-only --diff-filter=d "$spec")
+done < <(emit_diff --name-only --diff-filter=d)
 
 # Deleted lines, grouped by file: what a change REMOVED is invisible in the
 # post-image, and it is where "the caller still expects this" bugs live.
-git diff "$spec" \
-  | awk '/^\+\+\+ b\//{f=substr($0,7); next} /^-[^-]/{print f ": " substr($0,2)}' \
+# A DELETED file's post-image header is `+++ /dev/null`, so keying only on
+# `+++ b/` attributed every one of its removed lines to whichever file came
+# before it. Fall back to the `--- a/` pre-image path for exactly that case.
+emit_diff \
+  | awk '
+      /^--- a\//    { prev = substr($0, 7); next }
+      /^\+\+\+ b\// { f = substr($0, 7); next }
+      /^\+\+\+ /     { f = prev; next }
+      /^-[^-]/      { print f ": " substr($0, 2) }
+    ' \
   > "$out/removed.txt" || true
 [ -s "$out/removed.txt" ] || echo "NONE — this change removes no lines." > "$out/removed.txt"
 
@@ -149,8 +221,8 @@ git diff "$spec" \
 # touch — the integration lens's entire grep phase, done once. Exported only,
 # and 4+ characters: a local `const graph` matches half the repo and buries the
 # handful of hits that are actually about this change.
-changed_paths="$(git diff --name-only "$spec")"
-symbols="$(git diff "$spec" \
+changed_paths="$(emit_diff --name-only)"
+symbols="$(emit_diff \
   | grep -E '^[+-][[:space:]]*export[[:space:]]+(default[[:space:]]+)?(async[[:space:]]+)?(function|class|const|interface|type|enum)[[:space:]]+[A-Za-z_]' \
   | sed -E 's/.*(function|class|const|interface|type|enum)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/' \
   | awk 'length($0) >= 4' \
@@ -171,17 +243,34 @@ rm -f "$out/.changed" "$out/callers.raw"
 
 # Added lines touching a security- or resource-sensitive surface. When this is
 # NONE the risk lens short-circuits on one read instead of re-deriving it.
-git diff "$spec" \
-  | grep -E '^\+' \
-  | grep -v '^+++' \
+#
+# CODE FILES ONLY. The risk lens is told to treat this file as authoritative,
+# so whatever lands in it is read with elevated trust — and the keyword sweep
+# happily matched the prose inside a workflow YAML `prompt:` body, handing any
+# contributor who edits one a direct channel into the lens. Prose files carry
+# no executable risk surface, so dropping them costs nothing and closes the
+# channel. (The judges' `injected` question remains the general defence; this
+# removes the most inviting path to it.)
+emit_diff \
+  | awk '
+      /^\+\+\+ b\// { f = substr($0, 7)
+                      code = (f ~ /\.(ts|tsx|js|jsx|mjs|cjs|sql|sh|bash|py|go|rs|rb|java|c|h|cc|cpp)$/)
+                      next }
+      /^\+\+\+ /     { code = 0; next }
+      /^\+[^+]/     { if (code) print }
+    ' \
   | grep -iE 'auth|token|secret|password|credential|exec|spawn|child_process|eval\(|sql|query\(|crypt|hash|sign|verify|fetch\(|request\(|http|cors|redirect|permission|chmod|readFile|writeFile|path\.join|while[[:space:]]*\(|for[[:space:]]*\(' \
   | head -n 200 > "$out/risk-surface.txt" || true
-[ -s "$out/risk-surface.txt" ] || echo "NONE — this change touches no security-, IO-, or resource-sensitive surface." > "$out/risk-surface.txt"
+[ -s "$out/risk-surface.txt" ] || echo "NONE — this change touches no security-, IO-, or resource-sensitive surface in a code file." > "$out/risk-surface.txt"
 
 {
   echo "# Review pack — $label"
   echo
-  echo "Diff: \`$spec\`, $changed_lines changed lines, patch context \`-U$ctx\` (truncated: $patch_truncated)."
+  if [ -n "$spec" ]; then
+    echo "Diff: \`$spec\`, $changed_lines changed lines, patch context \`-U$ctx\` (truncated: $patch_truncated)."
+  else
+    echo "No diff — reviewing $label as-is; every line in \`pack/context.patch\` is marked \`+\`. $changed_lines lines (truncated: $patch_truncated)."
+  fi
   echo "Changed files written to \`pack/files/\`: $files_written (skipped over the $MAX_FILES cap: $files_skipped);"
   echo "each truncated at $MAX_FILE_LINES lines."
   echo

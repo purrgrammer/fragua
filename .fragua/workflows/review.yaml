@@ -260,12 +260,21 @@ steps:
     # lenses' whole world: the change with context, the post-image of each
     # changed file, the removed lines, external references to changed exported
     # symbols, and the security-sensitive hunks.
-    # An empty `diff_spec` is FILES/UNCOMMITTED mode — review the working tree.
+    # An empty `diff_spec` is FILES mode: the target IS a set of paths, and on a
+    # clean tree `git diff HEAD` is empty — which used to build an empty pack
+    # and route a legitimate path review straight to the gate with no findings.
+    # The `files` form packs the named files themselves instead.
     run: |
       set -eu
+      out=.fragua/scratch/review
+      mkdir -p "$out"
       spec=${{ outputs.resolve.diff_spec }}
-      [ -n "$spec" ] || spec=HEAD
-      bash .fragua/scripts/review/build-pack.sh spec "$spec"
+      if [ -n "$spec" ]; then
+        bash .fragua/scripts/review/build-pack.sh spec "$spec"
+      else
+        printf '%s' ${{ outputs.resolve.paths }} | jq -r '.[]' > "$out/pack-paths.txt"
+        bash .fragua/scripts/review/build-pack.sh files "$out/pack-paths.txt"
+      fi
     on:
       success: review_lenses
       fail: signoff                    # no pack ⇒ no lens review; the human still gets the run

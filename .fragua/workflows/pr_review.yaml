@@ -136,6 +136,11 @@ steps:
             examples: ["new event type folded in three packages", "schema migration", "parser grammar change", "300 code lines across store and daemon"]
     decide:
       route: {question: depth, min-confidence: 0.6, below: quick}   # torn (in practice skip-vs-quick on docs-heavy diffs) → the middle tier, never a $5 full pass
+    # No fail edge, and none is expressible: `routes:` and `on:` are mutually
+    # exclusive per step. So an uncredentialed judge (no TYPESAFE_API_KEY)
+    # halts here before any review body exists — which is the right shape for
+    # a missing credential (loud, not a silently degraded review), and the
+    # `failure()`-gated fallback in pr-review.yml still posts to the PR.
     routes:
       skip:  {to: lgtm,         label: "Trivial"}
       quick: {to: review_quick, label: "Quick review"}

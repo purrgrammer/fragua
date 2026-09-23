@@ -43,14 +43,23 @@ guarantee.
   (the human `signoff` is the gate), and a dead lens or synthesiser routes
   forward to `signoff` rather than halting the run.
 - **`.fragua/scripts/review/build-pack.sh`.** One review-pack builder behind both
-  workflows, in two entry forms — `pr <n>` resolves a PR's own change from
+  workflows, in three entry forms — `pr <n>` resolves a PR's own change from
   `refs/pull/<n>/head`, `spec <diff-spec>` takes any range, sha, or `HEAD` for
-  uncommitted work. Patch context scales down with the size of the change and
+  uncommitted work, and `files <path-list>` packs the named files themselves so
+  a path-target review on a clean tree still has something to review. Patch context scales down with the size of the change and
   the patch is capped, so a large diff cannot blow the pack past a usable
   context window.
 
 ### Fixed
 
+- **`build-pack.sh` attributes a deleted file's removed lines correctly.** A
+  deleted file's post-image header is `+++ /dev/null`, so keying only on
+  `+++ b/` filed every one of its removed lines under whichever file came
+  before it in the patch.
+- **The review pack's risk surface is computed from code files only.** The
+  keyword sweep matched prose inside a workflow YAML `prompt:` body, so editing
+  one put attacker-controlled text into a file the risk lens is told to treat
+  as authoritative.
 - **A `for-each` judge over an empty list now declares `review`.** With `keep:`
   and `review:` both set, the empty-list short-circuit emitted only `answers`,
   `kept` and `dropped`. Output reads are fail-closed, so a consumer reading
