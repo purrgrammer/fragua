@@ -789,6 +789,15 @@ export async function adjustMaxLoops(id: string, newLimit: number, note?: string
   return postJson(`/runs/${encodeURIComponent(id)}/max_loops`, body, isAcceptedSeq);
 }
 
+/** Re-order a queued run in the dispatch queue (higher `newPriority` dispatches
+ *  first). Web equivalent of `fragua runs priority`; a no-op on an already-
+ *  running run. */
+export async function adjustPriority(id: string, newPriority: number, note?: string): Promise<{ seq: number }> {
+  const body: { newPriority: number; note?: string } = { newPriority };
+  if (note !== undefined) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/priority`, body, isAcceptedSeq);
+}
+
 // ── Schedules ────────────────────────────────────────────────────────
 // Mirror of `Schedule` from @fragua/store/types.ts. Camel-case on the wire
 // per the server's `schedule-routes.ts` payload (the store boundary

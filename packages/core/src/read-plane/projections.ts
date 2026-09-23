@@ -174,6 +174,11 @@ export function runStateToDetail(
   // keep its operate controls.
   if (state.imported === true) detail.imported = true;
 
+  if (state.inboxStatus === "pending" || state.inboxStatus === "acted" || state.inboxStatus === "discarded") {
+    detail.inboxStatus = state.inboxStatus;
+  }
+  detail.priority = state.priority;
+
   if (state.status === "halted") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
