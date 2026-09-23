@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StoredEvent } from "@fragua/store";
-import { TERMINAL_FACT_TYPES } from "@fragua/types";
+import { TERMINAL_FACT_TYPES, TERMINAL_RUN_FACT_TYPES } from "@fragua/types";
 import { followRun } from "../src/run-follow.ts";
 import type { StoreClient } from "../src/store-client.ts";
 
@@ -32,6 +32,17 @@ describe("followRun — terminal fact coverage", () => {
     for (const type of TERMINAL_FACT_TYPES) {
       // Returns => the loop recognised the fact as terminal; a stale set would
       // fall through to the poll and this test would time out instead.
+      const code = await followRun(terminalOnlyClient(type), RUN_ID);
+      expect(typeof code).toBe("number");
+    }
+  }, 3000);
+
+  test("stops on every LEGACY (≤v3) terminal fact too", async () => {
+    // A run terminated under ≤v3 emits a LEGACY terminal fact; the follow/tail
+    // loop must still settle on it or `runs tail` / `runs wait` hangs forever.
+    const legacy = [...TERMINAL_RUN_FACT_TYPES].filter((t) => !TERMINAL_FACT_TYPES.has(t as never));
+    expect(legacy.length).toBeGreaterThan(0);
+    for (const type of legacy) {
       const code = await followRun(terminalOnlyClient(type), RUN_ID);
       expect(typeof code).toBe("number");
     }
