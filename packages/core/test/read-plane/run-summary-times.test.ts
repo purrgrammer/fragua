@@ -100,3 +100,33 @@ describe("runStateToSummary — timestamps", () => {
     expect(summary.endedAt).toBeUndefined();
   });
 });
+
+describe("endedAt is only set for a settled run", () => {
+  test("a running run with events has no endedAt", () => {
+    const summary = runSummaryRowToSummary(baseRow({ status: "running", lastEventTs: 1_001_000 }));
+    expect(summary.endedAt).toBeUndefined();
+    expect(summary.enqueuedAt).toBe(new Date(1_000_000).toISOString());
+  });
+
+  test("a queued run has no endedAt", () => {
+    expect(runSummaryRowToSummary(baseRow({ status: "queued", lastEventTs: 1_001_000 })).endedAt).toBeUndefined();
+  });
+
+  test("a paused run has no endedAt — it has not ended", () => {
+    expect(runSummaryRowToSummary(baseRow({ status: "paused", lastEventTs: 1_001_000 })).endedAt).toBeUndefined();
+  });
+
+  test("every settled status does get an endedAt", () => {
+    for (const status of ["completed", "cancelled", "halted", "quarantined"] as const) {
+      const summary = runSummaryRowToSummary(baseRow({ status, lastEventTs: 1_001_000 }));
+      expect(summary.endedAt).toBe(new Date(1_001_000).toISOString());
+    }
+  });
+
+  test("runStateToSummary applies the same gate", () => {
+    const live = runStateToSummary(baseState({ status: "running" }), [ev(1, 1_001_000)], undefined);
+    expect(live.endedAt).toBeUndefined();
+    const done = runStateToSummary(baseState({ status: "completed" }), [ev(1, 1_001_000)], undefined);
+    expect(done.endedAt).toBe(new Date(1_001_000).toISOString());
+  });
+});
