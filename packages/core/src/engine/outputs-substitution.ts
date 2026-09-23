@@ -22,15 +22,36 @@ import type { OutputStructValue, OutputsValue } from "../types/outputs.ts";
 /** Thrown by `substituteOutputs` when a `${{ outputs.X.f }}` reference cannot
  * resolve at runtime — the producer didn't emit a value on the taken path.
  * Handlers catch it and turn the node into a routable `outcome=fail`. */
+/** Why a `${{ outputs.X.f }}` read could not be resolved. The two are
+ *  different defects and read differently in a node-failure message:
+ *  `producer-absent` is a wiring error (the producer never ran, or failed
+ *  before emitting), `field-absent` is a producer that ran and left the field
+ *  out — typically an `optional:` field it legitimately omitted. */
+export type UnpopulatedKind = "producer-absent" | "field-absent";
+
+export interface UnpopulatedRef {
+  /** The reference as written, e.g. `${{ outputs.scope.pr }}`. */
+  readonly ref: string;
+  readonly kind: UnpopulatedKind;
+}
+
 export class UnpopulatedOutputError extends Error {
+  /** The unresolved references, as written. */
   readonly missing: readonly string[];
-  constructor(missing: string[]) {
-    super(
-      `unpopulated output reference${missing.length > 1 ? "s" : ""}: ${missing.join(", ")} — ` +
-        `the producing node did not emit a value on this run path (reads fail closed)`,
-    );
+  /** The same references with their diagnosis. */
+  readonly refs: readonly UnpopulatedRef[];
+  constructor(refs: UnpopulatedRef[]) {
+    const detail = refs
+      .map(({ ref, kind }) =>
+        kind === "producer-absent"
+          ? `${ref} (the producing node emitted nothing on this run path)`
+          : `${ref} (the producing node ran but left this field unpopulated)`,
+      )
+      .join(", ");
+    super(`unpopulated output reference${refs.length > 1 ? "s" : ""}: ${detail} — reads fail closed`);
     this.name = "UnpopulatedOutputError";
-    this.missing = missing;
+    this.refs = refs;
+    this.missing = refs.map((r) => r.ref);
   }
 }
 
@@ -51,16 +72,16 @@ export function substituteOutputs(
   opts: { escapeForShell?: boolean } = {},
 ): string {
   const { escapeForShell = false } = opts;
-  const missing: string[] = [];
+  const missing: UnpopulatedRef[] = [];
   const result = template.replace(OUTPUT_REF_RE, (whole: string, producer: string, rest: string) => {
-    const rendered = resolveOutputRef(outputs, producer, rest.split("."), escapeForShell);
-    if (rendered === undefined) {
-      missing.push(whole.trim());
+    const c = classifyOutputRef(outputs, producer, rest.split("."), escapeForShell);
+    if (c.kind !== "value") {
+      missing.push({ ref: whole.trim(), kind: c.kind });
       return whole;
     }
-    return rendered;
+    return c.rendered;
   });
-  if (missing.length > 0) throw new UnpopulatedOutputError([...new Set(missing)]);
+  if (missing.length > 0) throw new UnpopulatedOutputError(dedupeRefs(missing));
   return result;
 }
 
@@ -77,14 +98,36 @@ export function resolveOutputRef(
   segments: string[],
   escapeForShell: boolean,
 ): string | undefined {
+  const c = classifyOutputRef(outputs, producer, segments, escapeForShell);
+  return c.kind === "value" ? c.rendered : undefined;
+}
+
+/** Resolve a reference, keeping WHY it failed. `resolveOutputRef` collapses
+ *  both absences to `undefined`, which is all a caller needs to fail closed;
+ *  this keeps them apart so the resulting node-failure message can say which
+ *  defect it is. A real `false` / `0` / `""` is a value, not an absence. */
+export function classifyOutputRef(
+  outputs: Record<string, OutputsValue>,
+  producer: string,
+  segments: string[],
+  escapeForShell: boolean,
+): { kind: "value"; rendered: string } | { kind: "field-absent" } | { kind: "producer-absent" } {
   const producerVal = outputs[producer];
-  if (producerVal === undefined) return undefined;
+  if (producerVal === undefined) return { kind: "producer-absent" };
   const resolved = resolveSegments(producerVal, segments);
   // `undefined` (no such field) and `null` (an optional field emitted as null —
-  // i.e. "no value") both fail closed: an unpopulated ref is a node failure,
-  // never a silent `"null"` interpolated into the prompt.
-  if (resolved === undefined || resolved === null) return undefined;
-  return renderValue(resolved, escapeForShell);
+  // i.e. "no value") are both field absence: an unpopulated ref is a node
+  // failure, never a silent `"null"` interpolated into the prompt.
+  if (resolved === undefined || resolved === null) return { kind: "field-absent" };
+  return { kind: "value", rendered: renderValue(resolved, escapeForShell) };
+}
+
+/** First diagnosis wins per distinct reference, so one ref repeated in a
+ *  template reports once. */
+export function dedupeRefs(refs: UnpopulatedRef[]): UnpopulatedRef[] {
+  const seen = new Map<string, UnpopulatedRef>();
+  for (const r of refs) if (!seen.has(r.ref)) seen.set(r.ref, r);
+  return [...seen.values()];
 }
 
 /** Project a run-output reference against a producer's emitted struct — the
