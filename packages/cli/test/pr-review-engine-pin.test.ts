@@ -17,7 +17,7 @@
 // its shutdown path and the run exports no bundle.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseWorkflow } from "@fragua/core";
 
@@ -28,7 +28,7 @@ const gha = readFileSync(join(root, ".github/workflows/pr-review.yml"), "utf8");
 const canonicalSrc = readFileSync(wf("pr_review.yaml"), "utf8");
 
 /** What `fragua ci <name>` the review job actually runs. */
-const ciTarget = /^\s*fragua ci ([A-Za-z_][\w-]*)/m.exec(gha)?.[1];
+const ciTarget = ciTargetOf(gha);
 /** The binary the action installs — the SHA next to it pins the ACTION, not this. */
 const pinnedVersion = /version:\s*v(\d+)\.(\d+)\.(\d+)/.exec(gha);
 
@@ -57,6 +57,43 @@ const FEATURE_SINCE: Array<{
     used: (src) => toolStepsDeclaringOutputs(src).length > 0,
   },
 ];
+
+/** The workflow a GHA file runs under `fragua ci`. Scans line by line and
+ *  skips comments: `fragua ci` appears in prose too (a comment mentioning
+ *  `fragua ci --export` once matched a naive pattern and yielded "--export").
+ *  It also appears in two shapes — inline (`run: fragua ci drift …`) and
+ *  inside a block scalar at line start (the review job wraps it in
+ *  `timeout`) — and anchoring to line start silently skipped every inline
+ *  one, which is how `drift.yml` escaped this guard. */
+function ciTargetOf(src: string): string | undefined {
+  for (const line of src.split("\n")) {
+    if (/^\s*#/.test(line)) continue;
+    const m = /\bfragua ci ([A-Za-z_][\w-]*)/.exec(line);
+    if (m?.[1] !== undefined) return m[1];
+  }
+  return undefined;
+}
+
+/** Every GitHub Actions workflow that runs `fragua ci <name>` against a pinned
+ *  engine, paired with the version it pins. This is the set the feature guard
+ *  has to cover: each one hands a RELEASED binary a workflow file from the
+ *  tree, so each one can meet a shape its release predates. */
+function pinnedCiJobs(): Array<{ workflow: string; ghaFile: string; pin: readonly number[] }> {
+  const dir = join(root, ".github/workflows");
+  const out: Array<{ workflow: string; ghaFile: string; pin: readonly number[] }> = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+    const src = readFileSync(join(dir, file), "utf8");
+    const target = ciTargetOf(src);
+    if (target === undefined) continue;
+    if (!existsSync(wf(`${target}.yaml`))) continue;
+    const v = /version:\s*v(\d+)\.(\d+)\.(\d+)/.exec(src);
+    // An unpinned job resolves `latest`, so it always parses the tree — the
+    // "binary is pinned" test below is what objects to that, not this one.
+    out.push({ workflow: target, ghaFile: file, pin: v ? [Number(v[1]), Number(v[2]), Number(v[3])] : [99, 99, 99] });
+  }
+  return out;
+}
 
 /** Node ids of `tool` steps that declare `outputs:`. Walks the file by
  *  indentation rather than parsing it, so the guard holds without importing
@@ -107,6 +144,22 @@ describe("the pinned review engine parses the workflow it is given", () => {
       // pins in pr-review.yml — the action SHA and `with: version:`.
       expect(cmp(pinned, since)).toBeGreaterThanOrEqual(0);
     });
+  }
+
+  // EVERY pinned CI job, not just this one. `drift.yml` runs `fragua ci drift`
+  // against its own pin, two releases behind the review job's at the time this
+  // was written — so a feature adopted into `drift.yaml` breaks the weekly job
+  // exactly as one adopted into `pr_review.yaml` breaks the merge gate. Scoping
+  // the guard to one file is how that went unnoticed.
+  for (const { workflow, ghaFile, pin } of pinnedCiJobs()) {
+    const src = readFileSync(wf(`${workflow}.yaml`), "utf8");
+    for (const { name, since, used } of FEATURE_SINCE) {
+      const inUse = used(src);
+      test(`${workflow}.yaml uses ${name} (${inUse}) ⇒ ${ghaFile} pin is ≥ v${since.join(".")}`, () => {
+        if (!inUse) return;
+        expect(cmp(pin, since)).toBeGreaterThanOrEqual(0);
+      });
+    }
   }
 
   for (const { name, since, used } of FEATURE_SINCE) {

@@ -22,12 +22,12 @@ guarantee.
   exits 0 without leaving a parseable, valid struct **fails the node**: the
   producer-side dual of the fail-closed read. Tool steps are otherwise
   unchanged — the exit code still decides `success`/`fail`.
-- **Workflows can declare a run-level `outputs:` result.** `review`, `drift`,
-  and `propose` now project their deliverable into the run's typed result —
-  which change was reviewed and what was posted where, the pull request a drift
-  run opened, the path a proposal was written to. Readable from
-  `fragua runs status --json` instead of only from the transcript. A producer
-  that did not run on the taken path simply omits its keys.
+- **Workflows can declare a run-level `outputs:` result.** `review` and
+  `propose` now project their deliverable into the run's typed result — which
+  change was reviewed and what was posted where, the path a proposal was
+  written to. Readable from `fragua runs status --json` instead of only from
+  the transcript. A producer that did not run on the taken path simply omits
+  its keys.
 - **`fragua gc --worktrees`.** Removes the leftover `.fragua/worktrees/<runId>`
   directory and its git registration for settled runs past the retention
   window, then prunes any registration whose directory is already gone.
