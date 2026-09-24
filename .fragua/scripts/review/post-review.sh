@@ -17,7 +17,7 @@
 #
 # Writes one JSON object to $FRAGUA_OUTPUT: {posted, verdict, url}.
 #   posted  — "approve" | "changes" | "comment" | "none"  (what reached GitHub)
-#   verdict — "approve" | "blocking" | "non-blocking" | "local"
+#   verdict — "approve" | "blocking" | "non-blocking" | "unreadable" | "local"
 #   url     — the PR url, or "" when nothing was posted
 #
 #   bash post-review.sh <pr-number|none>
@@ -45,31 +45,33 @@ case "$pr" in *[!0-9]*) echo "not a PR number: $pr" >&2; exit 2;; esac
 
 url="$(gh pr view "$pr" --json url --jq .url)"
 
-# Severity picks the verb, three ways — and the ordering matters: the LAST
-# branch approves, so anything this fails to recognise is approved. That makes
-# every pattern below a fail-OPEN, which is why they cover both review shapes
-# and are case-insensitive.
+# Severity picks the verb — and the default is the SAFE one, not the convenient
+# one. Approval requires a positive `## All clear` sentinel; anything this
+# script does not recognise requests changes. That ordering matters more than
+# the patterns: an approve-by-default chain turns every unrecognised body — a
+# new template, a truncated write, a lens that crashed mid-file — into a silent
+# approval. It already did once, for a `review_quick` review carrying a
+# Critical finding, which is why both shapes are spelled out below.
 #
-#   `synthesize` (full)     → `### Critical` / `### High` under `## Defects`
-#   `review_quick` (quick)  → `- [critical] path:line` under `## Findings`
-#
-# A `review_quick` review matched neither until it was caught reviewing this
-# very script: a quick review carrying a Critical finding was approved.
+#   `synthesize` (full)    → `### Critical` / `### High` under `## Defects`
+#   `review_quick` (quick) → `- [critical] path:line` under `## Findings`
+#   both, when clean       → `## All clear`
 blocking='^###[[:space:]]*(critical|high)[[:space:]]*$|^-[[:space:]]*\[(critical|high)\]'
 raised='^##[[:space:]]*(defects|improvements|findings)[[:space:]]*$'
+clean='^##[[:space:]]*all clear[[:space:]]*$'
 
 if grep -qiE "$blocking" "$body"; then
-  gh pr review "$pr" --request-changes --body-file "$body"
-  emit changes blocking "$url"
-  echo "requested changes on PR #$pr"
+  verb=--request-changes; posted=changes; verdict=blocking
 elif grep -qiE "$raised" "$body"; then
-  gh pr review "$pr" --comment --body-file "$body"
-  emit comment non-blocking "$url"
-  echo "commented on PR #$pr"
+  verb=--comment; posted=comment; verdict=non-blocking
+elif grep -qiE "$clean" "$body"; then
+  verb=--approve; posted=approve; verdict=approve
 else
-  # Nothing raised at all — both shapes write `## All clear` for this. A
-  # comment would leave a PR unapproved on a review that found nothing.
-  gh pr review "$pr" --approve --body-file "$body"
-  emit approve approve "$url"
-  echo "approved PR #$pr"
+  # Unrecognised shape. Do not approve something we could not read.
+  verb=--request-changes; posted=changes; verdict=unreadable
+  echo "post-review: $body matches no known review shape — requesting changes rather than approving" >&2
 fi
+
+gh pr review "$pr" "$verb" --body-file "$body"
+emit "$posted" "$verdict" "$url"
+echo "posted $verb on PR #$pr"

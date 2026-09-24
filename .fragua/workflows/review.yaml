@@ -733,6 +733,6 @@ steps:
     run: bash .fragua/scripts/review/post-review.sh ${{ outputs.resolve.pr }}
     outputs:
       posted:  { type: choice, options: [approve, changes, comment, none] }
-      verdict: { type: choice, options: [approve, blocking, non-blocking, local] }
+      verdict: { type: choice, options: [approve, blocking, non-blocking, unreadable, local] }
       url:     { type: string }        # the PR url, or "" when there was no PR
     next: exit
