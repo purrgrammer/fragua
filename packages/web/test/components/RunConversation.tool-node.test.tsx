@@ -203,7 +203,7 @@ describe("RunConversation — tool_node typed outputs", () => {
         command: "bash .fragua/scripts/review/resolve-target.sh 'PR 121'",
         cwd: "/repo",
         exitCode: 0,
-        stdout: "",
+        stdout: "Switched to branch 'pr-121'\n",
         outputs: { pr: "121", diff_spec: "abc123..def456", paths: ["packages/core/src/ir.ts"] },
       }),
     ];
@@ -230,5 +230,57 @@ describe("RunConversation — tool_node typed outputs", () => {
 
     const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
     expect(within(container).queryByTestId("tool-node-outputs")).toBeNull();
+  });
+
+  it("folds the exit status into the outputs header when the node printed nothing", () => {
+    const messages: RunMessageRow[] = [
+      toolNodeRow({
+        ordinal: 1,
+        nodeId: "resolve",
+        command: "bash resolve-target.sh 'PR 116'",
+        cwd: "/repo",
+        exitCode: 0,
+        stdout: "",
+        durationMs: 2900,
+        outputs: { pr: "116" },
+      }),
+    ];
+    const nodeStates: NodeState[] = [{ nodeId: "resolve", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 }];
+
+    const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
+    const q = within(container);
+
+    // No empty Terminal card whose only content is its own status line.
+    expect(q.queryByTestId("terminal")).toBeNull();
+    // The status moved into the outputs header instead of being lost.
+    expect(q.getByTestId("tool-node-outputs-status").textContent).toContain("exit 0");
+    // The redundant section label goes with it; the header already says it.
+    const outputs = q.getByTestId("tool-node-outputs");
+    expect(outputs.textContent).toContain("outputs.resolve");
+    expect(outputs.textContent).not.toContain("Outputs");
+  });
+
+  it("keeps the Terminal when a producing node also wrote to stderr", () => {
+    const messages: RunMessageRow[] = [
+      toolNodeRow({
+        ordinal: 1,
+        nodeId: "resolve",
+        command: "bash resolve-target.sh 'PR 116'",
+        cwd: "/repo",
+        exitCode: 0,
+        stdout: "",
+        stderr: "warning: shallow clone",
+        outputs: { pr: "116" },
+      }),
+    ];
+    const nodeStates: NodeState[] = [{ nodeId: "resolve", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 }];
+
+    const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
+    const q = within(container);
+
+    // stderr is never hidden behind the fold.
+    expect(q.getByTestId("terminal").textContent).toContain("warning: shallow clone");
+    expect(q.queryByTestId("tool-node-outputs-status")).toBeNull();
+    expect(q.getByTestId("tool-node-outputs").textContent).toContain("Outputs");
   });
 });
