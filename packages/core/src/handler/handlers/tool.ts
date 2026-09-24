@@ -45,9 +45,12 @@ import type { OutputsDecl, OutputsValue } from "../../types/outputs.ts";
 import { validateOutputsValue } from "../../types/outputs.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
-/** Read-back cap for the `$FRAGUA_OUTPUT` channel. Matches the tool handler's
- *  stdout `SOFT_CAP_BYTES` — comfortably above any struct that legitimately
- *  spills to the blob CAS. An oversized emission is a per-node failure. */
+/** Read-back cap for the `$FRAGUA_OUTPUT` channel, and the source of truth for
+ *  the stdout `SOFT_CAP_BYTES` below — comfortably above any struct that
+ *  legitimately spills to the blob CAS. An oversized emission is a per-node
+ *  failure. The two were independent literals tied only by a comment, so
+ *  raising the stdout cap for large scripts would silently have left the
+ *  read-back cap behind and rejected an emission whose stdout was captured. */
 export const FRAGUA_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface ToolConfig {
@@ -297,6 +300,11 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
           // terminally (a halt), never be swallowed into a transition-fail that
           // lets the run advance past the cancel.
           if (isAbortError(err)) {
+            // Append before halting, like every other post-spawn return. The
+            // command ran; without the row the conversation shows a gap where
+            // the node was, and the stdout/stderr artifacts on disk have
+            // nothing linking them to a command and a cwd.
+            appendToolMessage();
             return { kind: "halt", reason: "error", detail: "tool aborted" } satisfies HandlerResult;
           }
           return failClosed(`producer.invalid_emission: reading $FRAGUA_OUTPUT failed: ${errorMessage(err)}`);
@@ -306,7 +314,7 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
         }
         if (readResult.kind === "renamed") {
           return failClosed(
-            'producer.rename_not_supported: write in place (`command > "$FRAGUA_OUTPUT"`); a temp-file + mv is not read back',
+            'producer.rename_not_supported: $FRAGUA_OUTPUT was replaced (inode changed) — write in place with `command > "$FRAGUA_OUTPUT"`; do not rm, mv onto, or symlink it',
           );
         }
         if (readResult.kind === "oversize") {
@@ -441,7 +449,7 @@ export async function runWithBun(cmd: string, signal: AbortSignal): Promise<Tool
   }
 }
 
-const SOFT_CAP_BYTES = 8 * 1024 * 1024;
+const SOFT_CAP_BYTES = FRAGUA_OUTPUT_MAX_BYTES;
 
 async function readStream(stream: ReadableStream<Uint8Array> | number): Promise<string> {
   if (typeof stream === "number") return "";

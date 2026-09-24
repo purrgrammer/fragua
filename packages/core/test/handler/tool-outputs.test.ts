@@ -176,10 +176,15 @@ describe("tool handler structured outputs", () => {
   test("abort during read-back halts terminally, not a transition-fail", async () => {
     const abortErr = new Error("aborted");
     abortErr.name = "AbortError";
-    const ctx = stubCtx(makeEnv({ readThrows: abortErr }));
+    const sink: AgentMessage[] = [];
+    const ctx = stubCtx(makeEnv({ readThrows: abortErr }), sink);
     const spec = makeToolHandler({ toolCommand: "./collect.sh", outputs: TOTAL_DECL });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("halt");
+    // The command ran, so the transcript must still carry its row — a halt is
+    // the one path that used to skip the append.
+    expect(sink).toHaveLength(1);
+    expect(sink[0]?.role).toBe("tool_node");
   });
 
   test("a node declaring outputs in an env lacking createScratchFile fails closed", async () => {
