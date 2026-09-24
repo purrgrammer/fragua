@@ -45,21 +45,30 @@ case "$pr" in *[!0-9]*) echo "not a PR number: $pr" >&2; exit 2;; esac
 
 url="$(gh pr view "$pr" --json url --jq .url)"
 
-# Severity picks the verb, three ways. `synthesize` writes severities as
-# `### Critical` / `### High` under `## Defects` — h3, not the h2 pr_review.yaml
-# greps for — and emits `## All clear` when nothing survived its filters.
-# Improvements alone never block.
-if grep -qE '^### (Critical|High)[[:space:]]*$' "$body"; then
+# Severity picks the verb, three ways — and the ordering matters: the LAST
+# branch approves, so anything this fails to recognise is approved. That makes
+# every pattern below a fail-OPEN, which is why they cover both review shapes
+# and are case-insensitive.
+#
+#   `synthesize` (full)     → `### Critical` / `### High` under `## Defects`
+#   `review_quick` (quick)  → `- [critical] path:line` under `## Findings`
+#
+# A `review_quick` review matched neither until it was caught reviewing this
+# very script: a quick review carrying a Critical finding was approved.
+blocking='^###[[:space:]]*(critical|high)[[:space:]]*$|^-[[:space:]]*\[(critical|high)\]'
+raised='^##[[:space:]]*(defects|improvements|findings)[[:space:]]*$'
+
+if grep -qiE "$blocking" "$body"; then
   gh pr review "$pr" --request-changes --body-file "$body"
   emit changes blocking "$url"
   echo "requested changes on PR #$pr"
-elif grep -qE '^## (Defects|Improvements)[[:space:]]*$' "$body"; then
+elif grep -qiE "$raised" "$body"; then
   gh pr review "$pr" --comment --body-file "$body"
   emit comment non-blocking "$url"
   echo "commented on PR #$pr"
 else
-  # Nothing to raise at all: a comment would leave the PR unapproved on a
-  # review that found nothing. Approve it.
+  # Nothing raised at all — both shapes write `## All clear` for this. A
+  # comment would leave a PR unapproved on a review that found nothing.
   gh pr review "$pr" --approve --body-file "$body"
   emit approve approve "$url"
   echo "approved PR #$pr"
