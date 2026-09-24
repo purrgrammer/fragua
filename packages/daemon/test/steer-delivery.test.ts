@@ -78,3 +78,43 @@ describe("buildSteerDelivery", () => {
     expect(steeringAppliedEvents(store, "r3")).toHaveLength(0);
   });
 });
+
+describe("buildSteerDelivery — a store fault must not escape", () => {
+  // This runs inside the supervisor's tick, whose only try/catch wraps the
+  // heartbeat ("supervisor must never crash the daemon"). A throw here
+  // rejects the loop promise and takes the watchdog fiber down with it, so
+  // every other run loses oversight because one steer receipt failed.
+  test("a non-OCC appendFact error is swallowed, not rethrown", () => {
+    const registry: SteerForwarder = {
+      steer: () => ({ disposition: "delivered", targets: [{ nodeId: "n", iteration: 0 }] }) as SteerDelivery,
+    };
+    const store = {
+      getState: () => ({ status: "running", version: 1 }),
+      appendFact: () => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      },
+    } as unknown as Parameters<typeof buildSteerDelivery>[0]["store"];
+
+    const deliver = buildSteerDelivery({ store, registry });
+    expect(() => deliver("run-1", "steer text", 7)).not.toThrow();
+  });
+
+  test("the steer still reaches the registry even when the receipt fails", () => {
+    let seen: string | undefined;
+    const registry: SteerForwarder = {
+      steer: (_runId, text) => {
+        seen = text;
+        return { disposition: "buffered", targets: [] } as SteerDelivery;
+      },
+    };
+    const store = {
+      getState: () => ({ status: "running", version: 1 }),
+      appendFact: () => {
+        throw new Error("SQLITE_IOERR");
+      },
+    } as unknown as Parameters<typeof buildSteerDelivery>[0]["store"];
+
+    buildSteerDelivery({ store, registry })("run-1", "focus on the cache", 9);
+    expect(seen).toBe("focus on the cache");
+  });
+});

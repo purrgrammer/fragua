@@ -48,7 +48,15 @@ export function buildSteerDelivery(deps: {
         );
         return;
       } catch (err) {
-        if (!(err instanceof ConcurrencyError)) throw err;
+        if (err instanceof ConcurrencyError) continue;
+        // `fact.steering_applied` is observability: it records where a steer
+        // landed, it does not gate anything. A store fault here (SQLITE_FULL,
+        // SQLITE_IOERR, a constraint violation) must not propagate — this runs
+        // inside the supervisor's tick, whose only try/catch wraps the
+        // heartbeat, so a throw rejects the loop promise and takes the
+        // watchdog fiber down with it. The steer itself has already been
+        // handed to the registry above; losing its receipt is the small loss.
+        return;
       }
     }
   };

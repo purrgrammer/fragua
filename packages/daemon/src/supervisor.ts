@@ -134,7 +134,15 @@ export function startSupervisor(opts: SupervisorOpts): {
         if (opts.onSteer != null) {
           for (const ev of fresh) {
             const text = readSteerText(ev);
-            if (text !== undefined) opts.onSteer(runId, text, ev.seq);
+            if (text === undefined) continue;
+            try {
+              opts.onSteer(runId, text, ev.seq);
+            } catch {
+              // Defence in depth for the invariant the heartbeat guard states:
+              // the supervisor must never crash the daemon. `onSteer` reaches
+              // the store, and this loop is the watchdog — a fault delivering
+              // one run's steer must not stop oversight of every other run.
+            }
           }
         }
       }
