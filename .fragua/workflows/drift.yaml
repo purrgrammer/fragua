@@ -65,6 +65,15 @@ defaults:
   provider: anthropic
   model: claude-sonnet-4-6
 
+# The run's typed result. drift's deliverable is a PR, not a report on disk —
+# the weekly CI job and any embedding caller should be able to read its url
+# without scraping the transcript. Sourced from the tool that opens it, so it
+# is the url GitHub returned rather than one a model retyped.
+outputs:
+  opened: {from: open_pr.opened}
+  branch: {from: open_pr.branch}
+  pr_url: {from: open_pr.pr_url}
+
 steps:
   collect:                             # deterministic inventory — no model; a non-zero exit halts the run
     type: tool
@@ -202,3 +211,7 @@ steps:
     on:
       success: exit
     run: bash .fragua/scripts/drift/open-pr.sh ${{ inputs.open_pr }}
+    outputs:
+      opened: { type: boolean }        # false on every no-op path
+      branch: { type: string }         # fragua/drift-YYYYMMDD
+      pr_url: { type: string }         # "" when nothing was opened
