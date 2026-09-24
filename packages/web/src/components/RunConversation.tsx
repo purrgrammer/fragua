@@ -1037,6 +1037,27 @@ function ToolNodeRow({
         </CodeBlockHeader>
       </CodeBlock>
       <Terminal status={status} tone={tone} output={`${body}${truncationNote}`} />
+      {/* What the node PRODUCED, distinct from what it printed. An `llm`
+       *  producer's struct is already visible as its `emit_output` call, so a
+       *  tool producer gets the same treatment — same label position, same
+       *  JSON CodeBlock — rather than vanishing into `fact.node_completed`. */}
+      {message.outputs !== undefined && (
+        <div className="space-y-[var(--sw-space-2)] overflow-hidden" data-testid="tool-node-outputs">
+          <h4 className="font-medium uppercase tracking-[0.06em] text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
+            Outputs
+          </h4>
+          <CodeBlock code={JSON.stringify(message.outputs, null, 2)} language="json">
+            <CodeBlockHeader>
+              <CodeBlockTitle>
+                <CodeBlockFilename>{nodeId ? `outputs.${nodeId}` : "outputs"}</CodeBlockFilename>
+              </CodeBlockTitle>
+              <CodeBlockActions>
+                <CodeBlockCopyButton />
+              </CodeBlockActions>
+            </CodeBlockHeader>
+          </CodeBlock>
+        </div>
+      )}
     </div>
   );
 }

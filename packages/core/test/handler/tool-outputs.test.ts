@@ -58,8 +58,8 @@ function makeEnv(opts: EnvOpts): ExecutionEnvironment {
   return env;
 }
 
-function stubCtx(env: ExecutionEnvironment): HandlerContext {
-  const messages: AgentMessage[] = [];
+function stubCtx(env: ExecutionEnvironment, sink?: AgentMessage[]): HandlerContext {
+  const messages: AgentMessage[] = sink ?? [];
   const recorder: SideEffectRecorder = {
     recordIntent: () => {},
     recordDone: () => {},
@@ -210,5 +210,37 @@ describe("tool handler structured outputs", () => {
       expect(result.failureReason).toContain("exit 1");
     }
     expect(read).toBe(false);
+  });
+
+  test("the emitted struct rides on the tool_node message, appended exactly once", async () => {
+    const sink: AgentMessage[] = [];
+    const ctx = stubCtx(makeEnv({ scratchRead: { kind: "ok", text: '{"total":42}' } }), sink);
+    const spec = makeToolHandler({ toolCommand: "./collect.sh", outputs: TOTAL_DECL });
+    await spec.handler(ctx);
+    expect(sink).toHaveLength(1);
+    const msg = sink[0];
+    expect(msg?.role).toBe("tool_node");
+    if (msg?.role === "tool_node") expect(msg.outputs).toEqual({ total: 42 });
+  });
+
+  test("a rejected emission still appends the message, so the terminal output diagnoses it", async () => {
+    const sink: AgentMessage[] = [];
+    const ctx = stubCtx(makeEnv({ scratchRead: { kind: "ok", text: "not json" } }), sink);
+    const spec = makeToolHandler({ toolCommand: "./collect.sh", outputs: TOTAL_DECL });
+    const result = await spec.handler(ctx);
+    if (result.kind === "transition") expect(result.outcomeStatus).toBe("fail");
+    expect(sink).toHaveLength(1);
+    const msg = sink[0];
+    if (msg?.role === "tool_node") expect(msg.outputs).toBeUndefined();
+  });
+
+  test("a non-producing tool node appends its message with no outputs", async () => {
+    const sink: AgentMessage[] = [];
+    const ctx = stubCtx(makeEnv({}), sink);
+    const spec = makeToolHandler({ toolCommand: "./fmt.sh" });
+    await spec.handler(ctx);
+    expect(sink).toHaveLength(1);
+    const msg = sink[0];
+    if (msg?.role === "tool_node") expect(msg.outputs).toBeUndefined();
   });
 });

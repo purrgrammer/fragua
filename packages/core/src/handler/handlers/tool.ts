@@ -234,7 +234,18 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
         outputArtifactKey: stdoutArtifactKey,
         timestamp: Date.now(),
       };
-      ctx.messages.append(message);
+      // A producing node's message is held back until the read-back below, so
+      // the emitted struct can ride on it. Every exit path appends exactly
+      // once — including the fail-closed ones, where the terminal output is
+      // the whole diagnosis of why the emission was rejected.
+      let messageAppended = false;
+      const appendToolMessage = (outputs?: OutputsValue): void => {
+        if (messageAppended) return;
+        messageAppended = true;
+        if (outputs !== undefined) message.outputs = outputs as Record<string, unknown>;
+        ctx.messages.append(message);
+      };
+      if (!producesOutputs) appendToolMessage();
 
       ctx.emit("tool.completed", {
         command,
@@ -268,13 +279,16 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       // here), never a silent empty struct that resurfaces as a distant
       // `UnpopulatedOutputError` at a consumer. Only a clean exit is read.
       if (producesOutputs && outcomeStatus === "success" && scratch !== undefined && cfg.outputs !== undefined) {
-        const failClosed = (reason: string): HandlerResult => ({
-          kind: "transition",
-          outcomeStatus: "fail",
-          failureReason: reason.slice(0, 400),
-          tokens: 0,
-          costUsd: 0,
-        });
+        const failClosed = (reason: string): HandlerResult => {
+          appendToolMessage();
+          return {
+            kind: "transition",
+            outcomeStatus: "fail",
+            failureReason: reason.slice(0, 400),
+            tokens: 0,
+            costUsd: 0,
+          };
+        };
         let readResult: Awaited<ReturnType<ScratchFile["read"]>>;
         try {
           readResult = await scratch.read(FRAGUA_OUTPUT_MAX_BYTES, ctx.signal);
@@ -309,7 +323,10 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
           return failClosed(`producer.invalid_emission: ${valErr}`);
         }
         result.outputs = parsed as OutputsValue;
+        appendToolMessage(result.outputs);
       }
+      // A producing node that failed its exit code never reached the read-back.
+      appendToolMessage();
 
       if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
       return result;

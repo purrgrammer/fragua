@@ -22,6 +22,7 @@ function toolNodeRow(opts: {
   durationMs?: number;
   stdoutTruncated?: boolean;
   outputArtifactKey?: string;
+  outputs?: Record<string, unknown>;
 }): RunMessageRow {
   return {
     ordinal: opts.ordinal,
@@ -37,6 +38,7 @@ function toolNodeRow(opts: {
       stderr: opts.stderr ?? "",
       ...(opts.stdoutTruncated ? { stdoutTruncated: true as const } : {}),
       ...(opts.outputArtifactKey ? { outputArtifactKey: opts.outputArtifactKey } : {}),
+      ...(opts.outputs ? { outputs: opts.outputs } : {}),
       timestamp: 0,
     },
   };
@@ -187,5 +189,46 @@ describe("RunConversation — tool_node row", () => {
 
     // Node name appears in the header.
     expect(codeBlock?.textContent).toContain("ci_gate");
+  });
+});
+
+describe("RunConversation — tool_node typed outputs", () => {
+  afterEach(() => cleanup());
+
+  it("renders the emitted struct as a labelled JSON block", () => {
+    const messages: RunMessageRow[] = [
+      toolNodeRow({
+        ordinal: 1,
+        nodeId: "resolve",
+        command: "bash .fragua/scripts/review/resolve-target.sh 'PR 121'",
+        cwd: "/repo",
+        exitCode: 0,
+        stdout: "",
+        outputs: { pr: "121", diff_spec: "abc123..def456", paths: ["packages/core/src/ir.ts"] },
+      }),
+    ];
+    const nodeStates: NodeState[] = [{ nodeId: "resolve", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 }];
+
+    const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
+    const q = within(container);
+
+    const outputs = q.getByTestId("tool-node-outputs");
+    expect(outputs.textContent).toContain("Outputs");
+    // Rendered as JSON, the same shape an `llm` producer's emit_output shows.
+    expect(container.querySelector('[data-language="json"]')).toBeTruthy();
+    expect(outputs.textContent).toContain("diff_spec");
+    expect(outputs.textContent).toContain("abc123..def456");
+    // Addressed by the token that reads it downstream.
+    expect(outputs.textContent).toContain("outputs.resolve");
+  });
+
+  it("renders no outputs block for a tool node that produced nothing", () => {
+    const messages: RunMessageRow[] = [
+      toolNodeRow({ ordinal: 1, nodeId: "fmt", command: "bun run format", cwd: "/repo", exitCode: 0, stdout: "ok" }),
+    ];
+    const nodeStates: NodeState[] = [{ nodeId: "fmt", iteration: 0, state: "completed", lastEventSeq: 1, pass: 0 }];
+
+    const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
+    expect(within(container).queryByTestId("tool-node-outputs")).toBeNull();
   });
 });
