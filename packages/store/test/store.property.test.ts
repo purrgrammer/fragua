@@ -416,6 +416,10 @@ const NON_MUTATOR_BUILDERS: {
     type: "fact.side_effect_failed",
     payload: { idempotencyKey: "k", errorCode: "e", retriable: false },
   }),
+  "fact.steering_applied": () => ({
+    type: "fact.steering_applied",
+    payload: { intentSeq: 2, disposition: "delivered", targets: [{ nodeId: "a", iteration: 0 }], targetCount: 1 },
+  }),
   "fact.tool_completed": () => ({
     type: "fact.tool_completed",
     payload: { toolName: "bash", argsHash: "h", artifactKey: "a", preview: "p" },

@@ -161,6 +161,24 @@ function seedCommitted(store: IEventStore, runId: string): void {
   );
 }
 
+/** A running run (claimed, run_started folded). */
+function seedRunning(store: IEventStore, runId: string): void {
+  store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
+  store.claimNextRun(1);
+  const s0 = store.getState(runId)!;
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+      },
+    ],
+    s0.version,
+    { advanceAppliedTo: s0.version },
+  );
+}
+
 /** A run paused at a HITL gate with two routes. */
 function seedPausedHuman(store: IEventStore, runId: string): void {
   store.enqueueRun({ runId, workflowSha: "wf", cwd: "/tmp/repo" });
@@ -366,6 +384,57 @@ describe("fragua operator verbs", () => {
     const code = await steerCommand({ runId: "rs", text: "skip the migration", dbPath: r.dbPath });
     expect(code).toBe(0);
     expect(lastIntent(r.store, "rs")).toBe("intent.steering_requested");
+  });
+
+  test("steer: reports delivered branches when a fact.steering_applied lands", async () => {
+    seedRunning(r.store, "rsd");
+    // Predict the steer intent's seq: the pre-written fact takes the current
+    // nextSeq, so the steer intent that follows takes nextSeq + 1.
+    const predicted = r.store.getState("rsd")!.nextSeq + 1;
+    const v = r.store.getState("rsd")!.version;
+    r.store.appendFact(
+      "rsd",
+      [
+        {
+          type: "fact.steering_applied",
+          payload: {
+            intentSeq: predicted,
+            disposition: "delivered",
+            targets: [
+              { nodeId: "adversarial", iteration: 0 },
+              { nodeId: "scope", iteration: 0 },
+            ],
+            targetCount: 2,
+          },
+        },
+      ],
+      v,
+    );
+    const lines: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.join(" "));
+    });
+
+    const code = await steerCommand({ runId: "rsd", text: "tighten scope", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("delivered to 2");
+    expect(out).toContain("adversarial");
+    expect(out).toContain("scope");
+  });
+
+  test("steer: reports paused when the run has no live handler", async () => {
+    seedPausedHuman(r.store, "rsp");
+    const lines: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.join(" "));
+    });
+
+    const code = await steerCommand({ runId: "rsp", text: "note", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("paused");
   });
 
   test("steer: empty text → exit 1, store untouched", async () => {

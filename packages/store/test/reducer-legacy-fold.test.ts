@@ -162,3 +162,15 @@ describe("legacy fold is deep-equal to the v4 fold", () => {
     });
   }
 });
+
+describe("fact.steering_applied is projection-neutral", () => {
+  test("folding it leaves run_state unchanged apart from the updatedAt bookkeeping stamp", () => {
+    const fact = {
+      type: "fact.steering_applied",
+      payload: { intentSeq: 5, disposition: "delivered", targets: [{ nodeId: "adversarial", iteration: 0 }] },
+    } as unknown as FactEvent;
+    const next = applyFact(runningState(), fact, 999);
+    expect(next.updatedAt).toBe(999);
+    expect({ ...next, updatedAt: runningState().updatedAt }).toEqual(runningState());
+  });
+});

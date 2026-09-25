@@ -31,6 +31,7 @@ import {
   validateOutputsValue,
 } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
+import type { SteerDelivery } from "@fragua/types";
 import type { ExecutionEnvironment, FraguaToolContext, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
 import {
   filterCatalogueForRun,
@@ -758,7 +759,7 @@ export class PiLlmBackend implements LlmBackend {
     // between nodes). `steer()` below calls agent.steer() directly when the
     // run's agent is set.
     const runId = input.run_id;
-    this.steering.beginRun(runId, agent);
+    this.steering.beginRun(runId, agent, { nodeId: input.node.id, iteration: input.iteration?.n ?? 0 });
 
     // Wire the executor's abort signal to agent.abort() so control.cancel
     // actually stops the in-flight LLM stream / tool loop. Without this the
@@ -1033,8 +1034,8 @@ export class PiLlmBackend implements LlmBackend {
    * `runId` is required so a steer can never leak across concurrent runs
    * on this shared backend — a caller that doesn't know the target runId
    * shouldn't be calling steer at all. */
-  steer(runId: string, message: string): void {
-    this.steering.steer(runId, message);
+  steer(runId: string, message: string): SteerDelivery {
+    return this.steering.steer(runId, message);
   }
 
   /** Release every per-run resource this backend holds for `runId`.
