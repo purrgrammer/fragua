@@ -1,8 +1,8 @@
 // GET /runs → table of runs.
 //
 // Presentation notes:
-//   - The table is intentionally minimal: Title / Workflow / Status.
-//     Per-run detail (started-at, cost, tokens, events, duration) lives
+//   - The table stays lean: Title / Workflow / Started / Status. The
+//     remaining per-run detail (cost, tokens, events, duration) lives
 //     on the run detail page, not here.
 //   - Row markup is shared with the Control Center's Running strip via
 //     `components/RunRow.tsx`. This file owns the table chrome
@@ -71,6 +71,9 @@ export function RunsList(): JSX.Element {
                 </th>
                 <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
                   Workflow
+                </th>
+                <th className="w-32 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
+                  Started
                 </th>
                 <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
                   Status

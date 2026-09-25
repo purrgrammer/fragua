@@ -93,6 +93,23 @@ describe("WorktreeInbox", () => {
       }
     });
 
+    test("shows how long the run has been waiting (relative text + ISO title)", async () => {
+      const { container, restore } = renderInbox({
+        [INBOX_URL]: () => json([{ ...PENDING_ROW_1, endedAt: "2024-01-02T00:00:00Z" }]),
+      });
+      try {
+        const waiting = await waitFor(() => {
+          const el = container.querySelector(`[data-testid="worktree-inbox-waiting-run-aaa"]`);
+          if (!el) throw new Error("waiting element not found");
+          return el;
+        });
+        expect(waiting.getAttribute("title")).toBe("2024-01-02T00:00:00.000Z");
+        expect((waiting.textContent ?? "").trim().length).toBeGreaterThan(0);
+      } finally {
+        restore();
+      }
+    });
+
     test("renders change-stat badge with real shape: filesChanged / insertions / deletions", async () => {
       const { container, restore } = renderInbox({
         [INBOX_URL]: () => json([PENDING_ROW_1]),

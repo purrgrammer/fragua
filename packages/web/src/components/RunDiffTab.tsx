@@ -1,20 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, type RunDetail, type RunSnapshot } from "../lib/api.ts";
+import { ApiError, type RunSnapshot } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { CodeBlock } from "./ai-elements/code-block.tsx";
 import { ChangeStat } from "./ChangeStat.tsx";
-import { RunActions } from "./RunActions.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 
 export interface RunDiffTabProps {
   runId: string;
-  /** Pass the already-loaded RunDetail so RunActions can offer inbox actions
-   * without a second fetch. When absent (e.g. loaded stand-alone) the
-   * actions panel is simply hidden. */
-  run?: RunDetail;
 }
+
+/** Diff comparison target: the run's base ref, or the previous diffable
+ * snapshot. Mirrors the CLI's `--against base|previous`. */
+type DiffAgainst = "base" | "previous";
 
 /** Selector label for a snapshot: the step (node) name. The terminal /
  *  HITL boundaries carry no node, so they fall back to a one-word kind. */
@@ -31,19 +30,20 @@ export function hasDiff(snap: RunSnapshot): boolean {
   return (snap.committed?.filesChanged ?? 0) > 0 || (snap.uncommitted?.filesChanged ?? 0) > 0;
 }
 
-export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
+export function RunDiffTab({ runId }: RunDiffTabProps): JSX.Element {
   const snapshotsQuery = useQuery(queries.runs.snapshots(runId));
   const diffable = (snapshotsQuery.data ?? []).filter(hasDiff);
 
   /** `null` = "latest" sentinel; otherwise the `eventIdx` of the chosen snapshot. */
   const [selectedEventIdx, setSelectedEventIdx] = useState<number | null>(null);
+  const [against, setAgainst] = useState<DiffAgainst>("base");
 
   const latest = diffable.length > 0 ? diffable[diffable.length - 1] : null;
   const selected =
     selectedEventIdx === null ? latest : (diffable.find((s) => s.eventIdx === selectedEventIdx) ?? latest);
 
   const diffQuery = useQuery({
-    ...queries.runs.snapshotDiff(runId, selected?.eventIdx ?? -1, "base"),
+    ...queries.runs.snapshotDiff(runId, selected?.eventIdx ?? -1, against),
     enabled: selected !== null && selected !== undefined,
   });
 
@@ -88,6 +88,19 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
             {snapshotLabel(selected)}
           </span>
         ) : null}
+        <Select value={against} onValueChange={(v) => setAgainst(v as DiffAgainst)}>
+          <SelectTrigger size="sm" className="w-32 font-mono" data-testid="run-diff-against">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="base" data-testid="run-diff-against-base">
+              vs base
+            </SelectItem>
+            <SelectItem value="previous" data-testid="run-diff-against-previous">
+              vs previous
+            </SelectItem>
+          </SelectContent>
+        </Select>
         {stat && (
           <ChangeStat
             className="flex-1 text-sw-sm"
@@ -97,7 +110,6 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
             deletionsTestId="run-diff-deletions"
           />
         )}
-        {run && <RunActions row={run} />}
       </div>
 
       <div
@@ -109,7 +121,7 @@ export function RunDiffTab({ runId, run }: RunDiffTabProps): JSX.Element {
         ) : diffQuery.isError ? (
           <DiffError error={diffQuery.error} />
         ) : diffQuery.data === "" ? (
-          <EmptyState data-testid="snapshot-diff-empty" title="No changes vs base" density="compact" />
+          <EmptyState data-testid="snapshot-diff-empty" title={`No changes vs ${against}`} density="compact" />
         ) : diffQuery.data !== undefined ? (
           <CodeBlock code={diffQuery.data} language="diff" wrap />
         ) : null}
