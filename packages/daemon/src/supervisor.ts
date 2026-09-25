@@ -31,8 +31,12 @@ export interface SupervisorOpts {
    * (backend.ts:464) collapses into a `fail` outcome. Steers must therefore
    * bypass the trip and ride the queue. Only fires for steers in batches
    * with no other intent type — a co-arriving cancel/pause/hitl trips and
-   * the steer is left to the standard intent fold on re-dispatch. */
-  onSteer?: (runId: string, text: string) => void;
+   * the steer is left to the standard intent fold on re-dispatch.
+   *
+   * `intentSeq` is the originating `intent.steering_requested` seq, carried
+   * so delivery can be recorded as a `fact.steering_applied` joinable to the
+   * request. */
+  onSteer?: (runId: string, text: string, intentSeq: number) => void;
 }
 
 const DEFAULT_TICK_MS = 50;
@@ -130,7 +134,15 @@ export function startSupervisor(opts: SupervisorOpts): {
         if (opts.onSteer != null) {
           for (const ev of fresh) {
             const text = readSteerText(ev);
-            if (text !== undefined) opts.onSteer(runId, text);
+            if (text === undefined) continue;
+            try {
+              opts.onSteer(runId, text, ev.seq);
+            } catch {
+              // Defence in depth for the invariant the heartbeat guard states:
+              // the supervisor must never crash the daemon. `onSteer` reaches
+              // the store, and this loop is the watchdog — a fault delivering
+              // one run's steer must not stop oversight of every other run.
+            }
           }
         }
       }

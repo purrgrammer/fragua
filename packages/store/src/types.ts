@@ -72,6 +72,9 @@ export type {
   QuarantineReason,
   RawEvent,
   RunStatus,
+  SteerDelivery,
+  SteerDisposition,
+  SteerTarget,
 } from "@fragua/types";
 export {
   ALL_DAEMON_EVENT_TYPES,

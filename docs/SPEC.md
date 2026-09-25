@@ -180,7 +180,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 
 | Route | Body | Effect |
 |---|---|---|
-| `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; aborts the current handler so the next dispatch sees it. |
+| `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; a mid-flight steer broadcasts to every in-flight LLM branch of the run, and delivery is recorded as `fact.steering_applied`. |
 | `POST /runs/:id/pause` | `{}` | Abort + transition to `paused{reason:"operator"}`. |
 | `POST /runs/:id/cancel` | `{ reason?: string }` | Abort + transition to `cancelled`. |
 | `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be one of the node's declared `routes=` names (surfaced on `fact.run_paused{reason:"human"}`). A non-empty `note` is delivered to the next `llm` step's prompt (§3.4). |

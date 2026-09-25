@@ -100,7 +100,7 @@ steps:
 
   direction:                           # quick human pass on framing BEFORE panel spend
     type: human
-    text: "First draft at ${{ outputs.draft.path }}. Quick direction check — continue to the five-lens panel, or send back for a redraft? (A send-back carries no note: pair it with `fragua runs steer` to say what to change.)"
+    text: "First draft at ${{ outputs.draft.path }}. Quick direction check — continue to the five-lens panel, or send back for a redraft? On a redraft the send-back carries no note: pair it with `fragua runs steer` to say what to change. (A steer while the panel is in flight broadcasts to all five lenses, so save it for a redraft.)"
     routes:
       continue: {to: panel, label: "Continue to panel"}
       redo:     {to: draft, label: "Redraft"}

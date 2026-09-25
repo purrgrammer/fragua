@@ -84,7 +84,7 @@ fragua runs respond <id> [route] [--note "…"]     # answer a HITL gate (intera
 fragua runs resume  <id> [--note "…"]
 fragua runs cancel  <id> [--reason "…"]
 fragua runs unquarantine <id> --resolution treat_as_done|retry|cancel
-fragua runs steer   <id> "<text>"                 # nudge the next LLM call; aborts + re-dispatches
+fragua runs steer   <id> "<text>"                 # nudge in-flight LLM branches; reports delivered/buffered
 fragua runs pause   <id>
 fragua runs priority <id> <n>
 
