@@ -51,7 +51,7 @@ describe("buildSteerDelivery", () => {
 
     const facts = steeringAppliedEvents(store, "r1");
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.payload).toEqual({ intentSeq: 7, disposition: "delivered", targets });
+    expect(facts[0]!.payload).toEqual({ intentSeq: 7, disposition: "delivered", targets, targetCount: targets.length });
   });
 
   test("records disposition=buffered with no targets when no agent is live", () => {
@@ -62,7 +62,7 @@ describe("buildSteerDelivery", () => {
 
     const facts = steeringAppliedEvents(store, "r2");
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.payload).toEqual({ intentSeq: 3, disposition: "buffered", targets: [] });
+    expect(facts[0]!.payload).toEqual({ intentSeq: 3, disposition: "buffered", targets: [], targetCount: 0 });
   });
 
   test("does not record when the run is not running (missing / terminal)", () => {
@@ -116,5 +116,29 @@ describe("buildSteerDelivery — a store fault must not escape", () => {
 
     buildSteerDelivery({ store, registry })("run-1", "focus on the cache", 9);
     expect(seen).toBe("focus on the cache");
+  });
+});
+
+describe("buildSteerDelivery — a wide fan-out still leaves a receipt", () => {
+  // Payloads are capped at 4 KB (I7) and a breach THROWS. Combined with the
+  // swallow above, an unbounded `targets` array would mean the operator loses
+  // the whole receipt precisely on the runs where a steer's reach is least
+  // obvious. Truncate, and say how much was truncated.
+  test("targets is bounded while targetCount reports the true reach", () => {
+    const store = makeRunningStore("wide");
+    const targets = Array.from({ length: 400 }, (_, i) => ({ nodeId: `lens_${i}`, iteration: 0 }));
+    const registry: SteerForwarder = {
+      steer: () => ({ disposition: "delivered", targets }) as SteerDelivery,
+    };
+
+    buildSteerDelivery({ store, registry })("wide", "narrow the scope", 11);
+
+    const [ev] = steeringAppliedEvents(store, "wide");
+    expect(ev).toBeDefined();
+    const payload = ev!.payload as { targets: unknown[]; targetCount: number };
+    expect(payload.targetCount).toBe(400);
+    expect(payload.targets.length).toBeLessThanOrEqual(50);
+    // The bound has to be under the cap, not merely smaller than the input.
+    expect(JSON.stringify(payload).length).toBeLessThan(4096);
   });
 });

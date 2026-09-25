@@ -404,6 +404,7 @@ describe("fragua operator verbs", () => {
               { nodeId: "adversarial", iteration: 0 },
               { nodeId: "scope", iteration: 0 },
             ],
+            targetCount: 2,
           },
         },
       ],

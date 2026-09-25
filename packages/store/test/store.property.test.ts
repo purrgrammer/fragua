@@ -418,7 +418,7 @@ const NON_MUTATOR_BUILDERS: {
   }),
   "fact.steering_applied": () => ({
     type: "fact.steering_applied",
-    payload: { intentSeq: 2, disposition: "delivered", targets: [{ nodeId: "a", iteration: 0 }] },
+    payload: { intentSeq: 2, disposition: "delivered", targets: [{ nodeId: "a", iteration: 0 }], targetCount: 1 },
   }),
   "fact.tool_completed": () => ({
     type: "fact.tool_completed",

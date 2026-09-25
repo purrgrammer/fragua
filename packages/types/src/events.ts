@@ -691,12 +691,19 @@ export type FactEvent =
        * request to its outcome; `targets` names the branches a `delivered`
        * steer reached. Observability only — the reducer folds it to a no-op.
        *
-       * contract: no-bump — projection-neutral observability fact; the reducer
-       * returns `next` unchanged for it and any reader in the compat range
-       * falls through the switch to the same no-op, so run_state fold semantics
-       * are unchanged across [MIN_COMPATIBLE, EVENT_CONTRACT_VERSION]. */
+       * `targets` is BOUNDED and `targetCount` is not: a wide fan-out can name
+       * more branches than the 4 KB payload cap (I7) admits, and an oversized
+       * payload throws inside the supervisor's tick, where the receipt is
+       * swallowed — so the operator would lose the whole signal to have all of
+       * it. Truncating keeps the receipt; `targetCount` keeps it honest about
+       * what was cut. */
       type: "fact.steering_applied";
-      payload: { intentSeq: number; disposition: SteerDisposition; targets: SteerTarget[] };
+      payload: {
+        intentSeq: number;
+        disposition: SteerDisposition;
+        targets: SteerTarget[];
+        targetCount: number;
+      };
     }
   | {
       type: "fact.tool_completed";

@@ -42,8 +42,14 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * `reason: "human"`. This is an EMISSION cut only — new runs emit the v4
  * facts — but the reducer/read-plane STILL fold the pre-v4 taxonomy (the
  * legacy fact types live on as read-only members of `FactEvent`), so v1–v3
- * runs keep folding and `MIN_COMPATIBLE` stays 1. */
-export const EVENT_CONTRACT_VERSION = 4;
+ * runs keep folding and `MIN_COMPATIBLE` stays 1.
+ * v5 adds `fact.steering_applied`, the delivery receipt a steer writes once it
+ * has reached the live agents (every branch of a fan-out, not just whichever
+ * registered last). A v4 daemon has no fold case for it, so a v4 reducer meeting
+ * a v5 stream would ignore the receipt. `MIN_COMPATIBLE` stays 1 — the fact is
+ * observability-only and folds to `next` unchanged, so no run's `run_state`
+ * depends on it and v1-v4 runs resume untouched. */
+export const EVENT_CONTRACT_VERSION = 5;
 
 /** Lowest contract version the daemon folds. THE RULE: write the newest
  * version, READ ALL versions. Events are an immutable, append-only log, so the

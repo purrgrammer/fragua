@@ -25,6 +25,13 @@ export interface SteerForwarder {
 
 const STEER_FACT_APPEND_ATTEMPTS = 8;
 
+/** Most branches a receipt names before it starts truncating. Payloads are
+ * capped at 4 KB (I7) and a breach THROWS — which, inside the supervisor tick,
+ * is swallowed, costing the operator the entire receipt. A `SteerTarget` is a
+ * short nodeId plus an iteration, so 50 of them sit far inside the cap while
+ * covering every fan-out width this engine actually runs. */
+const MAX_RECORDED_TARGETS = 50;
+
 export function buildSteerDelivery(deps: {
   store: IEventWriter & IEventReader;
   registry: SteerForwarder;
@@ -41,7 +48,12 @@ export function buildSteerDelivery(deps: {
           [
             {
               type: "fact.steering_applied",
-              payload: { intentSeq, disposition: delivery.disposition, targets: delivery.targets },
+              payload: {
+                intentSeq,
+                disposition: delivery.disposition,
+                targets: delivery.targets.slice(0, MAX_RECORDED_TARGETS),
+                targetCount: delivery.targets.length,
+              },
             },
           ],
           state.version,
