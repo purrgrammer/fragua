@@ -15,6 +15,7 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { EventType, NodeAttrs } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { findRouteToolCall, PiLlmBackend } from "../src/backend.ts";
+import { advertisedTools } from "./context-tools.ts";
 
 describe("findRouteToolCall", () => {
   function assistant(...content: unknown[]) {
@@ -152,7 +153,7 @@ describe("PiLlmBackend route tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => ({ name: t.name, parameters: t.parameters }));
+          advertised = advertisedTools(ctx).map((t) => ({ name: t.name, parameters: t.parameters }));
         },
       });
       const routeTool = advertised.find((t) => t.name === "route");
@@ -183,7 +184,7 @@ describe("PiLlmBackend route tool synthesis", () => {
         attrs: {}, // no `routes`
         responses: [fauxAssistantMessage([fauxText("all done")], { stopReason: "stop" })],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).not.toContain("route");
@@ -276,7 +277,7 @@ describe("PiLlmBackend route tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).toContain("route");
@@ -301,7 +302,7 @@ describe("PiLlmBackend route tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).toContain("route");

@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from "@fragua/types";
+import type { JsonObject, ToolResultMessage } from "@fragua/types";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebFetchResult } from "./WebFetchResult.tsx";
@@ -6,7 +6,7 @@ import { WebFetchResult } from "./WebFetchResult.tsx";
 /** The exact envelope `toAgentTool` puts on every tool result. Fixtures build
  *  it through here so a card that reads `details` at the wrong depth fails
  *  these tests instead of passing against a shape production never emits. */
-function adapterDetails(data: Record<string, unknown>): Record<string, unknown> {
+function adapterDetails(data: JsonObject): JsonObject {
   return { fragua_tool: "web_fetch", is_error: false, data, truncated: false, original_length: 0 };
 }
 

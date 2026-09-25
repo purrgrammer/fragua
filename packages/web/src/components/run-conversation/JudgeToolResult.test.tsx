@@ -1,9 +1,9 @@
-import type { ToolResultMessage } from "@fragua/types";
+import type { JsonObject, ToolResultMessage } from "@fragua/types";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { JudgeToolResult } from "./JudgeToolResult.tsx";
 
-function okResult(answers: Record<string, unknown>): ToolResultMessage {
+function okResult(answers: JsonObject): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: "tc1",
@@ -101,7 +101,7 @@ describe("JudgeToolResult", () => {
           text: "judge provider error (400): max_tokens_exceeded — the state is over the provider's input cap",
         },
       ],
-      details: { fragua_tool: "judge", is_error: true, data: undefined, truncated: false, original_length: 0 },
+      details: { fragua_tool: "judge", is_error: true, truncated: false, original_length: 0 },
       isError: true,
     };
     render(<JudgeToolResult params={params} result={err} />);

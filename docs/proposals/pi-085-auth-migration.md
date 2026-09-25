@@ -1,24 +1,33 @@
 ---
 title: Migrating fragua off the pi-ai OAuth registry (pi-ai ≥ 0.85)
 summary: "pi-ai 0.80.8 removed the global OAuth registry (getOAuthProvider / getOAuthApiKey / registerOAuthProvider / resetOAuthProviders / OAuthProviderInterface) that fragua's credential layer is built on; by 0.85.1 the `/oauth` subpath is type-only. The registry is replaced by per-provider `ProviderAuth { apiKey?: ApiKeyAuth; oauth?: OAuthAuth }` attached to each `Provider`, a `CredentialStore` port, and `Models.getAuth(model)` as the single request-auth resolver. This sketches how fragua's four call sites move to that architecture, in small PRs, once we bump past 0.80.7."
-status: proposed
+status: implemented
 maturity: sketch
 last-reviewed: 2026-07-29
 ---
 
-> Status: sketch. This is the design doc the later code change cites (AGENTS.md
-> ground rule 1). It is written against the **0.85.1** type surface; the exact
-> API may drift before we land the bump. Nothing here is built — fragua is
-> pinned at **0.80.7**, the last version whose `@earendil-works/pi-ai/oauth`
-> subpath still exports the runtime registry.
+> Status: implemented. The pin was bumped straight to **0.87.1** (pi-ai +
+> pi-agent-core, lockstep) and the auth layer migrated to the per-provider
+> `ProviderAuth` architecture sketched below. The migration was smaller than
+> the 6-PR plan in §5 — the four call sites moved in one change:
 >
-> Verified against the installed **0.80.7** package: `/oauth` runtime-exports
-> `registerOAuthProvider` / `resetOAuthProviders` / `getOAuthProvider` (etc.)
-> **and** re-exports the `OAuthProviderInterface` type (via `export * from
-> "./utils/oauth/types.ts"`). fragua now imports both the function and the type
-> from `/oauth` so they share a module. This does **not** change the migration
-> shape below: 0.85.1 still makes `/oauth` type-only and drops the registry, so
-> §5's PRs are unchanged.
+> - `AuthStorage` (`packages/agent/src/credentials/auth-storage.ts`) resolves
+>   the login-capable providers from `builtinProviders()` (`Provider.auth.oauth`)
+>   instead of the removed global registry, and keeps its own per-row store lock
+>   rather than routing through `Models.getAuth()`: login calls
+>   `oauth.login(interaction)`, refresh calls `oauth.refresh(cred, signal)`, and
+>   the access token comes from `oauth.toAuth(cred).apiKey`.
+> - `ModelRegistry` dropped the `modifyModels` post-login model rewrite (its
+>   **Open** successor question): 0.87.1 models are static per provider and OAuth
+>   only changes request auth, so no model-list mutation is needed. The unused
+>   programmatic `ProviderConfigInput.oauth` registration field was dropped with
+>   it (nothing in fragua wired a custom OAuth provider).
+> - The CLI login (`packages/cli/src/commands/providers.ts`) moved from the
+>   legacy `OAuthLoginCallbacks` to the new `AuthInteraction` (`prompt`/`notify`).
+> - `mcp/oauth.ts` is a separate MCP-client subsystem and was left untouched.
+>
+> The authorize-URL health (issue #74) is pinned by
+> `packages/agent/test/oauth-authorize-url.test.ts`.
 
 ## 1. Why this exists
 

@@ -17,10 +17,59 @@
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/auth-storage.ts) — MIT.
 
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderId } from "@earendil-works/pi-ai";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import type { AuthInteraction, OAuthAuth, OAuthCredentials, ProviderId } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { IProviderCredentialStore } from "@fragua/store";
 import { SqliteAuthStorageBackend } from "./sqlite-auth-backend.ts";
+
+/** Deadline for a single OAuth token refresh. Generous against a slow token
+ * endpoint, decisive against a hung one: past this the call is worse than a
+ * failure, because it holds every LLM node waiting on the credential. */
+const OAUTH_REFRESH_TIMEOUT_MS = 30_000;
+
+/** How long a failed refresh suppresses the next attempt for that provider.
+ * Without it a revoked or unreachable token endpoint costs every LLM call the
+ * full refresh timeout, serialized through the store lock — the credential
+ * stays expired, so each call retries from scratch. Short enough that a
+ * transient outage self-heals within a node's retry budget. */
+const OAUTH_REFRESH_BACKOFF_MS = 60_000;
+
+/** `oauth.refresh` with a deadline on its signal. `getApiKey` runs on every LLM
+ * invocation, so an unbounded refresh is not a slow call — it wedges every node
+ * waiting on the credential until the process restarts, with no daemon-internal
+ * escape (the `login` path can at least defer to an interaction signal; there is
+ * no interaction here). The signal is the provider's own cancellation channel,
+ * so the deadline unwinds the in-flight request rather than orphaning it. */
+export async function refreshWithDeadline(
+  oauth: Pick<OAuthAuth, "refresh">,
+  cred: Parameters<OAuthAuth["refresh"]>[0],
+  timeoutMs: number = OAUTH_REFRESH_TIMEOUT_MS,
+): Promise<Awaited<ReturnType<OAuthAuth["refresh"]>>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`OAuth token refresh exceeded ${timeoutMs}ms`));
+  }, timeoutMs);
+  try {
+    return await oauth.refresh(cred, controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Built-in OAuth providers, keyed by provider id. pi-ai exposes OAuth as
+ * `Provider.auth.oauth` rather than a global registry now; the built-in set
+ * is static, so it is memoised on first read. */
+let oauthProvidersCache: Map<string, OAuthAuth> | undefined;
+function builtinOAuthProviders(): Map<string, OAuthAuth> {
+  if (!oauthProvidersCache) {
+    const map = new Map<string, OAuthAuth>();
+    for (const provider of builtinProviders()) {
+      if (provider.auth.oauth) map.set(provider.id, provider.auth.oauth);
+    }
+    oauthProvidersCache = map;
+  }
+  return oauthProvidersCache;
+}
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -166,6 +215,9 @@ export class AuthStorage {
     return this.current();
   }
 
+  /** Last failed refresh per provider — the backoff window's only state. */
+  private readonly refreshFailedAt = new Map<string, number>();
+
   drainErrors(): Error[] {
     const drained = [...this.errors];
     this.errors = [];
@@ -174,11 +226,19 @@ export class AuthStorage {
 
   /** Run the provider's OAuth login flow and persist the returned
    * credentials. See `getOAuthProviders()` for available provider ids. */
-  async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getOAuthProvider(providerId);
-    if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
-    const credentials = await provider.login(callbacks);
-    this.set(providerId, { type: "oauth", ...credentials });
+  async login(providerId: ProviderId, interaction: AuthInteraction): Promise<void> {
+    const oauth = builtinOAuthProviders().get(providerId);
+    if (!oauth) throw new Error(`Unknown OAuth provider: ${providerId}`);
+    // `ProviderAuthInteraction` requires a signal, so this controller exists to
+    // satisfy that when the caller supplies none — it is deliberately never
+    // aborted, and no deadline belongs here. Unlike the refresh path, which the
+    // daemon walks unattended on every LLM call, login is only ever reached from
+    // the foreground `fragua providers login`, where the human waiting on a
+    // browser flow is the timeout and SIGINT is the escape. A cap generous
+    // enough not to cut that flow short would not bound anything worth bounding.
+    const controller = new AbortController();
+    const credential = await oauth.login({ ...interaction, signal: interaction.signal ?? controller.signal });
+    this.set(providerId, { ...credential });
   }
 
   logout(provider: string): void {
@@ -190,28 +250,30 @@ export class AuthStorage {
    * (last-writer-wins). The lock does NOT span the network refresh
    * itself — see `SqliteAuthStorageBackend.withLockAsync`. */
   private async refreshOAuthTokenWithLock(
-    providerId: OAuthProviderId,
+    providerId: ProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getOAuthProvider(providerId);
-    if (!provider) return null;
+    const oauth = builtinOAuthProviders().get(providerId);
+    if (!oauth) return null;
     const result = await this.storage.withLockAsync(async (current) => {
       const currentData = this.parseStorageData(current);
       const cred = currentData[providerId];
       if (cred?.type !== "oauth") return { result: null };
       if (Date.now() < cred.expires) {
-        return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+        const auth = await oauth.toAuth(cred);
+        return { result: auth.apiKey ? { apiKey: auth.apiKey, newCredentials: cred } : null };
       }
-      const oauthCreds: Record<string, OAuthCredentials> = {};
-      for (const [key, value] of Object.entries(currentData)) {
-        if (value.type === "oauth") oauthCreds[key] = value;
+      const refreshed = await refreshWithDeadline(oauth, cred);
+      const auth = await oauth.toAuth(refreshed);
+      const persisted: AuthStorageData = { ...currentData, [providerId]: { ...refreshed } };
+      if (!auth.apiKey) {
+        // The exchange SUCCEEDED — only the key derivation came up empty. The
+        // server may have rotated the refresh token in that exchange, so
+        // dropping `refreshed` here leaves the consumed one in storage and
+        // every later attempt fails against a token the server already spent.
+        // Persist it and report no key; the caller's backoff handles the rest.
+        return { result: null, next: JSON.stringify(persisted) };
       }
-      const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-      if (!refreshed) return { result: null };
-      const merged: AuthStorageData = {
-        ...currentData,
-        [providerId]: { type: "oauth", ...refreshed.newCredentials },
-      };
-      return { result: refreshed, next: JSON.stringify(merged) };
+      return { result: { apiKey: auth.apiKey, newCredentials: refreshed }, next: JSON.stringify(persisted) };
     });
     return result;
   }
@@ -230,33 +292,53 @@ export class AuthStorage {
     if (cred?.type === "api_key") return cred.key;
 
     if (cred?.type === "oauth") {
-      const provider = getOAuthProvider(providerId);
-      if (!provider) return undefined;
+      const oauth = builtinOAuthProviders().get(providerId);
+      if (!oauth) return undefined;
       const needsRefresh = Date.now() >= cred.expires;
       if (needsRefresh) {
+        const failedAt = this.refreshFailedAt.get(providerId);
+        if (failedAt !== undefined && Date.now() - failedAt < OAUTH_REFRESH_BACKOFF_MS) {
+          // Inside the window a recent failure stands in for the attempt, so a
+          // revoked credential fails fast instead of charging every call the
+          // refresh timeout.
+          return undefined;
+        }
         try {
           const result = await this.refreshOAuthTokenWithLock(providerId);
-          if (result) return result.apiKey;
+          if (result) {
+            this.refreshFailedAt.delete(providerId);
+            return result.apiKey;
+          }
+          this.refreshFailedAt.set(providerId, Date.now());
+          // A null return is the non-throwing failure: the refresh completed
+          // but yielded no usable key. Without this the caller gets `undefined`
+          // indistinguishable from "no credential configured", `drainErrors()`
+          // stays empty, and every later call silently re-runs the refresh.
+          this.recordError(new Error(`OAuth refresh for ${providerId} produced no API key`));
         } catch (error) {
+          this.refreshFailedAt.set(providerId, Date.now());
           this.recordError(error);
           // Another process may have refreshed meanwhile — re-read.
           const updatedCred = this.current()[providerId];
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
-            return provider.getApiKey(updatedCred);
+            // Another process won the refresh, so our throw was a race, not a
+            // broken credential — don't hold the backoff against it.
+            this.refreshFailedAt.delete(providerId);
+            return (await oauth.toAuth(updatedCred)).apiKey;
           }
           return undefined;
         }
       } else {
-        return provider.getApiKey(cred);
+        return (await oauth.toAuth(cred)).apiKey;
       }
     }
 
     return undefined;
   }
 
-  /** Pass-through to pi-ai's OAuth registry. Handy for CLI surfaces
-   * that want to iterate over the login-capable providers. */
-  getOAuthProviders() {
-    return getOAuthProviders();
+  /** The login-capable built-in providers, as `{ id, name }`. Handy for
+   * CLI / server surfaces that iterate over the OAuth providers. */
+  getOAuthProviders(): Array<{ id: string; name: string }> {
+    return [...builtinOAuthProviders().entries()].map(([id, oauth]) => ({ id, name: oauth.name }));
   }
 }

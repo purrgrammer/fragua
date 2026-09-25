@@ -961,7 +961,10 @@ interface MessageRowProps {
 function MessageRow({ row, toolResultsById }: MessageRowProps): JSX.Element | null {
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
-  if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
+  if (msg.role === "system") {
+    const content = typeof msg.content === "string" ? msg.content : msg.content.map((c) => c.text).join("");
+    return <SystemPromptRow content={content} testid={testid} />;
+  }
   if (msg.role === "tool_node") return <ToolNodeRow message={msg} nodeId={row.nodeId ?? undefined} testid={testid} />;
   if (msg.role === "judge_node") return <JudgeNodeRow message={msg} nodeId={row.nodeId ?? undefined} testid={testid} />;
   if (msg.role === "user") return <UserMessageRow message={msg} testid={testid} />;

@@ -34,15 +34,15 @@ import type {
   AnthropicMessagesCompat,
   Api,
   AssistantMessageEventStream,
+  BedrockCompat,
   Context,
+  MistralConversationsCompat,
   Model,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { getModels, getProviders, registerApiProvider, resetApiProviders } from "@earendil-works/pi-ai/compat";
-import type { OAuthProviderInterface } from "@earendil-works/pi-ai/oauth";
-import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -252,10 +252,15 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 
 function mergeCompat(
   baseCompat: Model<Api>["compat"],
-  overrideCompat: ModelOverride["compat"],
+  overrideCompat: Model<Api>["compat"],
 ): Model<Api>["compat"] | undefined {
   if (!overrideCompat) return baseCompat;
-  type ProviderCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat;
+  type ProviderCompat =
+    | OpenAICompletionsCompat
+    | OpenAIResponsesCompat
+    | AnthropicMessagesCompat
+    | BedrockCompat
+    | MistralConversationsCompat;
   const base = baseCompat as ProviderCompat | undefined;
   const override = overrideCompat as ProviderCompat;
   const merged = { ...base, ...override } as ProviderCompat;
@@ -360,7 +365,6 @@ export class ModelRegistry {
     this.modelRequestHeaders.clear();
     this.loadError = undefined;
     resetApiProviders();
-    resetOAuthProviders();
     this.loadModels();
     for (const [providerName, config] of this.registeredProviders.entries()) {
       this.applyProviderConfig(providerName, config);
@@ -385,13 +389,7 @@ export class ModelRegistry {
     } = this.store ? this.loadCustomModels(this.store) : emptyCustomModelsResult();
     if (error) this.loadError = error;
     const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
-    let combined = this.mergeCustomModels(builtInModels, customModels);
-    for (const oauthProvider of this.authStorage.getOAuthProviders()) {
-      const cred = this.authStorage.get(oauthProvider.id);
-      if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-        combined = oauthProvider.modifyModels(combined, cred);
-      }
-    }
+    const combined = this.mergeCustomModels(builtInModels, customModels);
     this.models = combined;
     this.lastConfigRevision = revBefore;
   }
@@ -460,6 +458,19 @@ export class ModelRegistry {
             .join("\n") || "Unknown schema error";
         errors.push(`provider_config[${row.provider}]: invalid schema\n${details}`);
         continue;
+      }
+      // A row written before OAuth moved onto `Provider.auth.oauth` may carry
+      // an `oauth:` block that `registerOAuthProvider` once consumed. The key
+      // is gone from the schema and `Value.Check` is non-strict, so the row
+      // validates and the block is simply discarded — the provider then
+      // resolves no key and every call through it returns undefined, with
+      // nothing anywhere saying why. Name it instead of dropping it.
+      if (row.config !== null && typeof row.config === "object" && "oauth" in row.config) {
+        errors.push(
+          `provider_config[${row.provider}]: carries a legacy \`oauth:\` block, which is no longer read — ` +
+            `OAuth now lives on the provider itself. Re-register with \`fragua providers login ${row.provider}\`, ` +
+            `or remove the key to silence this.`,
+        );
       }
       const providerConfig = (wrapped as ModelsConfig).providers[row.provider]!;
       try {
@@ -688,10 +699,6 @@ export class ModelRegistry {
   }
 
   private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
-    if (config.oauth) {
-      const oauthProvider: OAuthProviderInterface = { ...config.oauth, id: providerName };
-      registerOAuthProvider(oauthProvider);
-    }
     if (config.streamSimple) {
       const streamSimple = config.streamSimple;
       registerApiProvider(
@@ -725,12 +732,6 @@ export class ModelRegistry {
         if (modelDef.compat !== undefined) next.compat = modelDef.compat;
         this.models.push(next);
       }
-      if (config.oauth?.modifyModels) {
-        const cred = this.authStorage.get(providerName);
-        if (cred?.type === "oauth") {
-          this.models = config.oauth.modifyModels(this.models, cred);
-        }
-      }
     } else if (config.baseUrl || config.headers) {
       this.models = this.models.map((m) => {
         if (m.provider !== providerName) return m;
@@ -750,7 +751,6 @@ export interface ProviderConfigInput {
   streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
   headers?: Record<string, string>;
   authHeader?: boolean;
-  oauth?: Omit<OAuthProviderInterface, "id">;
   models?: Array<{
     id: string;
     name: string;

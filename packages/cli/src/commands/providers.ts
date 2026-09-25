@@ -14,7 +14,7 @@ export {
   providersRmModelCommand,
 } from "./providers-custom.ts";
 
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { AuthStorage, defaultModelPerProvider, getFraguaHome, ModelRegistry } from "@fragua/agent";
 import { JUDGE_DEFAULT_MODEL, JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
@@ -432,44 +432,47 @@ export async function providersLoginCommand(providerArg: string | undefined): Pr
       }
     }
 
-    const callbacks: OAuthLoginCallbacks = {
-      onAuth: (info) => {
-        console.log(chalk.bold(`\nOpen this URL to authenticate:\n  ${info.url}\n`));
-        if (info.instructions) console.log(chalk.dim(info.instructions));
+    const interaction: AuthInteraction = {
+      notify: (event) => {
+        switch (event.type) {
+          case "auth_url":
+            console.log(chalk.bold(`\nOpen this URL to authenticate:\n  ${event.url}\n`));
+            if (event.instructions) console.log(chalk.dim(event.instructions));
+            break;
+          case "device_code":
+            console.log(chalk.bold(`\nOpen ${event.verificationUri} and enter code: ${event.userCode}\n`));
+            break;
+          case "info":
+            console.log(chalk.bold(`\n${event.message}`));
+            for (const link of event.links ?? []) console.log(chalk.dim(`  ${link.label ?? link.url}: ${link.url}`));
+            break;
+          case "progress":
+            console.log(chalk.dim(`  ${event.message}`));
+            break;
+        }
       },
-      onDeviceCode: (info) => {
-        console.log(chalk.bold(`\nOpen ${info.verificationUri} and enter code: ${info.userCode}\n`));
-      },
-      onSelect: async (p) => {
+      prompt: async (p) => {
+        if (p.type === "select") {
+          const res = await prompts({
+            type: "select",
+            name: "value",
+            message: p.message,
+            choices: p.options.map((o) => ({ title: o.label, value: o.id })),
+          });
+          return typeof res.value === "string" ? res.value : "";
+        }
         const res = await prompts({
-          type: "select",
+          type: p.type === "secret" ? "password" : "text",
           name: "value",
           message: p.message,
-          choices: p.options.map((o) => ({ title: o.label, value: o.id })),
+          ...(p.type !== "manual_code" && p.placeholder ? { initial: p.placeholder } : {}),
         });
-        return typeof res.value === "string" ? res.value : undefined;
-      },
-      onPrompt: async (p) => {
-        const res = await prompts({
-          type: "text",
-          name: "value",
-          message: p.message,
-          ...(p.placeholder ? { initial: p.placeholder } : {}),
-          validate: (v: string) => (p.allowEmpty || v.length > 0 ? true : "must not be empty"),
-        });
-        return typeof res.value === "string" ? res.value : "";
-      },
-      onProgress: (message) => {
-        console.log(chalk.dim(`  ${message}`));
-      },
-      onManualCodeInput: async () => {
-        const res = await prompts({ type: "text", name: "value", message: "Paste the authorization code" });
         return typeof res.value === "string" ? res.value : "";
       },
     };
 
     try {
-      await auth.login(provider, callbacks);
+      await auth.login(provider, interaction);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(chalk.red(`✗ OAuth login failed: ${msg}`));

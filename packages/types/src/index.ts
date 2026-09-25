@@ -15,6 +15,8 @@ export type { AgentMessage, AgentToolCall, AgentToolResult } from "@earendil-wor
 export type {
   AssistantMessage,
   ImageContent,
+  JsonObject,
+  JsonValue,
   Message,
   TextContent,
   ThinkingContent,
