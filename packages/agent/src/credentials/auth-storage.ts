@@ -17,10 +17,25 @@
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/auth-storage.ts) — MIT.
 
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderId } from "@earendil-works/pi-ai";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import type { AuthInteraction, OAuthAuth, OAuthCredentials, ProviderId } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { IProviderCredentialStore } from "@fragua/store";
 import { SqliteAuthStorageBackend } from "./sqlite-auth-backend.ts";
+
+/** Built-in OAuth providers, keyed by provider id. pi-ai exposes OAuth as
+ * `Provider.auth.oauth` rather than a global registry now; the built-in set
+ * is static, so it is memoised on first read. */
+let oauthProvidersCache: Map<string, OAuthAuth> | undefined;
+function builtinOAuthProviders(): Map<string, OAuthAuth> {
+  if (!oauthProvidersCache) {
+    const map = new Map<string, OAuthAuth>();
+    for (const provider of builtinProviders()) {
+      if (provider.auth.oauth) map.set(provider.id, provider.auth.oauth);
+    }
+    oauthProvidersCache = map;
+  }
+  return oauthProvidersCache;
+}
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -174,11 +189,12 @@ export class AuthStorage {
 
   /** Run the provider's OAuth login flow and persist the returned
    * credentials. See `getOAuthProviders()` for available provider ids. */
-  async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getOAuthProvider(providerId);
-    if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
-    const credentials = await provider.login(callbacks);
-    this.set(providerId, { type: "oauth", ...credentials });
+  async login(providerId: ProviderId, interaction: AuthInteraction): Promise<void> {
+    const oauth = builtinOAuthProviders().get(providerId);
+    if (!oauth) throw new Error(`Unknown OAuth provider: ${providerId}`);
+    const controller = new AbortController();
+    const credential = await oauth.login({ ...interaction, signal: interaction.signal ?? controller.signal });
+    this.set(providerId, { ...credential });
   }
 
   logout(provider: string): void {
@@ -190,28 +206,27 @@ export class AuthStorage {
    * (last-writer-wins). The lock does NOT span the network refresh
    * itself — see `SqliteAuthStorageBackend.withLockAsync`. */
   private async refreshOAuthTokenWithLock(
-    providerId: OAuthProviderId,
+    providerId: ProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getOAuthProvider(providerId);
-    if (!provider) return null;
+    const oauth = builtinOAuthProviders().get(providerId);
+    if (!oauth) return null;
     const result = await this.storage.withLockAsync(async (current) => {
       const currentData = this.parseStorageData(current);
       const cred = currentData[providerId];
       if (cred?.type !== "oauth") return { result: null };
       if (Date.now() < cred.expires) {
-        return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+        const auth = await oauth.toAuth(cred);
+        return { result: auth.apiKey ? { apiKey: auth.apiKey, newCredentials: cred } : null };
       }
-      const oauthCreds: Record<string, OAuthCredentials> = {};
-      for (const [key, value] of Object.entries(currentData)) {
-        if (value.type === "oauth") oauthCreds[key] = value;
-      }
-      const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-      if (!refreshed) return { result: null };
+      const controller = new AbortController();
+      const refreshed = await oauth.refresh(cred, controller.signal);
+      const auth = await oauth.toAuth(refreshed);
+      if (!auth.apiKey) return { result: null };
       const merged: AuthStorageData = {
         ...currentData,
-        [providerId]: { type: "oauth", ...refreshed.newCredentials },
+        [providerId]: { ...refreshed },
       };
-      return { result: refreshed, next: JSON.stringify(merged) };
+      return { result: { apiKey: auth.apiKey, newCredentials: refreshed }, next: JSON.stringify(merged) };
     });
     return result;
   }
@@ -230,8 +245,8 @@ export class AuthStorage {
     if (cred?.type === "api_key") return cred.key;
 
     if (cred?.type === "oauth") {
-      const provider = getOAuthProvider(providerId);
-      if (!provider) return undefined;
+      const oauth = builtinOAuthProviders().get(providerId);
+      if (!oauth) return undefined;
       const needsRefresh = Date.now() >= cred.expires;
       if (needsRefresh) {
         try {
@@ -242,21 +257,21 @@ export class AuthStorage {
           // Another process may have refreshed meanwhile — re-read.
           const updatedCred = this.current()[providerId];
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
-            return provider.getApiKey(updatedCred);
+            return (await oauth.toAuth(updatedCred)).apiKey;
           }
           return undefined;
         }
       } else {
-        return provider.getApiKey(cred);
+        return (await oauth.toAuth(cred)).apiKey;
       }
     }
 
     return undefined;
   }
 
-  /** Pass-through to pi-ai's OAuth registry. Handy for CLI surfaces
-   * that want to iterate over the login-capable providers. */
-  getOAuthProviders() {
-    return getOAuthProviders();
+  /** The login-capable built-in providers, as `{ id, name }`. Handy for
+   * CLI / server surfaces that iterate over the OAuth providers. */
+  getOAuthProviders(): Array<{ id: string; name: string }> {
+    return [...builtinOAuthProviders().entries()].map(([id, oauth]) => ({ id, name: oauth.name }));
   }
 }

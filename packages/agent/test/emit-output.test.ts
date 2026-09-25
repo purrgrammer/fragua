@@ -10,6 +10,7 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { EventType, NodeAttrs, OutputsDecl } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { findEmitOutputCall, PiLlmBackend } from "../src/backend.ts";
+import { advertisedTools } from "./context-tools.ts";
 
 // ─────────────── findEmitOutputCall unit tests ───────────────
 
@@ -133,7 +134,7 @@ describe("emit_output tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).toContain("emit_output");
@@ -156,7 +157,7 @@ describe("emit_output tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          emitTool = (ctx.tools ?? []).find((t) => t.name === "emit_output") as typeof emitTool;
+          emitTool = advertisedTools(ctx).find((t) => t.name === "emit_output") as typeof emitTool;
         },
       });
       expect(emitTool).toBeDefined();
@@ -183,7 +184,7 @@ describe("emit_output tool synthesis", () => {
           }),
         ],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).toContain("emit_output");
@@ -308,7 +309,7 @@ describe("emit_output tool synthesis", () => {
         attrs: {},
         responses: [fauxAssistantMessage([fauxText("done")], { stopReason: "stop" })],
         onContext: (ctx) => {
-          advertised = (ctx.tools ?? []).map((t) => t.name);
+          advertised = advertisedTools(ctx).map((t) => t.name);
         },
       });
       expect(advertised).not.toContain("emit_output");
@@ -334,7 +335,7 @@ describe("outputs and routes are mutually exclusive (MVP)", () => {
         ],
         onContext: (ctx) => {
           if (advertised.length === 0) {
-            advertised = (ctx.tools ?? []).map((t) => t.name);
+            advertised = advertisedTools(ctx).map((t) => t.name);
           }
         },
       });

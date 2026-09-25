@@ -18,6 +18,7 @@ import type { ExecutionEnvironment, NodeAttrs } from "@fragua/core";
 import type { Skill } from "@fragua/types";
 import { CORE_TOOLS, ToolRegistry } from "@fragua/workspace";
 import { createPiMockBackend, fauxAssistantMessage, fauxText } from "../src/mock.ts";
+import { advertisedSystemPrompt, advertisedTools } from "./context-tools.ts";
 
 interface Captured {
   toolNames: string[];
@@ -110,8 +111,8 @@ async function captureContext(opts: { cwd: string; runId: string; attrs: NodeAtt
 
     if (!seen) throw new Error("faux provider was never called");
     return {
-      toolNames: (seen.tools ?? []).map((t) => t.name),
-      systemPrompt: seen.systemPrompt ?? "",
+      toolNames: advertisedTools(seen).map((t) => t.name),
+      systemPrompt: advertisedSystemPrompt(seen),
     };
   } finally {
     handle.dispose();

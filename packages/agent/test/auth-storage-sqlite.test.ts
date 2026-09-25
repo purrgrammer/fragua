@@ -157,3 +157,23 @@ describe("AuthStorage.describeAuthSource", () => {
     }
   });
 });
+
+describe("AuthStorage OAuth resolution (pi-ai 0.87.1 auth layer)", () => {
+  test("a non-expired anthropic oauth credential resolves its access token via the provider's toAuth", async () => {
+    const store = freshStore();
+    try {
+      const auth = AuthStorage.fromStore(store);
+      auth.set("anthropic", {
+        type: "oauth",
+        access: "sk-ant-oat-LIVE",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      });
+      // getApiKey routes through `Provider.auth.oauth.toAuth`, which for
+      // anthropic returns `{ apiKey: credential.access }` with no network.
+      expect(await auth.getApiKey("anthropic")).toBe("sk-ant-oat-LIVE");
+    } finally {
+      store.close();
+    }
+  });
+});
