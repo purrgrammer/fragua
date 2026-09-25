@@ -466,10 +466,19 @@ export class ModelRegistry {
       // resolves no key and every call through it returns undefined, with
       // nothing anywhere saying why. Name it instead of dropping it.
       if (row.config !== null && typeof row.config === "object" && "oauth" in row.config) {
+        // The remedy differs by provider, and naming the wrong one sends the
+        // operator into a second error: `providers login` only accepts ids in
+        // the built-in OAuth set, so a CUSTOM provider's OAuth cannot be
+        // re-registered at all — it has nowhere to go now that
+        // `registerOAuthProvider` is gone.
+        const builtin = this.authStorage.getOAuthProviders().some((p) => p.id === row.provider);
         errors.push(
           `provider_config[${row.provider}]: carries a legacy \`oauth:\` block, which is no longer read — ` +
-            `OAuth now lives on the provider itself. Re-register with \`fragua providers login ${row.provider}\`, ` +
-            `or remove the key to silence this.`,
+            `OAuth now lives on the provider itself. ` +
+            (builtin
+              ? `Re-register with \`fragua providers login ${row.provider}\`, or remove the key to silence this.`
+              : `Custom OAuth providers are no longer supported; remove the \`oauth:\` key. ` +
+                `The provider's models still load.`),
         );
       }
       const providerConfig = (wrapped as ModelsConfig).providers[row.provider]!;
