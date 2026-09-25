@@ -253,6 +253,14 @@ export const RunDetail = Type.Object({
    * (pause/resume/cancel) should be suppressed. Derived from `cwd == null`
    * combined with the `imported_runs` marker semantics. */
   imported: Type.Optional(Type.Boolean()),
+  /** Worktree inbox status — mirrors `RunSummary.inboxStatus`. Present only
+   * on terminal worktree runs; `pending` = awaiting an operator primitive.
+   * Folded onto the detail so the run-detail header can offer accept/discard
+   * without a second list fetch. */
+  inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
+  /** Queue priority (`run_state.priority`; higher dispatches first). Surfaced
+   * so the detail page can show + adjust it on a still-queued run. */
+  priority: Type.Optional(Type.Integer()),
   /** Typed-partial egress envelope (proposal §11): the run's declared
    * top-level `outputs:` projected from each producer's latest emission.
    * Present only on a `completed` run (and only when the workflow declares an
