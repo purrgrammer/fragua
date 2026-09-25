@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import { parseDurationMs } from "@fragua/core";
 import {
   AutoTitler,
+  buildSteerDelivery,
   type Provisioner,
   type ResolvedRunEnvDeny,
   startDaemon,
@@ -313,8 +314,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       }
       if (config["blob-gc"]?.["max-rows"] !== undefined) daemonOpts.blobGcMaxRows = config["blob-gc"]["max-rows"];
       if (deps.steeringRegistry !== undefined) {
-        const reg = deps.steeringRegistry;
-        daemonOpts.onSteer = (runId, text) => reg.steer(runId, text);
+        daemonOpts.onSteer = buildSteerDelivery({ store, registry: deps.steeringRegistry });
       }
       const handleRef = startDaemon(daemonOpts);
       await handleRef.done;

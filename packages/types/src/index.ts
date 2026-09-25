@@ -65,6 +65,9 @@ export {
   type SnapshotCapturedData,
   type SnapshotStat,
   STATUS_TO_UI,
+  type SteerDelivery,
+  type SteerDisposition,
+  type SteerTarget,
   TERMINAL_FACT_TYPES,
   TERMINAL_RUN_FACT_TYPES,
   type UiStatus,
@@ -116,6 +119,12 @@ export interface ToolNodeMessage {
    * keyed to the producing node — kept here as the canonical pointer
    * so the UI doesn't have to re-derive the convention. */
   outputArtifactKey?: string;
+  /** The typed struct this node emitted on `$FRAGUA_OUTPUT`, present only
+   * when the step declared `outputs:` and the read-back validated. Carried
+   * on the message so the conversation view can render what the node
+   * produced beside what it printed — an `llm` producer's struct is visible
+   * as its `emit_output` call, and a tool producer makes no such call. */
+  outputs?: Record<string, unknown>;
   timestamp: number;
 }
 

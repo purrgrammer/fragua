@@ -19,8 +19,11 @@ import type { Graph, Node } from "./types/graph.ts";
  * typed result, additive); a v2 IR without it is equivalent to a v3 IR
  * declaring no run-level outputs, so the v2→v3 converter is identity too.
  * v4 adds the `judge` node type with its `judge_*` attrs (additive); a v3 IR
- * contains no judge nodes and is executor-equivalent at v4, identity again. */
-export const CURRENT_IR_VERSION = 4;
+ * contains no judge nodes and is executor-equivalent at v4, identity again.
+ * v5 admits the optional `outputs:` block on `tool` nodes (a tool that emits a
+ * typed struct via `$FRAGUA_OUTPUT`, additive); a v4 IR carries no tool
+ * `outputs:` and is executor-equivalent at v5, identity again. */
+export const CURRENT_IR_VERSION = 5;
 
 /** IR version up-converter chain. Each entry is a function that takes a
  * parsed-but-unvalidated IR JSON value at `fromVersion` and returns the
@@ -37,6 +40,8 @@ export const IR_CONVERTERS: Array<(json: unknown) => unknown> = [
   // v2 → v3: additive run-level outputs block on GraphAttrs, identity.
   (json: unknown) => json,
   // v3 → v4: additive `judge` node type + judge_* attrs, identity.
+  (json: unknown) => json,
+  // v4 → v5: additive `outputs:` on `tool` nodes, identity.
   (json: unknown) => json,
 ];
 

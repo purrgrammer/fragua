@@ -40,8 +40,18 @@ import type { ToolNodeMessage } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
 import { substitute } from "../../engine/substitution.ts";
 import { DEFAULT_TOOL_MAX_MS } from "../../parser/yaml.ts";
-import type { ExecutionEnvironment } from "../../types/execution.ts";
+import type { ExecutionEnvironment, ScratchFile } from "../../types/execution.ts";
+import type { OutputsDecl, OutputsValue } from "../../types/outputs.ts";
+import { validateOutputsValue } from "../../types/outputs.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
+
+/** Read-back cap for the `$FRAGUA_OUTPUT` channel, and the source of truth for
+ *  the stdout `SOFT_CAP_BYTES` below — comfortably above any struct that
+ *  legitimately spills to the blob CAS. An oversized emission is a per-node
+ *  failure. The two were independent literals tied only by a comment, so
+ *  raising the stdout cap for large scripts would silently have left the
+ *  read-back cap behind and rejected an emission whose stdout was captured. */
+export const FRAGUA_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface ToolConfig {
   /** Raw shell command; substituted at dispatch time. Required — an empty
@@ -55,6 +65,12 @@ export interface ToolConfig {
   maxMs?: number;
   /** Spawn function injection point for tests. Defaults to `runWithBun`. */
   spawner?: SpawnFn;
+  /** Typed output declaration when this tool produces a struct forward via
+   * `$FRAGUA_OUTPUT`. When set, the handler allocates a scratch file, hands its
+   * path to the process, reads it back after a clean exit, validates it with
+   * `validateOutputsValue`, and attaches it to `result.outputs`. A declared
+   * `outputs:` the process never leaves as a valid struct fails the node. */
+  outputs?: OutputsDecl;
 }
 
 export interface ToolRunResult {
@@ -122,6 +138,26 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     }
     const cwd = ctx.env?.cwd() ?? "";
 
+    // Producing tool: allocate the `$FRAGUA_OUTPUT` scratch file before the
+    // spawn. The capability is optional on `ExecutionEnvironment`; a tool that
+    // declares `outputs:` but runs in an env without it (a bare spawner test,
+    // a read-only env) fails closed rather than silently producing nothing.
+    const producesOutputs = cfg.outputs !== undefined;
+    let scratch: ScratchFile | undefined;
+    if (producesOutputs) {
+      if (ctx.env?.createScratchFile === undefined) {
+        return {
+          kind: "transition",
+          outcomeStatus: "fail",
+          failureReason:
+            "producer.invalid_emission: tool declares `outputs:` but its execution environment has no $FRAGUA_OUTPUT channel",
+          tokens: 0,
+          costUsd: 0,
+        } satisfies HandlerResult;
+      }
+      scratch = await ctx.env.createScratchFile({ runId: ctx.runId, nodeId: ctx.nodeId, iteration: ctx.iteration });
+    }
+
     // Per-(nodeId, kind) chunk index counters. Streamed to the UI as
     // `tool.output_chunk` observability events: arrival order is
     // preserved by the SSE channel, but the index lets a consumer
@@ -149,86 +185,162 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       }
     };
 
-    let ranResult: ToolRunResult | undefined;
     try {
-      ranResult = await ctx.externalCall(
-        { toolName: "tool.shell", args: { command, cwd }, attempt: ctx.iteration + 1 },
-        () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs, onData),
-      );
-    } catch (err) {
-      if (isAbortError(err)) {
+      let ranResult: ToolRunResult | undefined;
+      try {
+        ranResult = await ctx.externalCall(
+          { toolName: "tool.shell", args: { command, cwd }, attempt: ctx.iteration + 1 },
+          () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs, onData, scratch?.path),
+        );
+      } catch (err) {
+        if (isAbortError(err)) {
+          return {
+            kind: "halt",
+            reason: "error",
+            detail: "tool aborted",
+          } satisfies HandlerResult;
+        }
         return {
           kind: "halt",
           reason: "error",
-          detail: "tool aborted",
+          detail: `tool spawn failed: ${errorMessage(err)}`,
         } satisfies HandlerResult;
       }
-      return {
-        kind: "halt",
-        reason: "error",
-        detail: `tool spawn failed: ${errorMessage(err)}`,
-      } satisfies HandlerResult;
+
+      // Persist stdout/stderr as artifacts for debugging / replay. Shell
+      // output is non-deterministic by nature (timestamps, pids, paths),
+      // so retries within the same iteration legitimately produce
+      // different content — pass `replace: true` so a quarantine-retry
+      // doesn't trip ArtifactCollisionError.
+      const stdoutArtifactKey = `${ctx.nodeId}:stdout`;
+      ctx.artifacts.put(stdoutArtifactKey, ranResult.stdout, "text/plain", { replace: true });
+      if (ranResult.stderr.length > 0) {
+        ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
+      }
+
+      // Append a `tool_node` message so the conversation view can render
+      // the execution as a Terminal card without round-tripping to the
+      // artifacts store. Inline stdout/stderr is tail-truncated; the
+      // artifact is the source of truth for the full bytes.
+      const stdoutTail = truncateTail(ranResult.stdout, INLINE_OUTPUT_BYTES);
+      const stderrTail = truncateTail(ranResult.stderr, INLINE_OUTPUT_BYTES);
+      const message: ToolNodeMessage = {
+        role: "tool_node",
+        command,
+        cwd,
+        exitCode: ranResult.exitCode,
+        durationMs: ranResult.durationMs,
+        stdout: stdoutTail.text,
+        stderr: stderrTail.text,
+        ...(stdoutTail.truncated ? { stdoutTruncated: true } : {}),
+        ...(stderrTail.truncated ? { stderrTruncated: true } : {}),
+        outputArtifactKey: stdoutArtifactKey,
+        timestamp: Date.now(),
+      };
+      // A producing node's message is held back until the read-back below, so
+      // the emitted struct can ride on it. Every exit path appends exactly
+      // once — including the fail-closed ones, where the terminal output is
+      // the whole diagnosis of why the emission was rejected.
+      let messageAppended = false;
+      const appendToolMessage = (outputs?: OutputsValue): void => {
+        if (messageAppended) return;
+        messageAppended = true;
+        if (outputs !== undefined) message.outputs = outputs as Record<string, unknown>;
+        ctx.messages.append(message);
+      };
+      if (!producesOutputs) appendToolMessage();
+
+      ctx.emit("tool.completed", {
+        command,
+        cwd,
+        exitCode: ranResult.exitCode,
+        durationMs: ranResult.durationMs,
+        stdoutBytes: ranResult.stdout.length,
+        stderrBytes: ranResult.stderr.length,
+      });
+
+      const outcomeStatus: "success" | "fail" = ranResult.exitCode === 0 ? "success" : "fail";
+      const result: HandlerResult = {
+        kind: "transition",
+        outcomeStatus,
+        tokens: 0,
+        costUsd: 0,
+      };
+      // A failing tool step's last line of output is the reason an operator
+      // wants on the halt banner — not just "failed with no fail route".
+      if (outcomeStatus === "fail") {
+        result.failureReason =
+          `exit ${ranResult.exitCode}: ${lastLine(ranResult.stderr) ?? lastLine(ranResult.stdout) ?? "no output"}`.slice(
+            0,
+            400,
+          );
+      }
+
+      // Producer read-back: a tool that declared `outputs:` and exited 0 must
+      // leave a valid struct on `$FRAGUA_OUTPUT`. Absent / renamed-over /
+      // oversized / unparseable / schema-invalid is a NODE failure (fails closed
+      // here), never a silent empty struct that resurfaces as a distant
+      // `UnpopulatedOutputError` at a consumer. Only a clean exit is read.
+      if (producesOutputs && outcomeStatus === "success" && scratch !== undefined && cfg.outputs !== undefined) {
+        const failClosed = (reason: string): HandlerResult => {
+          appendToolMessage();
+          return {
+            kind: "transition",
+            outcomeStatus: "fail",
+            failureReason: reason.slice(0, 400),
+            tokens: 0,
+            costUsd: 0,
+          };
+        };
+        let readResult: Awaited<ReturnType<ScratchFile["read"]>>;
+        try {
+          readResult = await scratch.read(FRAGUA_OUTPUT_MAX_BYTES, ctx.signal);
+        } catch (err) {
+          // Discriminate a mid-read cancel from an I/O fault: an abort must land
+          // terminally (a halt), never be swallowed into a transition-fail that
+          // lets the run advance past the cancel.
+          if (isAbortError(err)) {
+            // Append before halting, like every other post-spawn return. The
+            // command ran; without the row the conversation shows a gap where
+            // the node was, and the stdout/stderr artifacts on disk have
+            // nothing linking them to a command and a cwd.
+            appendToolMessage();
+            return { kind: "halt", reason: "error", detail: "tool aborted" } satisfies HandlerResult;
+          }
+          return failClosed(`producer.invalid_emission: reading $FRAGUA_OUTPUT failed: ${errorMessage(err)}`);
+        }
+        if (readResult.kind === "absent") {
+          return failClosed("producer.no_emission: tool exited 0 but wrote no $FRAGUA_OUTPUT");
+        }
+        if (readResult.kind === "renamed") {
+          return failClosed(
+            'producer.rename_not_supported: $FRAGUA_OUTPUT was replaced (inode changed) — write in place with `command > "$FRAGUA_OUTPUT"`; do not rm, mv onto, or symlink it',
+          );
+        }
+        if (readResult.kind === "oversize") {
+          return failClosed(`producer.invalid_emission: $FRAGUA_OUTPUT exceeds ${FRAGUA_OUTPUT_MAX_BYTES} bytes`);
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(readResult.text);
+        } catch {
+          return failClosed("producer.invalid_emission: $FRAGUA_OUTPUT is not valid JSON");
+        }
+        const valErr = validateOutputsValue(cfg.outputs, parsed);
+        if (valErr !== null) {
+          return failClosed(`producer.invalid_emission: ${valErr}`);
+        }
+        result.outputs = parsed as OutputsValue;
+        appendToolMessage(result.outputs);
+      }
+      // A producing node that failed its exit code never reached the read-back.
+      appendToolMessage();
+
+      if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
+      return result;
+    } finally {
+      if (scratch !== undefined) await scratch.dispose();
     }
-
-    // Persist stdout/stderr as artifacts for debugging / replay. Shell
-    // output is non-deterministic by nature (timestamps, pids, paths),
-    // so retries within the same iteration legitimately produce
-    // different content — pass `replace: true` so a quarantine-retry
-    // doesn't trip ArtifactCollisionError.
-    const stdoutArtifactKey = `${ctx.nodeId}:stdout`;
-    ctx.artifacts.put(stdoutArtifactKey, ranResult.stdout, "text/plain", { replace: true });
-    if (ranResult.stderr.length > 0) {
-      ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
-    }
-
-    // Append a `tool_node` message so the conversation view can render
-    // the execution as a Terminal card without round-tripping to the
-    // artifacts store. Inline stdout/stderr is tail-truncated; the
-    // artifact is the source of truth for the full bytes.
-    const stdoutTail = truncateTail(ranResult.stdout, INLINE_OUTPUT_BYTES);
-    const stderrTail = truncateTail(ranResult.stderr, INLINE_OUTPUT_BYTES);
-    const message: ToolNodeMessage = {
-      role: "tool_node",
-      command,
-      cwd,
-      exitCode: ranResult.exitCode,
-      durationMs: ranResult.durationMs,
-      stdout: stdoutTail.text,
-      stderr: stderrTail.text,
-      ...(stdoutTail.truncated ? { stdoutTruncated: true } : {}),
-      ...(stderrTail.truncated ? { stderrTruncated: true } : {}),
-      outputArtifactKey: stdoutArtifactKey,
-      timestamp: Date.now(),
-    };
-    ctx.messages.append(message);
-
-    ctx.emit("tool.completed", {
-      command,
-      cwd,
-      exitCode: ranResult.exitCode,
-      durationMs: ranResult.durationMs,
-      stdoutBytes: ranResult.stdout.length,
-      stderrBytes: ranResult.stderr.length,
-    });
-
-    const outcomeStatus: "success" | "fail" = ranResult.exitCode === 0 ? "success" : "fail";
-    const result: HandlerResult = {
-      kind: "transition",
-      outcomeStatus,
-      tokens: 0,
-      costUsd: 0,
-    };
-    // A failing tool step's last line of output is the reason an operator
-    // wants on the halt banner — not just "failed with no fail route".
-    if (outcomeStatus === "fail") {
-      result.failureReason =
-        `exit ${ranResult.exitCode}: ${lastLine(ranResult.stderr) ?? lastLine(ranResult.stdout) ?? "no output"}`.slice(
-          0,
-          400,
-        );
-    }
-    if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
-    return result;
   };
 
   return {
@@ -272,6 +384,7 @@ async function runCommand(
   spawner: SpawnFn | undefined,
   timeoutMs: number,
   onData?: (chunk: string, kind: "stdout" | "stderr") => void,
+  outputPath?: string,
 ): Promise<ToolRunResult> {
   if (spawner) return spawner(command, signal);
   if (env) {
@@ -279,6 +392,7 @@ async function runCommand(
       signal,
       timeoutMs,
       ...(onData ? { onData } : {}),
+      ...(outputPath ? { env: { FRAGUA_OUTPUT: outputPath } } : {}),
     });
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
   }
@@ -335,7 +449,7 @@ export async function runWithBun(cmd: string, signal: AbortSignal): Promise<Tool
   }
 }
 
-const SOFT_CAP_BYTES = 8 * 1024 * 1024;
+const SOFT_CAP_BYTES = FRAGUA_OUTPUT_MAX_BYTES;
 
 async function readStream(stream: ReadableStream<Uint8Array> | number): Promise<string> {
   if (typeof stream === "number") return "";

@@ -19,16 +19,30 @@
 # pushed but never opened a PR for (e.g. a transient gh failure) gets its PR
 # opened on retry. Commits are attributed to the GitHub Actions bot.
 #
+# Emits, when the step declares `outputs:`, one JSON object to $FRAGUA_OUTPUT:
+# {opened, branch, pr_url}. The run's deliverable IS a PR, so `drift` reports
+# its url as the run's typed result instead of leaving it in the transcript for
+# a human to find. `opened` is false on every no-op path (`open_pr=false`, no
+# doc edits, a PR already open) and `pr_url` is then "" or the existing PR's.
+#
 #   bash open-pr.sh <open_pr:true|false>
 
 set -euo pipefail
 
 open_pr="${1:-true}"
 branch="fragua/drift-$(date -u +%Y%m%d)"
+# Emitting is optional so the script stays runnable by hand and the step can
+# drop `outputs:` without editing it.
+emit() { # emit <opened:true|false> <pr_url>
+  [ -n "${FRAGUA_OUTPUT:-}" ] || return 0
+  jq -nc --argjson opened "$1" --arg branch "$branch" --arg pr_url "$2" \
+    '{opened: $opened, branch: $branch, pr_url: $pr_url}' > "$FRAGUA_OUTPUT"
+}
 title="[docs] drift: doc/code sync ($(date -u +%Y-%m-%d))"
 body="drift-pr.md"
 
 if [ "$open_pr" != "true" ]; then
+  emit false ""
   echo "open_pr=false — doc edits left in the worktree, no PR opened"
   exit 0
 fi
@@ -40,6 +54,7 @@ git add -u -- '*.md'
 
 # Nothing staged ⇒ no doc edits (only Manual findings, or no drift) ⇒ no PR.
 if git diff --cached --quiet; then
+  emit false ""
   echo "no doc edits — no PR opened"
   exit 0
 fi
@@ -49,6 +64,7 @@ fi
 # the branch upstream with no PR — a retry should OPEN the PR, not skip.
 existing_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
 if [ -n "$existing_pr" ]; then
+  emit false "$(gh pr view "$existing_pr" --json url --jq .url)"
   echo "PR #$existing_pr already open for $branch — nothing to do"
   exit 0
 fi
@@ -74,5 +90,6 @@ if [ ! -f "$body" ]; then
   printf '## Doc drift — auto-sync\n\nAutomated doc/code sync. Review the diff.\n' >"$body"
 fi
 
-gh pr create --base main --head "$branch" --title "$title" --body-file "$body"
-echo "opened PR for $branch"
+pr_url="$(gh pr create --base main --head "$branch" --title "$title" --body-file "$body")"
+emit true "$pr_url"
+echo "opened PR for $branch: $pr_url"

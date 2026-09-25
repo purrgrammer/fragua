@@ -33,11 +33,11 @@
 //
 // Beyond the spine, `makeArbGraph` mixes in (default-on, via fc.oneof) two
 // engine-feature shapes so the validate() bootstrap exercises them:
-//   (a) STRUCTURED OUTPUTS — an llm step declaring typed `outputs:` (scalar /
-//       choice / array / record over the shared grammar) plus a downstream step
-//       reading `${{ outputs.<producer>.<field>[.<sub>] }}`. The producer
-//       dominates the consumer on the linear spine and the read lands on a
-//       required leaf, so no E035 / W015 / W016.
+//   (a) STRUCTURED OUTPUTS — an llm OR tool step declaring typed `outputs:`
+//       (scalar / choice / array / record over the shared grammar) plus a
+//       downstream step reading `${{ outputs.<producer>.<field>[.<sub>] }}`. The
+//       producer dominates the consumer on the linear spine and the read lands
+//       on a required leaf, so no E035 / W015 / W016.
 //   (b) PARALLEL FAN-OUT — a `type: parallel` node with ≥2 distinct read-class
 //       llm branch sub-pipelines (1–2 nodes each) converging on a join that
 //       reads each branch terminal's typed outputs. Satisfies E036–E043: ≥2
@@ -289,12 +289,23 @@ const arbOutputsDecl: fc.Arbitrary<{ decl: OutputsDecl; readPath: string[] }> = 
  * `${{ outputs.p.<readPath> }}` in its prompt. Producer dominates consumer
  * (linear), so no W015/W016; the ref is declared, so no E035. */
 const arbOutputsGraph: fc.Arbitrary<Graph> = fc
-  .record({ outputs: arbOutputsDecl, tail: fc.integer({ min: 0, max: 2 }) })
-  .map(({ outputs, tail }) => {
+  .record({
+    outputs: arbOutputsDecl,
+    tail: fc.integer({ min: 0, max: 2 }),
+    // A producer is an `llm` (emits via `emit_output`) OR a `tool` (emits via
+    // `$FRAGUA_OUTPUT`); both declare `outputs:` over the same grammar and
+    // resolve at the same downstream `${{ outputs.p.<field> }}` consumer.
+    producerKind: fc.constantFrom<"llm" | "tool">("llm", "tool"),
+  })
+  .map(({ outputs, tail, producerKind }) => {
     const ref = `\${{ outputs.p.${outputs.readPath.join(".")} }}`;
+    const producer: Node =
+      producerKind === "tool"
+        ? { id: "p", type: "tool", attrs: { label: "produce", tool_command: "./produce.sh", outputs: outputs.decl } }
+        : { id: "p", type: "llm", attrs: { label: "produce", prompt: "produce typed outputs", outputs: outputs.decl } };
     const nodes: Record<string, Node> = {
       start: { id: "start", type: "start", attrs: { label: "start" } },
-      p: { id: "p", type: "llm", attrs: { label: "produce", prompt: "produce typed outputs", outputs: outputs.decl } },
+      p: producer,
       c: { id: "c", type: "llm", attrs: { label: "consume", prompt: `combine ${ref}` } },
       exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
     };

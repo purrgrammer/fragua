@@ -309,6 +309,34 @@ describe("supervisor — intent-aware abort policy", () => {
     }
   });
 
+  test("onSteer is invoked with the originating intent seq", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r-seq", "sha");
+    const ctrl = new AbortController();
+    registry.register("r-seq", ctrl);
+    const { seq } = store.appendIntent("r-seq", { type: "intent.steering_requested", payload: { text: "go" } });
+
+    const seen: Array<{ runId: string; text: string; intentSeq: number }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text, intentSeq) => seen.push({ runId, text, intentSeq }),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(seen).toEqual([{ runId: "r-seq", text: "go", intentSeq: seq }]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
   test("non-steer intent (cancel) trips the controller and does not call onSteer", async () => {
     const registry = new AbortRegistry();
     const store = makeRunningStore("r2", "sha");

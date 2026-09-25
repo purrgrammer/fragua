@@ -89,7 +89,7 @@ return {
   cacheReadTokens?: 0,
   cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
-  outputs?: OutputsValue,               // structured outputs from emit_output (llm steps with `outputs:` declared); present iff the node emitted a valid struct. OutputsValue = Record<string, string|number|boolean|null|array|object> — the restricted recursive type from packages/core/src/types/outputs.ts, not arbitrary unknown
+  outputs?: OutputsValue,               // structured outputs — an llm step via emit_output, a tool step via the $FRAGUA_OUTPUT file (both with `outputs:` declared); present iff the node emitted a valid struct. OutputsValue = Record<string, string|number|boolean|null|array|object> — the restricted recursive type from packages/core/src/types/outputs.ts, not arbitrary unknown
   operatorNote?: "use the v2 schema",   // human handler only: the non-empty note from ctx.humanInput, forwarded for delivery to the next llm step (see yield_human)
 };
 ```
@@ -309,16 +309,18 @@ scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
 
 `run:` (stored as `tool_command`) substitutes `${{ inputs.<name> }}` (POSIX-quoted)
 and runs the shell command. Stdout + stderr become artifacts keyed by
-`${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay; tool
-nodes do not feed data forward to downstream nodes. A workflow that
-needs to run a deterministic script and reason about its output should
-call the script from inside an llm step's `bash` tool instead of
-synthesising a tool-node-then-llm chain.
+`${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay. A tool
+node that declares typed `outputs:` **may** feed a struct forward: it
+writes one JSON document to the file named by `$FRAGUA_OUTPUT` (set only
+when `outputs:` is declared), and the engine reads + validates it after
+the process exits — a missing or invalid emission fails the node. A tool
+without `outputs:` stays side-effect-only.
 
 A tool node is not an agent tool. Agent-callable tools (read / write /
 edit / bash) are what an LLM invokes *inside* an llm turn; the
-graph-level `tool` node is a distinct primitive for side-effect-only
-shell steps (CI gates, idempotent commands) with no LLM in the loop.
+graph-level `tool` node is a distinct primitive for side-effect-or-
+produce shell steps (CI gates, idempotent commands, deterministic
+producers) with no LLM in the loop.
 See the `format` / `ci` steps in `.fragua/workflows/work.yaml` for
 `tool` nodes in a mixed pipeline.
 

@@ -507,6 +507,19 @@ export type ChangeStat = {
 /** Inbox lifecycle for a terminal run carrying recoverable work. */
 export type InboxStatus = "pending" | "acted" | "discarded";
 
+/** What happened to a steer when the supervisor forwarded it mid-flight:
+ * `delivered` — injected into ≥1 live LLM agent for the run (broadcast to
+ * every in-flight branch, `targets` lists them); `buffered` — no agent was
+ * active, so it was queued for the next `beginRun` (the durable fold path also
+ * carries it to the next dispatch via `ctx.steering`). */
+export type SteerDisposition = "delivered" | "buffered";
+
+/** An LLM branch a steer reached, identified by its `(nodeId, iteration)`. */
+export type SteerTarget = { nodeId: string; iteration: number };
+
+/** Outcome the steer registry returns for one `steer(runId, text)` call. */
+export type SteerDelivery = { disposition: SteerDisposition; targets: SteerTarget[] };
+
 /** Payload of the `snapshot.captured` observability event — a per-step (nodeId
  * set) or HITL (nodeId null) worktree snapshot. Addressed by `commitSha`; the
  * run's single tip ref keeps it reachable. `committed` / `uncommitted` stats
@@ -607,9 +620,10 @@ export type FactEvent =
          * agent exited via the synthesised `route` tool. The chosen route
          * name; the engine's Step-0 edge selector keys on this. */
         route?: string;
-        /** Structured outputs emitted by this node via the `emit_output` tool
-         * (llm steps). Present iff the node declared `outputs:` and successfully
-         * emitted a valid struct. An oversized struct spills to the blob CAS —
+        /** Structured outputs emitted by this node — an `llm` step via the
+         * `emit_output` tool, a `tool` step via the `$FRAGUA_OUTPUT` file.
+         * Present iff the node declared `outputs:` and successfully emitted a
+         * valid struct. An oversized struct spills to the blob CAS —
          * the event keeps a tiny `{$fragua_blob}` ref under the 4KB cap — so
          * size is never a node failure.
          *
@@ -670,6 +684,27 @@ export type FactEvent =
   | {
       type: "fact.side_effect_failed";
       payload: { idempotencyKey: string; errorCode: string; retriable: boolean };
+    }
+  | {
+      /** A steer the supervisor forwarded mid-flight, and what became of it
+       * (delivery to every in-flight branch, or buffering). `intentSeq` is the
+       * originating `intent.steering_requested` seq so an operator can join the
+       * request to its outcome; `targets` names the branches a `delivered`
+       * steer reached. Observability only — the reducer folds it to a no-op.
+       *
+       * `targets` is BOUNDED and `targetCount` is not: a wide fan-out can name
+       * more branches than the 4 KB payload cap (I7) admits, and an oversized
+       * payload throws inside the supervisor's tick, where the receipt is
+       * swallowed — so the operator would lose the whole signal to have all of
+       * it. Truncating keeps the receipt; `targetCount` keeps it honest about
+       * what was cut. */
+      type: "fact.steering_applied";
+      payload: {
+        intentSeq: number;
+        disposition: SteerDisposition;
+        targets: SteerTarget[];
+        targetCount: number;
+      };
     }
   | {
       type: "fact.tool_completed";

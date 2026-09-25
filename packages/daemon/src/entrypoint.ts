@@ -76,8 +76,10 @@ export interface DaemonMainOpts {
    * `intent.steering_requested` arrives mid-handler. Wired by the CLI to
    * a daemon-scoped `SteeringRegistry` shared across every llm
    * backend. Without this, steers either land via the standard intent
-   * fold on re-dispatch or stay buffered until the next `beginRun`. */
-  onSteer?: (runId: string, text: string) => void;
+   * fold on re-dispatch or stay buffered until the next `beginRun`. The
+   * `intentSeq` is the originating `intent.steering_requested` seq, used to
+   * record delivery as a joinable `fact.steering_applied`. */
+  onSteer?: (runId: string, text: string, intentSeq: number) => void;
   /** Tick interval for the schedule-dispatcher fiber. Defaults to
    * 60s; tests inject smaller values. Set to 0 to disable scheduled
    * runs entirely. */

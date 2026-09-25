@@ -33,6 +33,19 @@ interface DiscoveryOpts {
   dbPath?: string;
 }
 
+/** Write to stdout and resolve only once the chunk has drained to the OS. A
+ * bare `process.stdout.write` is fire-and-forget: on a pipe (the operator's
+ * `runs diff | pager` case) the following `process.exit` in `main` discards
+ * whatever node still holds past the ~64KB kernel buffer, truncating a large
+ * diff to its first file, or an artifact body to its first 64KB — which reads
+ * as a complete, smaller artifact. Awaiting the drain before the command
+ * returns keeps the whole payload intact. */
+function writeStdout(chunk: string | Uint8Array): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(chunk, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
 function failedResume(verb: string, runId: string, capSeq: number, error: string): string {
   return (
     chalk.red(`${verb}: cap raised (seq ${capSeq}) but resume failed: ${error}`) +
@@ -746,14 +759,107 @@ export interface SteerOptions extends DiscoveryOpts {
   text: string;
 }
 
+/** How long `steer` waits for the daemon to record delivery before falling
+ * back to a queued-for-next-dispatch message. A mid-flight steer is recorded
+ * as `fact.steering_applied` within a supervisor tick (~50ms); this budget is
+ * generous enough to catch it without hanging the CLI when the run is paused
+ * (no live handler to deliver into — the fold path applies on resume). */
+const STEER_DELIVERY_WAIT_MS = 2_000;
+const STEER_DELIVERY_POLL_MS = 100;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /** Inject a steering nudge: aborts the current handler and re-dispatches the
- * node with the text prepended to the next LLM call's thread. */
+ * node with the text prepended to the next LLM call's thread. After appending
+ * the intent, waits briefly for the daemon's `fact.steering_applied` so the
+ * operator learns whether the model actually saw the steer — not merely that
+ * the request was recorded. */
 export function steerCommand(opts: SteerOptions): Promise<number> {
   if (opts.text.trim().length === 0) {
     console.error(chalk.red("steer: <text> required"));
     return Promise.resolve(1);
   }
-  return writeIntent(opts, opts.runId, "steer", (p) => p.buildSteer({ text: opts.text }));
+  return withStoreClient(opts, async ({ store, plane, readPlane }) => {
+    if (store.getState(opts.runId) == null) {
+      console.error(chalk.red("steer: run not found") + chalk.dim(` (${opts.runId})`));
+      return 1;
+    }
+    const built = plane.buildSteer({ text: opts.text });
+    if (!built.ok) {
+      console.error(chalk.red(`steer: ${built.error}`));
+      return 1;
+    }
+    let seq: number;
+    try {
+      ({ seq } = plane.commit(opts.runId, built.intent));
+    } catch (err) {
+      console.error(chalk.red(`steer: ${(err as Error).message}`));
+      return 1;
+    }
+    console.log(chalk.green("steer requested") + chalk.dim(` (run ${opts.runId}, intent seq ${seq})`));
+
+    const status = store.getState(opts.runId)?.status;
+    if (status === "paused" || status === "paused_human" || status === "paused_auto") {
+      console.log(chalk.dim("  run is paused — the steer will reach the model when it resumes"));
+      return 0;
+    }
+    if (status !== "running") {
+      console.log(chalk.dim(`  run is ${status ?? "gone"} — the steer will not be delivered`));
+      return 0;
+    }
+
+    // Running: the daemon delivers mid-flight and records fact.steering_applied
+    // within a supervisor tick. Poll briefly so the operator sees the outcome.
+    const deadline = Date.now() + STEER_DELIVERY_WAIT_MS;
+    for (;;) {
+      const applied = findSteeringApplied(readPlane.events(opts.runId), seq);
+      if (applied !== undefined) {
+        console.log(renderSteerDelivery(applied));
+        return 0;
+      }
+      if (Date.now() >= deadline) break;
+      await sleep(STEER_DELIVERY_POLL_MS);
+    }
+    console.log(chalk.dim("  not delivered yet — it will ride the next LLM dispatch; check `fragua runs events`"));
+    return 0;
+  });
+}
+
+/** The most recent `fact.steering_applied` payload for `intentSeq`, or
+ * undefined if the daemon hasn't recorded delivery yet. */
+function findSteeringApplied(
+  events: StoredEvent[] | null,
+  intentSeq: number,
+): { disposition: string; targets: Array<{ nodeId: string; iteration: number }> } | undefined {
+  if (events == null) return undefined;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev?.type !== "fact.steering_applied") continue;
+    const payload = ev.payload as {
+      intentSeq?: number;
+      disposition?: string;
+      targets?: Array<{ nodeId: string; iteration: number }>;
+    } | null;
+    if (payload?.intentSeq === intentSeq) {
+      return { disposition: payload.disposition ?? "", targets: payload.targets ?? [] };
+    }
+  }
+  return undefined;
+}
+
+function renderSteerDelivery(applied: {
+  disposition: string;
+  targets: Array<{ nodeId: string; iteration: number }>;
+}): string {
+  if (applied.disposition === "delivered") {
+    const names = applied.targets.map((t) => t.nodeId || "?").join(", ");
+    const n = applied.targets.length;
+    const where = names.length > 0 ? ` (${names})` : "";
+    return chalk.green(`  delivered to ${n} in-flight ${n === 1 ? "branch" : "branches"}`) + chalk.dim(where);
+  }
+  return chalk.dim("  buffered — no live handler; it will reach the model on the next LLM dispatch");
 }
 
 export interface PauseOptions extends DiscoveryOpts {
@@ -989,7 +1095,7 @@ export function diffCommand(opts: DiffOptions): Promise<number> {
       console.log(chalk.dim(`(no changes vs ${against})`));
       return 0;
     }
-    process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    await writeStdout(text.endsWith("\n") ? text : `${text}\n`);
     return 0;
   });
 }
@@ -1182,7 +1288,7 @@ export interface ArtifactOptions extends DiscoveryOpts {
  * (NUL byte in the first 8KiB) is refused with a notice on stderr so the
  * terminal isn't garbled — redirect to a file instead. */
 export function artifactCommand(opts: ArtifactOptions): Promise<number> {
-  return withStoreClient(opts, ({ readPlane }) => {
+  return withStoreClient(opts, async ({ readPlane }) => {
     const scope: ArtifactScope = {
       runId: opts.runId,
       nodeId: opts.nodeId,
@@ -1200,7 +1306,7 @@ export function artifactCommand(opts: ArtifactOptions): Promise<number> {
       console.error(chalk.yellow(`(binary, ${bytes.byteLength} bytes — redirect to a file)`));
       return 1;
     }
-    process.stdout.write(bytes);
+    await writeStdout(bytes);
     return 0;
   });
 }

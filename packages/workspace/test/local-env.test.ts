@@ -277,6 +277,18 @@ describe("LocalEnvironment", () => {
       const r = await plainEnv.exec("echo $PUBLIC_VAR_NOTASECRET");
       expect(r.stdout).toContain("kept");
     });
+
+    test("(d) FRAGUA_OUTPUT survives the secret-name deny set and a CI-style suffix predicate", async () => {
+      // The `$FRAGUA_OUTPUT` channel a producing tool reads must never be
+      // stripped by the env-deny filter (secret-suffix rule + name set).
+      const denyEnv = new LocalEnvironment({
+        cwd: scratch,
+        envDenyNames: new Set(["MY_SECRET_TOKEN"]),
+        envDenyPredicate: (name) => /_(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PASS|AUTH|PASSPHRASE)$/.test(name),
+      });
+      const r = await denyEnv.exec("echo O=${FRAGUA_OUTPUT:-STRIPPED}", { env: { FRAGUA_OUTPUT: "/tmp/scratch-x" } });
+      expect(r.stdout).toContain("O=/tmp/scratch-x");
+    });
   });
 
   describe("envDenyPredicate", () => {
