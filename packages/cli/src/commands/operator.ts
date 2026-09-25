@@ -33,6 +33,18 @@ interface DiscoveryOpts {
   dbPath?: string;
 }
 
+/** Write to stdout and resolve only once the chunk has drained to the OS. A
+ * bare `process.stdout.write` is fire-and-forget: on a pipe (the operator's
+ * `runs diff | pager` case) the following `process.exit` in `main` discards
+ * whatever node still holds past the ~64KB kernel buffer, truncating a large
+ * diff to its first file. Awaiting the drain before the command returns keeps
+ * the whole payload intact. */
+function writeStdout(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(text, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
 function failedResume(verb: string, runId: string, capSeq: number, error: string): string {
   return (
     chalk.red(`${verb}: cap raised (seq ${capSeq}) but resume failed: ${error}`) +
@@ -989,7 +1001,7 @@ export function diffCommand(opts: DiffOptions): Promise<number> {
       console.log(chalk.dim(`(no changes vs ${against})`));
       return 0;
     }
-    process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    await writeStdout(text.endsWith("\n") ? text : `${text}\n`);
     return 0;
   });
 }
