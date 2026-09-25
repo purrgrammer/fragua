@@ -285,6 +285,11 @@ export class AuthStorage {
         try {
           const result = await this.refreshOAuthTokenWithLock(providerId);
           if (result) return result.apiKey;
+          // A null return is the non-throwing failure: the refresh completed
+          // but yielded no usable key. Without this the caller gets `undefined`
+          // indistinguishable from "no credential configured", `drainErrors()`
+          // stays empty, and every later call silently re-runs the refresh.
+          this.recordError(new Error(`OAuth refresh for ${providerId} produced no API key`));
         } catch (error) {
           this.recordError(error);
           // Another process may have refreshed meanwhile — re-read.
