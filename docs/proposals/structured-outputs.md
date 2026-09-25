@@ -126,7 +126,9 @@ Additive; breaks nothing already authored.
 
 - `outputs:` on a step that also `routes:` — a routing step's terminal call is
   `route`, not `emit_output`; the two are mutually exclusive.
-- Tool-step production (`$FRAGUA_OUTPUT`); `tool` steps consume, never produce.
+- ~~Tool-step production (`$FRAGUA_OUTPUT`); `tool` steps consume, never produce.~~
+  (Shipped in [`tool-outputs.md`](tool-outputs.md) — a `tool` step now produces
+  typed `outputs:` via `$FRAGUA_OUTPUT`. This MVP scoping cut has been reversed.)
 - Native final-message JSON as an emit backend (`output_config.format` /
   `response_format`).
 - ~~`object`/`array` types in `inputs:`~~ — was out of the original MVP cut;
@@ -360,8 +362,10 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
    `routes:` becomes sugar and a branch carries data only when it has data).
 2. **Native final-message JSON emit backend** (§7) via pi-ai `onPayload`,
    capability-gated per `model.api`.
-3. **Tool-step production (`$FRAGUA_OUTPUT`)** — the gather→judge composition (a
-   `tool` emits structured evidence an `llm` judges).
+3. ~~**Tool-step production (`$FRAGUA_OUTPUT`)**~~ — **shipped** ([`tool-outputs.md`](tool-outputs.md)):
+   a `tool` step declares typed `outputs:` and emits a struct forward by writing
+   one JSON document to `$FRAGUA_OUTPUT`, read + validated after the process
+   exits. Enables the gather→judge composition without a model turn in the gather.
 4. **Cross-cutting untrusted-content delimiting** — extend §6.4 from
    output→prompt interpolation to the shared `thread:` and tool/file/bash results.
 5. ~~**`object`/`array` types in `inputs:`**~~ — **promoted to §12** (designed).

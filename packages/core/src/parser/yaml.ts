@@ -844,12 +844,12 @@ export function parseWorkflow(source: string): Graph {
       edges.push({ from: stepId, to: nextNode, attrs: { outcome: "success" } });
     }
 
-    // ---- outputs: block (llm steps only; mutually exclusive with routes) ----
+    // ---- outputs: block (llm | tool steps; mutually exclusive with routes) ----
     const outputsNode = body.get("outputs", true);
     if (outputsNode !== undefined) {
-      if (nodeType !== "llm") {
+      if (nodeType !== "llm" && nodeType !== "tool") {
         throw new ParseError(
-          `step "${stepId}" declares \`outputs:\` but has type "${nodeType}" — outputs are only supported on \`llm\` steps`,
+          `E053: step "${stepId}" declares \`outputs:\` but has type "${nodeType}" — outputs are only supported on \`llm\` and \`tool\` steps`,
           ...locArr(locOf(outputsNode, lineCounter)),
         );
       }

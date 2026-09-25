@@ -55,6 +55,51 @@ export interface ExecutionEnvironment {
    * pattern; defaults to false to match Bun.Glob. Tools that mirror pi-coding-agent's
    * `--hidden` posture (grep, find) pass `dot: true`. */
   glob(pattern: string, opts?: { cwd?: string; dot?: boolean }): Promise<string[]>;
+  /** Allocate a scratch file for out-of-band IPC with a spawned process — the
+   * `$FRAGUA_OUTPUT` channel a producing `tool` step writes its typed struct to.
+   * The path is DETERMINISTIC in `(runId, nodeId, iteration)` and lives OUTSIDE
+   * `cwd()`, so it never enters a snapshot delta or a `fragua runs diff`. The
+   * implementation unlinks any file already at that path, then creates a fresh
+   * inode itself and retains the fd; the read-back reads from that retained fd,
+   * never by re-opening the child-controlled path — so a child that swaps a
+   * symlink, FIFO, or device onto the path reads back empty and fails closed.
+   * Optional: only the real spawning environments (`LocalEnvironment`,
+   * `WorktreeEnvironment`) implement it. A tool that declares `outputs:` in an
+   * env lacking it fails closed at the node. Rejects on allocation failure. */
+  createScratchFile?(key: ScratchKey): Promise<ScratchFile>;
+}
+
+export interface ScratchKey {
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly iteration: number;
+}
+
+/** Result of a scratch read-back. `absent` — the process left no bytes on the
+ * retained inode (it never wrote; no valid JSON is zero-length). `renamed` —
+ * the retained inode is empty but the path now resolves to a DIFFERENT regular
+ * inode holding bytes (a temp-file + `mv`/`sponge`/`--output` idiom the retained
+ * fd never sees); the handler surfaces this as an actionable fault naming the
+ * in-place-`>` requirement rather than a misleading `no_emission`. `oversize` —
+ * more than `maxBytes` bytes are present; the read never allocates past the cap.
+ * `ok` — the retained inode carries `text`. */
+export type ScratchReadResult =
+  | { kind: "absent" }
+  | { kind: "renamed" }
+  | { kind: "oversize" }
+  | { kind: "ok"; text: string };
+
+export interface ScratchFile {
+  /** Absolute deterministic path, outside cwd(); handed to the child via
+   * `FRAGUA_OUTPUT`. The child writes into it IN PLACE (`> "$FRAGUA_OUTPUT"`
+   * truncates the same inode). */
+  readonly path: string;
+  /** Read back this dispatch's file from the retained fd, bounded at
+   * `maxBytes + 1` independently of any stat. `signal` bounds the read for
+   * defence in depth. */
+  read(maxBytes: number, signal: AbortSignal): Promise<ScratchReadResult>;
+  /** Close the retained fd and unlink the path; idempotent, never throws. */
+  dispose(): Promise<void>;
 }
 
 export interface DirEntry {

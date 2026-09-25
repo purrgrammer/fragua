@@ -91,10 +91,11 @@ export interface NodeAttrs {
    * executor advances `current_node` here when the frontier drains; the join
    * reads each branch terminal's outputs by name. */
   join?: string;
-  /** Typed output declarations for this step (llm steps only). Keys are output
-   * names; values are restricted-profile type nodes. Validated at parse time and
-   * lowered to a provider-enforced TypeBox schema for the `emit_output` tool.
-   * See docs/proposals/structured-outputs.md. */
+  /** Typed output declarations for this step (llm or tool steps). Keys are
+   * output names; values are restricted-profile type nodes. Validated at parse
+   * time. An `llm` step emits via the provider-enforced `emit_output` tool; a
+   * `tool` step emits via the `$FRAGUA_OUTPUT` file. See
+   * docs/proposals/structured-outputs.md and docs/proposals/tool-outputs.md. */
   outputs?: OutputsDecl;
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;

@@ -90,10 +90,11 @@ A bare `$name` or `${…}` is **literal text** — it is never substituted.
   (E030).
 
 - **`${{ outputs.<producer>.<field>[.<sub>] }}`** — a typed value emitted by an
-  upstream `llm` step's `outputs:`. A scalar interpolates as its value; a
-  record or array interpolates as JSON. Only `llm` steps *produce* outputs;
-  `tool` and `human` steps consume but never produce, and `outputs:` is mutually
-  exclusive with `routes:`.
+  upstream `llm` or `tool` step's `outputs:`. A scalar interpolates as its
+  value; a record or array interpolates as JSON. `llm` steps produce outputs via
+  the `emit_output` tool; `tool` steps produce them by writing one JSON document
+  to `$FRAGUA_OUTPUT` (read after the process exits). `human` steps consume but
+  never produce, and `outputs:` is mutually exclusive with `routes:`.
 
 **Reads fail closed.** Referencing a field the producer never populated on the
 path actually taken *fails the consuming step* — it is never a silent `""`. The

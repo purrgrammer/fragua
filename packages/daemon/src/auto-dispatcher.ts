@@ -211,6 +211,7 @@ function specForNode(
       const cmd = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
       const toolOpts: Parameters<typeof handler.makeToolHandler>[0] = { toolCommand: cmd };
       if (resolvedMaxMs !== undefined) toolOpts.maxMs = resolvedMaxMs;
+      if (attrs.outputs !== undefined) toolOpts.outputs = attrs.outputs;
       return handler.makeToolHandler(toolOpts);
     }
     case "exit":

@@ -201,4 +201,10 @@ steps:
     timeout-minutes: 5
     on:
       success: exit
+    # NOT declaring `outputs:` yet, though open-pr.sh already emits
+    # {opened, branch, pr_url} when $FRAGUA_OUTPUT is set. The weekly job runs
+    # this file against a PINNED RELEASED engine, and no release parses
+    # `outputs:` on a tool step yet — adopting it here would break the job the
+    # moment it merged. Re-land with the pin bump once a release ships it;
+    # `pr-review-engine-pin.test.ts` fails the build if it is added early.
     run: bash .fragua/scripts/drift/open-pr.sh ${{ inputs.open_pr }}

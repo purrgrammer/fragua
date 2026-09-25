@@ -522,8 +522,8 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // are rejected at parse time (OutputsProfileError in yaml.ts), but the
   // semantic rules (empty decl, non-identifier keys, empty choice options)
   // are emitted here as E033/E034 diagnostics rather than hard parse errors.
-  // (`outputs:` on a non-llm/tool step is rejected earlier, at parse time —
-  // yaml.ts throws a ParseError, like an unknown `type:`.)
+  // (`outputs:` is authored only on `llm` and `tool` steps; on any other type
+  // yaml.ts rejects it at parse time with E053, like an unknown `type:`.)
   for (const n of nodes) {
     const outputs = n.attrs.outputs;
     if (outputs === undefined) continue;
