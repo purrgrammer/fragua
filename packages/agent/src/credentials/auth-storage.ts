@@ -219,6 +219,13 @@ export class AuthStorage {
   async login(providerId: ProviderId, interaction: AuthInteraction): Promise<void> {
     const oauth = builtinOAuthProviders().get(providerId);
     if (!oauth) throw new Error(`Unknown OAuth provider: ${providerId}`);
+    // `ProviderAuthInteraction` requires a signal, so this controller exists to
+    // satisfy that when the caller supplies none — it is deliberately never
+    // aborted, and no deadline belongs here. Unlike the refresh path, which the
+    // daemon walks unattended on every LLM call, login is only ever reached from
+    // the foreground `fragua providers login`, where the human waiting on a
+    // browser flow is the timeout and SIGINT is the escape. A cap generous
+    // enough not to cut that flow short would not bound anything worth bounding.
     const controller = new AbortController();
     const credential = await oauth.login({ ...interaction, signal: interaction.signal ?? controller.signal });
     this.set(providerId, { ...credential });
