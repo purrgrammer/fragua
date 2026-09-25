@@ -48,7 +48,12 @@ case "$target" in
 esac
 case "$target" in
   [Pp][Rr]\ *|\#*)
-    n="${target##*[!0-9]}"
+    # Strip the prefix and require the WHOLE remainder to be digits. A
+    # trailing-digit-run extraction (`${target##*[!0-9]}`) reads "PR 4x2" as
+    # PR 2 — a typo silently reviews a different PR.
+    n="${target#\#}"
+    case "$n" in [Pp][Rr][[:space:]]*) n="${n#[Pp][Rr]}" ;; esac
+    n="$(printf '%s' "$n" | sed -e 's/^[[:space:]]*//')"
     case "$n" in ''|*[!0-9]*) echo "not a PR number: $target" >&2; exit 2;; esac
     # resolve-pr.sh checks out the PR and prints {pr,state,diff_spec,paths};
     # `state` is not declared on the step, and the outputs schema is
