@@ -226,7 +226,7 @@ Many steps need no upstream artifact — they re-derive from git / fs / a script
 
 ### Typed outputs (`outputs:`)
 
-An `llm` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.
+An `llm` or `tool` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.
 
 ```yaml
   review_security:
@@ -260,13 +260,20 @@ The type grammar is the same one `inputs:` uses — `type:` of `string` / `numbe
 - **Conditionally present, read inside a whole record/array → `optional:`.** A per-element `fix` that only some findings carry is `optional:` *because* the consumer reads the enclosing `findings` array **whole** — absence is just omitted JSON, never a fail-closed read.
 - **Don't direct-read an optional leaf.** `${{ outputs.X.rec.optfield }}` fails closed whenever the producer omits the field; the validator flags it **W016**. There's no fallback syntax yet, so model it as one of the two shapes above.
 
-**Rules:** `outputs:` is **`llm`-only to produce** (`tool`/`human` consume but never produce) and **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). The producer emits via a forced `emit_output` tool, validated post-emit.
+**Rules:** `outputs:` is produced by **`llm` or `tool`** steps (`human` consumes but never produces) and is **mutually exclusive with `routes:`** (a routing step's terminal call is `route`). An `llm` producer emits via a forced `emit_output` tool; a `tool` producer writes one JSON document to the file named by `$FRAGUA_OUTPUT` (set only when the step declares `outputs:`) and the engine reads + validates it after the process exits — a tool that exits 0 without a parseable, valid struct **fails the node**. Both are validated post-emit.
 
 **Reach for `outputs:` only when:**
+- a **`tool` computes a value deterministically** — a resolved diff spec, a branch name, a PR number, the URL something just created. This is the cheapest producer there is: no turn, no tokens. It is also the one that *removes* a step — if an `llm` step's prompt says "run this script and emit its fields verbatim", it is a `tool` producer wearing a model's clothes (`review::resolve` was exactly that). Prefer it whenever the value is a function of the repo, a command, or an input; **or**
 - a **mechanical consumer takes the value verbatim** — a `tool` runs it (`gh pr merge ${{ outputs.scope.pr_number }}`), or a step passes it through unchanged; getting it wrong is a bug, not a re-read; **or**
 - a **synthesizer aggregates several producers** — multiple `llm` steps each emit structured results and a downstream step combines them (review lenses → `synthesize`). This `llm → llm` hand-off is legitimate: typed outputs give the consumer clean per-source access where a shared thread would interleave the sources as prose.
 
+**A tool producer also shrinks the trust surface.** A value a model authored and a `tool` later interpolates into `run:` is model-controlled text reaching a shell, so the prompt has to carry a guard ("abort if the value contains any character outside `[A-Za-z0-9._~^:/@-]`") and the consumer has to re-validate. Computed by a script, the value is only ever a function of inputs the operator supplied — the guard and the re-validation both go away.
+
 **Don't** reach for `outputs:` when another channel already serves: steps that *converse* → the thread (the data is already there); state *already in git / on disk* → re-derive; a *large prose body a tool consumes* (a review for `gh --body-file`) → a file; a *single producer with no consumer* → nothing to hand off. The smell is typing data the thread already carries between two steps that share it.
+
+Size is the line between a tool's two channels. A **bounded, addressable value** — a spec, a count, a URL, a short list of paths — is `outputs:`. A **large artifact** — a patch, a snapshot, a review body, a pack — is a file under `.fragua/scratch/`, read by whoever needs it; typing it buys nothing and spills to the blob store. A step may do both: write the patch to disk *and* emit the spec that produced it.
+
+And a **pure gate needs neither.** `bun run ci`, `test -n "$(git status --porcelain)"`, `grep -qE '^## (Critical|High)'` — the exit code IS the decision, routed by `on: {success:, fail:}`. Declaring `outputs:` on one of those adds a failure mode (exit 0 with no struct fails the node) in exchange for nothing.
 
 ### Run-level outputs (the run's typed result)
 
@@ -395,7 +402,7 @@ verify:
   next: signoff
 ```
 
-A judge is a **decision**, not a turn: one call to a System One model (TypeSafe's Jev), no tools, no thread, sub-second, ~$0.00002. It asks `questions:` — `choice` (criteria is a **map** of option id → description), `score` (criteria is an **ordered list** of levels), `noul` (yes/no probability) — over a `state:` built from literal text, `${{ inputs }}` / `${{ outputs }}` (fail-closed), and `{file: <path>}` leaves read from the worktree. The provider caps input near **32k tokens** (~64 KB of diff text, ~150 KB of prose; a `400` over the cap is a node `fail`), so materialise a bounded head of large evidence (`head -c 49152`). It cannot read the repo or run a command: whatever it judges must already be addressable — an upstream `outputs:` field, or a file a `tool` / `llm` step wrote (`tool → judge` through a file under `.fragua/scratch/` is the cheapest classify-and-route pipeline).
+A judge is a **decision**, not a turn: one call to a System One model (TypeSafe's Jev), no tools, no thread, sub-second, ~$0.00002. It asks `questions:` — `choice` (criteria is a **map** of option id → description), `score` (criteria is an **ordered list** of levels), `noul` (yes/no probability) — over a `state:` built from literal text, `${{ inputs }}` / `${{ outputs }}` (fail-closed), and `{file: <path>}` leaves read from the worktree. The provider caps input near **32k tokens** (~64 KB of diff text, ~150 KB of prose; a `400` over the cap is a node `fail`), so materialise a bounded head of large evidence (`head -c 49152`). It cannot read the repo or run a command: whatever it judges must already be addressable — an upstream `outputs:` field, or a file a `tool` / `llm` step wrote (`tool → judge`, the tool materialising evidence as a `{file:}` for large text or as typed `outputs:` for bounded values, is the cheapest classify-and-route pipeline). When the "decision" is a command's exit code or a string match rather than a judgement, drop the judge too: a `tool` with `on: {success:, fail:}` routes for free.
 
 Every question becomes a typed output: `${{ outputs.verify.schema_ok.noul }}`, `${{ outputs.verify.depth.level }}`, `${{ outputs.<judge>.<q>.choice }}` / `.confidence` / `.probabilities.<option>`. `decide:` (optional, one of) turns an answer into control flow:
 

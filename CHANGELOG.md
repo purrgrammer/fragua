@@ -8,16 +8,101 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`tool` steps can produce typed `outputs:`.** A tool step may declare
+  `outputs:` over the same type grammar `llm` steps use. The engine hands the
+  process a scratch path in `$FRAGUA_OUTPUT`; the process writes one JSON
+  document there **in place** (`command > "$FRAGUA_OUTPUT"` — a temp file moved
+  over the path is not read back), and the engine validates it against the
+  declaration and forwards it as `${{ outputs.<node>.<field> }}`, exactly as an
+  `llm` producer's struct is read. Moving a deterministic value forward — a
+  resolved diff spec, a computed branch name, the URL of something just created
+  — no longer costs a model turn whose only job was to retype it. A tool that
+  exits 0 without leaving a parseable, valid struct **fails the node**: the
+  producer-side dual of the fail-closed read. Tool steps are otherwise
+  unchanged — the exit code still decides `success`/`fail`.
+- **Workflows can declare a run-level `outputs:` result.** `review` and
+  `propose` now project their deliverable into the run's typed result — which
+  change was reviewed and what was posted where, the path a proposal was
+  written to. Readable from `fragua runs status --json` instead of only from
+  the transcript. A producer that did not run on the taken path simply omits
+  its keys.
+- **`fragua gc --worktrees`.** Removes the leftover `.fragua/worktrees/<runId>`
+  directory and its git registration for settled runs past the retention
+  window, then prunes any registration whose directory is already gone.
+  Worktrees were reclaimed from exactly one place — the dispatch loop's exit —
+  so a terminal-snapshot failure, an OCC loss, or a daemon crash left one
+  registered forever. `--snapshots` and `--worktrees` are independent and
+  composable; both refuse anything queued, running, paused, quarantined, or
+  still awaiting an accept/discard.
+- **Timestamps on the run list, inbox rows, and detail header.** The read plane
+  already served the data and the UI dropped it. The run list gains a Started
+  column; inbox rows show how long each has been waiting — the one thing
+  `fragua runs inbox` sorts by and could not display; the detail header shows
+  the run's own times. `RunSummary` / `RunDetail` gain `enqueuedAt` and
+  `endedAt`.
+- **Accept / discard, priority, and cap controls on the run detail page.**
+  Accept and discard were reachable only from the Diff tab, which renders an
+  empty state before showing them when nothing is diffable — so a pending run
+  with no snapshot offered neither. They now live in the detail header,
+  alongside a priority control for queued runs and the budget / retry / loop
+  cap adjusters.
+- **A tool node's typed outputs render in the run conversation.** Shown beneath
+  the command's terminal output as a JSON block titled `outputs.<node>`. A node
+  that emits and prints nothing shows one card, not an empty terminal stacked
+  on its struct.
+
+### Changed
+
+- **`review` resolves its target and posts its verdict with tool steps.**
+  Turning a free-form `--input target` into a diff spec, a path list, and a PR
+  number is mechanism, and so is choosing between `--approve`,
+  `--request-changes`, and `--comment`; both were `llm` steps. Neither costs a
+  model turn now. This closed a hole as well as a cost: the diff spec is
+  interpolated into `git diff` downstream, so a model-authored value needed a
+  character-class guard in the prompt and a containment pass over
+  model-authored paths. The only untrusted string left is the operator's own
+  target.
+- **`review` gains a `focus` input and loses its "approve despite findings"
+  gate route.** The focus hint was previously divined from the free-form
+  target; it is now `--input focus=security`, defaulting to `general`. The
+  human gate is `post` or `keep local`, and the posted verb follows the
+  review's own worst finding: a Critical or High defect requests changes,
+  anything else raised comments, and a review that raised nothing approves —
+  previously a clean review left the pull request unapproved. A review body
+  matching none of the known shapes requests changes rather than approving.
+- **A steer reaches every branch of a fan-out.** The steering registry held one
+  agent per run, so under `parallel` each branch overwrote the last and a steer
+  reached whichever registered most recently. It now holds a set and
+  broadcasts, and `fact.steering_applied` records where each steer landed — or
+  that it was buffered — so an accepted steer that reached nobody is visible
+  rather than silent.
+
 ### Fixed
 
-- **Releases publish `SHA256SUMS` again.** The checksums job downloaded every
-  asset to hash it, but `gh release download` resolves a release through a
-  projection that lags the upload path by minutes — so it failed with "no assets
-  to download" seconds after four jobs had uploaded successfully, and the
-  release shipped binaries `setup-fragua` refuses to install. The file is now
-  generated from the release API's own per-asset digest, which needs no
-  download; the attestation step, which does need the bytes, waits for the
-  listing to catch up instead of racing it.
+- **`fragua runs tail` and `runs wait` settle on legacy runs.** The follow loop
+  tested only the current contract's terminal facts, so a run terminated under
+  an older event contract never settled and the command waited forever.
+- **Rate-limit backoff has a floor.** The provider retry schedule used full
+  jitter, so any attempt — including the last — could wait near-zero and burn
+  the retry chain without ever spanning the rate-limit window. Equal jitter
+  guarantees each attempt at least half its exponential. An explicit
+  `Retry-After` is still honoured exactly.
+- **Project skills load inside a worktree run.** Skills are discovered from the
+  project root, so a project-scope skill's path always sat outside the run's
+  worktree and the environment's path gate refused to read it. Project skills
+  are now re-anchored to the worktree's own copy, so the path gate keeps its
+  escape-prevention property with nothing whitelisted. A worktree that predates
+  a skill still cannot load it.
+- **An unresolved output reference says which kind of defect it is.** A read
+  that fails closed now distinguishes a producer that never ran (a wiring
+  error) from a producer that ran and left the field unpopulated (usually an
+  omitted optional field). The two want opposite fixes and previously produced
+  the same message.
+- **A live run no longer reports an end time.** `endedAt` was projected from
+  the last event for any run with events, so the detail header rendered "ended"
+  beside a still-ticking duration on a running run.
 
 ## [0.11.1] — 2026-09-23
 

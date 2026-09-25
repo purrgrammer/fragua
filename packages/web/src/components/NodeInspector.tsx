@@ -210,9 +210,9 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Typed outputs — the structured shape this llm node emits via
-       *  `emit_output`, read downstream as `${{ outputs.<node>.<field> }}`.
-       *  Rendered as an aligned type tree (records/arrays nest). */}
+      {/* Typed outputs — the structured shape this node emits (an `llm` node via
+       *  `emit_output`, a `tool` node via `$FRAGUA_OUTPUT`), read downstream as
+       *  `${{ outputs.<node>.<field> }}`. Rendered as an aligned type tree. */}
       {attrs.outputs && Object.keys(attrs.outputs).length > 0 && (
         <Section title="outputs">
           <pre

@@ -89,39 +89,53 @@ inputs:
   target:
     type: string
     default: ""
-    description: PR number, branch, path, commitish, or free-form hint
+    description: PR number, branch, path, or commitish/range
+  focus:
+    type: string
+    default: general
+    description: What to weight the review toward (e.g. "security", "the new cache layer")
 
 defaults:
   provider: anthropic
   model: claude-sonnet-4-6
 
+# The run's typed result — what `fragua runs status --json` and an embedding
+# caller bind, instead of scraping it out of the transcript. A review's
+# deliverable is "which change, judged how, posted where"; every field below is
+# emitted by a tool, so it is exact rather than retyped by a model.
+#
+# `posted` / `verdict` / `url` come from whichever post step ran. The `accept`
+# route of `signoff` runs neither, and a run-boundary read of an absent
+# producer simply omits the key — so "kept local" is the absence of `posted`,
+# not a failure.
+outputs:
+  pr:        {from: resolve.pr}
+  diff_spec: {from: resolve.diff_spec}
+  paths:     {from: resolve.paths}
+  posted:    {from: post.posted}
+  verdict:   {from: post.verdict}
+  url:       {from: post.url}
+
 steps:
-  resolve:                             # resolve target + checkout; emit the review context as typed outputs
-    type: llm
-    timeout-minutes: 12
-    effort: low
-    allowed-tools: [read, grep, find, bash]
-    next: classify_diff
+  resolve:                             # resolve target + checkout — pure mechanism, so a tool, not a model turn
+    type: tool
+    timeout-minutes: 8
+    # Was an `llm` at effort: low whose entire job was to classify the target,
+    # shell out to resolve-pr.sh, and copy the result into `emit_output`. Every
+    # branch of that is deterministic, so it bought nothing and cost a turn.
+    #
+    # It also cost a defense: `diff_spec` reaches `git diff` downstream, so a
+    # model-authored value needed a charset guard in the prompt, and
+    # `classify_diff` needed a containment pass over model-authored `paths`.
+    # Computed here, the only untrusted string left is the operator's `target`.
+    run: bash .fragua/scripts/review/resolve-target.sh ${{ inputs.target }}
     outputs:
       pr:        { type: string }      # PR number, or "none"
-      diff_spec: { type: string }      # exact `git diff` argument (e.g. "origin/main..HEAD", "HEAD"); "" ⇒ review PATHS directly
-      paths:                           # real on-disk, repo-relative paths actually touched
+      diff_spec: { type: string }      # exact `git diff` argument; "" ⇒ review `paths` directly
+      paths:                           # repo-relative paths the change touches
         type: array
         items: { type: string }
-      focus:     { type: string }      # focus hint, or "general"
-    prompt: |
-      Resolve the review target from `${{ inputs.target }}` and prep the tree, then emit the review context for the downstream steps (which run on fresh context and have ONLY what you emit).
-
-      Classify the target: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
-        PR: run `bash .fragua/scripts/review/resolve-pr.sh <n>` and emit its `pr`, `diff_spec`, `paths` VERBATIM — it checks out the PR (open: the branch; merged: its merge commit, detached) and computes the PR's own diff spec, correct for merged PRs where `origin/main..HEAD` would run backwards. A non-zero exit → `abort` with its stderr (e.g. `working tree dirty`).
-        Branch: if `git status --porcelain` is non-empty, `abort` with `working tree dirty`. Then `git fetch origin <branch> && git checkout <branch>`; base is `git merge-base HEAD origin/main`; diff_spec `<base>..HEAD`. Commit ranges: don't switch branches.
-        Empty target → `abort` with `nothing to review`.
-
-      Review context for downstream steps:
-        pr        — the PR number, or "none" for a local diff with no PR.
-        diff_spec — the exact argument to `git diff` that shows the change (e.g. "origin/main..HEAD", or "HEAD" for uncommitted). Use "" only for FILES mode (review the paths as-is, no diff). It MUST be a bare ref/range/sha: if the resolved value would contain any character outside `[A-Za-z0-9._~^:/@-]` (a space, `;`, `$`, backtick, or a leading `-`), do NOT emit it — `abort` with `unsafe diff_spec`.
-        paths     — an array of repo-relative paths actually touched.
-        focus     — the focus hint, or "general".
+    next: classify_diff
 
   classify_diff:                       # materialise what `classify` judges (DIFF mode: the patch; FILES mode: the files themselves)
     type: tool
@@ -136,11 +150,13 @@ steps:
         git diff --stat --end-of-options "$spec" > "$out/stat.txt"
       else
         printf '%s' ${{ outputs.resolve.paths }} | jq -r '.[]' > "$out/files.raw"
-        # `paths` is LLM output, and the files it names are themselves under
-        # review — a prompt-injected `../../.ssh/id_rsa` would otherwise be read
-        # here and shipped to the judge API inside patch-head.diff. `--` stops
-        # flag injection but not traversal, so resolve each path and require it
-        # under the worktree root. Fail closed: a bad path halts the step.
+        # `paths` is computed by `resolve` now, not authored by a model, so the
+        # prompt-injection channel this guarded is gone. Kept as defense in
+        # depth: in FILES mode the paths still derive from the operator's
+        # `target`, and whatever is read here ships to the judge API inside
+        # patch-head.diff. `--` stops flag injection but not traversal, so
+        # resolve each path and require it under the worktree root. Fail
+        # closed: a bad path halts the step.
         root=$(pwd -P)
         : > "$out/files.txt"
         while IFS= read -r f; do
@@ -188,7 +204,7 @@ steps:
     type: judge
     timeout-minutes: 3
     state:
-      focus:      ${{ outputs.resolve.focus }}
+      focus:      ${{ inputs.focus }}
       stat:       {file: .fragua/scratch/review/stat.txt}
       patch_head: {file: .fragua/scratch/review/patch-head.diff}
     # 64 KiB default kept: the provider caps input near 32k tokens and diff text
@@ -232,7 +248,7 @@ steps:
     allowed-tools: [read, grep, bash, write]
     next: signoff
     prompt: |
-      Quick review of the change: `git diff --end-of-options ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty). Focus: ${{ outputs.resolve.focus }}. One focused pass: correctness first, plus anything that jumps out on security, performance, duplication of an existing helper, or a behavior change shipped without a test. Single pass — no exhaustive sweep.
+      Quick review of the change: `git diff --end-of-options ${{ outputs.resolve.diff_spec }}` (or read `${{ outputs.resolve.paths }}` if diff_spec is empty). Focus: ${{ inputs.focus }}. One focused pass: correctness first, plus anything that jumps out on security, performance, duplication of an existing helper, or a behavior change shipped without a test. Single pass — no exhaustive sweep.
 
       WRITE the review to `review.md` (cwd-relative, `write` tool), this shape:
 
@@ -325,7 +341,7 @@ steps:
             bar:        { type: string }
             in_diff:    { type: boolean }
     prompt: |
-      Review the change through the **correctness** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
+      Review the change through the **correctness** lens ONLY. Focus hint: ${{ inputs.focus }}. Read `pack/INDEX.md` first.
 
       Your evidence is already on disk in `pack/`. Work from `pack/context.patch` (the change, with context), `pack/files/<path>` (the post-image of each changed file), and `pack/removed.txt` (every line this change deleted). `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
@@ -411,7 +427,7 @@ steps:
             bar:        { type: string }
             in_diff:    { type: boolean }
     prompt: |
-      Review the change through the **integration** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
+      Review the change through the **integration** lens ONLY. Focus hint: ${{ inputs.focus }}. Read `pack/INDEX.md` first.
 
       Your evidence is already on disk in `pack/`. Work from `pack/callers.txt` (every reference to a changed exported symbol from a file this change did NOT touch), `pack/removed.txt`, `pack/context.patch`, and `pack/files/<path>`. `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
@@ -497,7 +513,7 @@ steps:
             bar:        { type: string }
             in_diff:    { type: boolean }
     prompt: |
-      Review the change through the **risk** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
+      Review the change through the **risk** lens ONLY. Focus hint: ${{ inputs.focus }}. Read `pack/INDEX.md` first.
 
       Your evidence is already on disk in `pack/`. Work from `pack/risk-surface.txt` (every added line on a security-, IO-, or resource-sensitive surface — or the single word `NONE`), then `pack/context.patch` and `pack/files/<path>` for anything it points at. `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
@@ -583,7 +599,7 @@ steps:
             bar:        { type: string }
             in_diff:    { type: boolean }
     prompt: |
-      Review the change through the **craft** lens ONLY. Focus hint: ${{ outputs.resolve.focus }}. Read `pack/INDEX.md` first.
+      Review the change through the **craft** lens ONLY. Focus hint: ${{ inputs.focus }}. Read `pack/INDEX.md` first.
 
       Your evidence is already on disk in `pack/`. Work from `pack/context.patch`, `pack/files/<path>`, `pack/callers.txt` (for an existing mechanism the change re-implements), and `pack/names.txt` (what the change did and did NOT touch). `read` is your ONLY tool and `pack/` is your whole world — there is no `grep` and no way to reach the rest of the repository. Budget: at most 6 reads. The pack was built for this review; if something is not in it, say so in `evidence` rather than going to look.
 
@@ -697,30 +713,26 @@ steps:
 
   signoff:                             # human gate after skip / quick / full
     type: human
-    text: "Review written to review.md (and visible in the synthesize/quick step output). Approve the PR, post it as feedback, or keep it local?"
+    text: "Review written to review.md (and visible in the synthesize/quick step output). Post it to the PR — approving, commenting, or requesting changes as its worst finding dictates — or keep it local?"
     routes:
-      approve:  {to: pr_approve,  label: "Approve PR"}
-      feedback: {to: pr_feedback, label: "Post feedback"}
-      accept:   {to: exit,        label: "Keep local"}
+      post:   {to: post, label: "Post to the PR"}
+      accept: {to: exit, label: "Keep local"}
 
-  pr_approve:                          # post the review + APPROVE the PR
-    type: llm
+  post:                                # post review.md to the PR — severity picks the verb
+    # A tool, not a model. This was `pr_approve` + `pr_feedback`, two haiku
+    # steps that branched on "is there a PR" and picked a `gh` invocation. Both
+    # decisions are a string compare and a grep; pr_review.yaml's `verdict`
+    # step already states the principle for its own copy: grep's exit code IS
+    # the routing decision.
+    #
+    # Three-way, from the review's own content: a Critical/High defect
+    # requests changes, anything else raised comments, and a review that found
+    # nothing APPROVES — a clean review used to leave the PR unapproved.
+    type: tool
     timeout-minutes: 4
-    model: claude-haiku-4-5
-    allowed-tools: [read, bash]
+    run: bash .fragua/scripts/review/post-review.sh ${{ outputs.resolve.pr }}
+    outputs:
+      posted:  { type: choice, options: [approve, changes, comment, none] }
+      verdict: { type: choice, options: [approve, blocking, non-blocking, unreadable, local] }
+      url:     { type: string }        # the PR url, or "" when there was no PR
     next: exit
-    prompt: |
-      PR number: ${{ outputs.resolve.pr }}. The review body is in `review.md` (cwd-relative).
-      If the PR number is `none` (local diff, no PR), emit `LGTM (no PR to approve)` and stop — don't post.
-      Otherwise `gh pr review ${{ outputs.resolve.pr }} --approve --body-file review.md` and emit `APPROVED: PR ${{ outputs.resolve.pr }} <url>`.
-
-  pr_feedback:                         # post the review; request-changes if blocking, else comment
-    type: llm
-    timeout-minutes: 4
-    model: claude-haiku-4-5
-    allowed-tools: [read, bash]
-    next: exit
-    prompt: |
-      PR number: ${{ outputs.resolve.pr }}. The review body is in `review.md` (cwd-relative) — read it.
-      If the PR number is `none`, emit `feedback kept local (no PR)` and stop.
-      Otherwise: if `review.md` has any Critical or High DEFECT, `gh pr review ${{ outputs.resolve.pr }} --request-changes --body-file review.md`; else `gh pr review ${{ outputs.resolve.pr }} --comment --body-file review.md` (Improvements alone never block). Emit `POSTED: PR ${{ outputs.resolve.pr }} <changes|comment> <url>`.
