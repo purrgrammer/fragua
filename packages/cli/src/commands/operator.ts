@@ -37,11 +37,12 @@ interface DiscoveryOpts {
  * bare `process.stdout.write` is fire-and-forget: on a pipe (the operator's
  * `runs diff | pager` case) the following `process.exit` in `main` discards
  * whatever node still holds past the ~64KB kernel buffer, truncating a large
- * diff to its first file. Awaiting the drain before the command returns keeps
- * the whole payload intact. */
-function writeStdout(text: string): Promise<void> {
+ * diff to its first file, or an artifact body to its first 64KB — which reads
+ * as a complete, smaller artifact. Awaiting the drain before the command
+ * returns keeps the whole payload intact. */
+function writeStdout(chunk: string | Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
-    process.stdout.write(text, (err) => (err ? reject(err) : resolve()));
+    process.stdout.write(chunk, (err) => (err ? reject(err) : resolve()));
   });
 }
 
@@ -1194,7 +1195,7 @@ export interface ArtifactOptions extends DiscoveryOpts {
  * (NUL byte in the first 8KiB) is refused with a notice on stderr so the
  * terminal isn't garbled — redirect to a file instead. */
 export function artifactCommand(opts: ArtifactOptions): Promise<number> {
-  return withStoreClient(opts, ({ readPlane }) => {
+  return withStoreClient(opts, async ({ readPlane }) => {
     const scope: ArtifactScope = {
       runId: opts.runId,
       nodeId: opts.nodeId,
@@ -1212,7 +1213,7 @@ export function artifactCommand(opts: ArtifactOptions): Promise<number> {
       console.error(chalk.yellow(`(binary, ${bytes.byteLength} bytes — redirect to a file)`));
       return 1;
     }
-    process.stdout.write(bytes);
+    await writeStdout(bytes);
     return 0;
   });
 }
