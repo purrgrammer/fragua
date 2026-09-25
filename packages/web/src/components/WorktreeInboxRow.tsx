@@ -7,6 +7,7 @@
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { summarizeChangeStat } from "../lib/changeStat.ts";
+import { formatRelative, toIsoTitle } from "../lib/time.ts";
 import { ChangeStat } from "./ChangeStat.tsx";
 import { RunActions } from "./RunActions.tsx";
 import { displayTitle, displayTooltip } from "./RunRow.tsx";
@@ -14,6 +15,7 @@ import { Badge } from "./ui/badge.tsx";
 
 export function WorktreeInboxRow({ row }: { row: RunSummary }): JSX.Element {
   const stat = summarizeChangeStat(row.changeStat);
+  const waitingSince = row.endedAt ?? row.startedAt;
 
   return (
     <li
@@ -34,6 +36,14 @@ export function WorktreeInboxRow({ row }: { row: RunSummary }): JSX.Element {
           <ChangeStat stat={stat} />
         </Badge>
       )}
+
+      <span
+        data-testid={`worktree-inbox-waiting-${row.runId}`}
+        className="shrink-0 text-sw-muted"
+        title={toIsoTitle(waitingSince)}
+      >
+        {formatRelative(waitingSince)}
+      </span>
 
       <RunActions row={row} />
     </li>

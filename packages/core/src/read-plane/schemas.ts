@@ -58,6 +58,13 @@ export const RunSummary = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
+  /** Queue-entry ISO timestamp (`run_state.enqueued_at`). Distinct from
+   * `startedAt`, which folds this in only as a fallback — the gap between
+   * the two is the queue-wait time. */
+  enqueuedAt: Type.Optional(Type.String()),
+  /** Last-event ISO timestamp — the run's end time. Absent for a run with
+   * no events yet (`startedAt` then falls back to `enqueuedAt`). */
+  endedAt: Type.Optional(Type.String()),
   status: UiStatus,
   runStatus: RawRunStatus,
   eventCount: Type.Integer({ minimum: 0 }),
@@ -165,6 +172,11 @@ export const RunDetail = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
+  /** Queue-entry ISO timestamp — mirrors `RunSummary.enqueuedAt`. */
+  enqueuedAt: Type.Optional(Type.String()),
+  /** Last-event ISO timestamp — mirrors `RunSummary.endedAt`. Absent for a
+   * live run with no terminal event yet. */
+  endedAt: Type.Optional(Type.String()),
   status: UiStatus,
   runStatus: RawRunStatus,
   lastEventSeq: Type.Integer({ minimum: 0 }),
@@ -241,6 +253,14 @@ export const RunDetail = Type.Object({
    * (pause/resume/cancel) should be suppressed. Derived from `cwd == null`
    * combined with the `imported_runs` marker semantics. */
   imported: Type.Optional(Type.Boolean()),
+  /** Worktree inbox status — mirrors `RunSummary.inboxStatus`. Present only
+   * on terminal worktree runs; `pending` = awaiting an operator primitive.
+   * Folded onto the detail so the run-detail header can offer accept/discard
+   * without a second list fetch. */
+  inboxStatus: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("acted"), Type.Literal("discarded")])),
+  /** Queue priority (`run_state.priority`; higher dispatches first). Surfaced
+   * so the detail page can show + adjust it on a still-queued run. */
+  priority: Type.Optional(Type.Integer()),
   /** Typed-partial egress envelope (proposal §11): the run's declared
    * top-level `outputs:` projected from each producer's latest emission.
    * Present only on a `completed` run (and only when the workflow declares an

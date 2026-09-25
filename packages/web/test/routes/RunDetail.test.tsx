@@ -146,6 +146,45 @@ describe("RunDetail", () => {
     }
   });
 
+  it("header shows started and ended timestamps with ISO title tooltips", async () => {
+    const detail = makeDetail({
+      runId: "run-times",
+      workflowName: "w",
+      startedAt: "2024-01-01T00:00:00Z",
+      endedAt: "2024-01-01T01:00:00Z",
+    });
+    const { client, mock } = prepare("run-times", detail);
+    try {
+      const { container } = mount(client, "/runs/run-times");
+      const q = within(container);
+      const started = await waitFor(() => {
+        const el = container.querySelector(`[data-testid="detail-started"]`);
+        if (!el) throw new Error("detail-started not found");
+        return el as HTMLElement;
+      });
+      expect(started.querySelector("span[title]")?.getAttribute("title")).toBe("2024-01-01T00:00:00.000Z");
+      const ended = q.getByTestId("detail-ended");
+      expect(ended.querySelector("span[title]")?.getAttribute("title")).toBe("2024-01-01T01:00:00.000Z");
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it("omits the ended timestamp from the header when endedAt is absent", async () => {
+    const detail = makeDetail({ runId: "run-noend", workflowName: "w", startedAt: "2024-01-01T00:00:00Z" });
+    delete (detail as { endedAt?: string }).endedAt;
+    const { client, mock } = prepare("run-noend", detail);
+    try {
+      const { container } = mount(client, "/runs/run-noend");
+      await waitFor(() => {
+        expect(container.querySelector(`[data-testid="detail-started"]`)).not.toBeNull();
+      });
+      expect(container.querySelector(`[data-testid="detail-ended"]`)).toBeNull();
+    } finally {
+      mock.restore();
+    }
+  });
+
   it("renders cost + tokens + duration stat tiles when metrics are present", async () => {
     const detail = makeDetail({
       runId: "run-metrics",
@@ -798,6 +837,49 @@ steps:
     });
   });
 
+  describe("RunDetail — header actions", () => {
+    it("surfaces Accept/Discard in the header when inboxStatus is pending, independent of the Diff tab", async () => {
+      const detail = makeDetail({
+        runId: "run-hdr-pending",
+        status: "success",
+        runStatus: "completed",
+        cwd: "/home/user/project",
+        inboxStatus: "pending",
+      });
+      // No diffable snapshots — prepare()'s fallback answers /snapshots with [].
+      const { client, mock } = prepare("run-hdr-pending", detail);
+      try {
+        const { container } = mount(client, "/runs/run-hdr-pending");
+        await waitFor(() => {
+          expect(within(container).getByTestId("detail-status")).toBeTruthy();
+        });
+        expect(within(container).getByTestId("run-actions-trigger-run-hdr-pending")).toBeTruthy();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("hides Accept/Discard in the header when inboxStatus is not pending", async () => {
+      const detail = makeDetail({
+        runId: "run-hdr-acted",
+        status: "success",
+        runStatus: "completed",
+        cwd: "/home/user/project",
+        inboxStatus: "acted",
+      });
+      const { client, mock } = prepare("run-hdr-acted", detail);
+      try {
+        const { container } = mount(client, "/runs/run-hdr-acted");
+        await waitFor(() => {
+          expect(within(container).getByTestId("detail-status")).toBeTruthy();
+        });
+        expect(within(container).queryByTestId("run-actions-trigger-run-hdr-acted")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+  });
+
   describe("RunDetail — Diff tab", () => {
     const snapshots = [
       {
@@ -929,9 +1011,10 @@ steps:
         await waitFor(() => {
           expect(within(container).getByTestId("snapshot-diff-content")).toBeTruthy();
         });
-        // No scrubber or compare-against control
+        // No snapshot scrubber for a single-snapshot run, but the compare-against
+        // control is always offered (base | previous).
         expect(within(container).queryByTestId("snapshot-scrubber")).toBeNull();
-        expect(within(container).queryByTestId("snapshot-diff-against-select")).toBeNull();
+        expect(within(container).getByTestId("run-diff-against")).toBeTruthy();
       } finally {
         mock.restore();
       }

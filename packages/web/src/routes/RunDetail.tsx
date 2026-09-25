@@ -25,11 +25,14 @@ import { GraphView } from "../components/GraphView.tsx";
 import { ImportedBadge } from "../components/ImportedBadge.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { ProjectLink } from "../components/ProjectLink.tsx";
+import { RunActions } from "../components/RunActions.tsx";
+import { RunCapControls } from "../components/RunCapControls.tsx";
 import { RunControls } from "../components/RunControls.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { hasDiff, RunDiffTab } from "../components/RunDiffTab.tsx";
 import { RunHaltedNotice } from "../components/RunHaltedNotice.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
+import { RunPriorityControl } from "../components/RunPriorityControl.tsx";
 import { RunQuarantinedNotice } from "../components/RunQuarantinedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
@@ -46,7 +49,7 @@ import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } fr
 import { mapStatus } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
-import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
+import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { mergeDetail } from "../lib/useDetailOverlay.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useNow } from "../lib/useNow.ts";
@@ -318,7 +321,7 @@ export function RunDetail(): JSX.Element {
             </TabsContent>
             {showDiffTab && (
               <TabsContent value="diff" className="h-full">
-                <RunDiffTab runId={id} run={detail ?? undefined} />
+                <RunDiffTab runId={id} />
               </TabsContent>
             )}
           </div>
@@ -476,7 +479,15 @@ const DetailHeader = memo(function DetailHeader({
             </span>
           )}
           {detail && (
-            <div className="ml-auto">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <RunPriorityControl
+                runId={runId}
+                status={detail.status}
+                priority={detail.priority}
+                imported={detail.imported}
+              />
+              <RunCapControls runId={runId} run={detail} />
+              <RunActions row={detail} />
               <RunControls
                 runId={runId}
                 status={detail.status}
@@ -488,6 +499,18 @@ const DetailHeader = memo(function DetailHeader({
             </div>
           )}
         </div>
+        {detail && (
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-sw-muted">
+            <span data-testid="detail-started">
+              started <span title={toIsoTitle(detail.startedAt)}>{formatRelative(detail.startedAt)}</span>
+            </span>
+            {detail.endedAt && (
+              <span data-testid="detail-ended">
+                ended <span title={toIsoTitle(detail.endedAt)}>{formatRelative(detail.endedAt)}</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <StatsStrip detail={detail} liveCost={liveCost} />
     </header>
