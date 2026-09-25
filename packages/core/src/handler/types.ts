@@ -269,11 +269,11 @@ export type HandlerResult =
       cacheWriteTokens?: number;
       modelName?: string;
       /** Structured outputs emitted by this node. Set when the node declared
-       * `outputs:` and the handler produced a validated value via the
-       * `emit_output` tool (llm steps). Persisted on
-       * `fact.node_completed.payload.outputs` — an oversized struct spills to
-       * the blob CAS — and written to the `outputs` index table in the same
-       * transaction. */
+       * `outputs:` and the handler produced a validated value — an `llm` step
+       * via the `emit_output` tool, a `tool` step via the `$FRAGUA_OUTPUT`
+       * file. Persisted on `fact.node_completed.payload.outputs` — an oversized
+       * struct spills to the blob CAS — and written to the `outputs` index
+       * table in the same transaction. */
       outputs?: OutputsValue;
       /** Set by the human handler when `ctx.humanInput` carried a non-empty
        * `note`. The transition planner appends it to

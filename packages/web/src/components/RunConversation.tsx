@@ -43,7 +43,7 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
-import { Terminal } from "@/components/ai-elements/terminal";
+import { Terminal, TerminalStatus } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
 import { HitlDecisionBanner } from "@/components/run-conversation/HitlDecisionBanner";
@@ -1029,6 +1029,14 @@ function ToolNodeRow({
   );
   const status = `exit ${message.exitCode} · ${formatDuration(message.durationMs)}`;
   const tone: "success" | "error" = message.exitCode === 0 ? "success" : "error";
+  const terminalBody = `${body}${truncationNote}`;
+  // A producing node that printed nothing would otherwise stack an empty
+  // Terminal — a card whose only content is its own status line — on top of
+  // the struct. Fold the status into the outputs header and drop the Terminal.
+  // It comes back the moment there IS output: a tool can emit a struct AND
+  // write to stderr, and that stderr is not something to hide.
+  const outputs = message.outputs;
+  const foldStatusIntoOutputs = outputs !== undefined && terminalBody.length === 0;
   return (
     <div data-testid={testid} className="flex flex-col gap-2">
       <CodeBlock code={message.command} language="shell">
@@ -1039,7 +1047,40 @@ function ToolNodeRow({
           </CodeBlockActions>
         </CodeBlockHeader>
       </CodeBlock>
-      <Terminal status={status} tone={tone} output={`${body}${truncationNote}`} />
+      {!foldStatusIntoOutputs && <Terminal status={status} tone={tone} output={terminalBody} />}
+      {/* What the node PRODUCED, distinct from what it printed. An `llm`
+       *  producer's struct is already visible as its `emit_output` call, so a
+       *  tool producer gets the same treatment rather than vanishing into
+       *  `fact.node_completed`. The section label is dropped when the status
+       *  moves in — the header already reads `outputs.<node>`. */}
+      {outputs !== undefined && (
+        <div className="space-y-[var(--sw-space-2)] overflow-hidden" data-testid="tool-node-outputs">
+          {!foldStatusIntoOutputs && (
+            <h4 className="font-medium uppercase tracking-[0.06em] text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">
+              Outputs
+            </h4>
+          )}
+          <CodeBlock code={JSON.stringify(outputs, null, 2)} language="json">
+            <CodeBlockHeader>
+              <CodeBlockTitle>
+                <CodeBlockFilename>{nodeId ? `outputs.${nodeId}` : "outputs"}</CodeBlockFilename>
+              </CodeBlockTitle>
+              <CodeBlockActions>
+                {foldStatusIntoOutputs && (
+                  <TerminalStatus
+                    tone={tone}
+                    className="text-[length:var(--sw-text-xs)]"
+                    data-testid="tool-node-outputs-status"
+                  >
+                    {status}
+                  </TerminalStatus>
+                )}
+                <CodeBlockCopyButton />
+              </CodeBlockActions>
+            </CodeBlockHeader>
+          </CodeBlock>
+        </div>
+      )}
     </div>
   );
 }

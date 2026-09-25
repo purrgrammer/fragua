@@ -182,7 +182,7 @@ function nullableSchema(s: TSchema): TSchema {
  * Called at runtime after the `emit_output` tool call. */
 export function validateOutputsValue(decl: OutputsDecl, value: unknown): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return "emit_output value must be a plain object";
+    return "outputs value must be a plain object";
   }
   const obj = value as Record<string, unknown>;
   for (const [key, profile] of Object.entries(decl)) {

@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
-import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
+import type { DirEntry, ExecResult, ExecutionEnvironment, ScratchFile, ScratchKey } from "./types.ts";
 
 /** A shell command string, or a callback given the partially-initialized
  * environment to run whatever bootstrap logic the host needs. Either form
@@ -287,6 +287,10 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     opts?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
   ): Promise<ExecResult> {
     return this.local.exec(command, opts);
+  }
+
+  createScratchFile(key: ScratchKey): Promise<ScratchFile> {
+    return this.local.createScratchFile(key);
   }
 }
 

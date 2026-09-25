@@ -5,12 +5,20 @@
 // See docs/SPEC.md §3.4.
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@fragua/core";
+import type {
+  ContextValue,
+  DirEntry,
+  ExecResult,
+  ExecutionEnvironment,
+  ScratchFile,
+  ScratchKey,
+  ScratchReadResult,
+} from "@fragua/core";
 import type { HttpClient, JudgeClient } from "@fragua/core/handler";
 import type { Skill } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 
-export type { DirEntry, ExecResult, ExecutionEnvironment };
+export type { DirEntry, ExecResult, ExecutionEnvironment, ScratchFile, ScratchKey, ScratchReadResult };
 
 /** Per-call fragua context passed through `ToolExecuteOptions.fraguaContext`.
  *  Built-in I/O tools (read / write / edit / bash) ignore this field —
