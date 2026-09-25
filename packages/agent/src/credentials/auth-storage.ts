@@ -264,12 +264,16 @@ export class AuthStorage {
       }
       const refreshed = await refreshWithDeadline(oauth, cred);
       const auth = await oauth.toAuth(refreshed);
-      if (!auth.apiKey) return { result: null };
-      const merged: AuthStorageData = {
-        ...currentData,
-        [providerId]: { ...refreshed },
-      };
-      return { result: { apiKey: auth.apiKey, newCredentials: refreshed }, next: JSON.stringify(merged) };
+      const persisted: AuthStorageData = { ...currentData, [providerId]: { ...refreshed } };
+      if (!auth.apiKey) {
+        // The exchange SUCCEEDED — only the key derivation came up empty. The
+        // server may have rotated the refresh token in that exchange, so
+        // dropping `refreshed` here leaves the consumed one in storage and
+        // every later attempt fails against a token the server already spent.
+        // Persist it and report no key; the caller's backoff handles the rest.
+        return { result: null, next: JSON.stringify(persisted) };
+      }
+      return { result: { apiKey: auth.apiKey, newCredentials: refreshed }, next: JSON.stringify(persisted) };
     });
     return result;
   }
