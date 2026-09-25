@@ -33,8 +33,12 @@ describe("ModelRegistry — a legacy `oauth:` provider_config row", () => {
       expect(err).toBeDefined();
       expect(err).toContain("legacy-oauth-provider");
       expect(err).toContain("oauth");
-      // It must point at the remedy, not just report the drop.
-      expect(err).toContain("providers login");
+
+      // WARN, don't skip. The row is still a valid provider definition — only
+      // its `oauth:` block is dead — so the models must keep resolving. A
+      // stray `continue` in loadCustomModels would turn this warning into a
+      // silent drop and nothing else here would notice.
+      expect(registry.find("legacy-oauth-provider", "m1")).toBeDefined();
     } finally {
       store.close();
     }
@@ -56,6 +60,33 @@ describe("ModelRegistry — a legacy `oauth:` provider_config row", () => {
 
       expect(registry.getError()).toBeUndefined();
       expect(registry.find("clean-provider", "m1")).toBeDefined();
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("ModelRegistry — the legacy `oauth:` remedy depends on the provider", () => {
+  test("a CUSTOM provider is told to remove the key, not to run a login that would reject it", () => {
+    const store = new SqliteStore();
+    try {
+      store.upsertProviderConfig({
+        provider: "custom-oauth-provider",
+        config: JSON.stringify({
+          api: "openai-completions",
+          baseUrl: "https://example.test/v1",
+          models: [{ id: "m1", name: "m1" }],
+          oauth: { authUrl: "https://example.test/authorize", tokenUrl: "https://example.test/token" },
+        }),
+      });
+
+      const err = ModelRegistry.create(AuthStorage.fromStore(store), store).getError();
+
+      // `providers login` only accepts ids in the built-in OAuth set, so
+      // naming it here walks the operator into a second, unexplained error.
+      expect(err).toBeDefined();
+      expect(err).not.toContain("providers login");
+      expect(err).toContain("no longer supported");
     } finally {
       store.close();
     }
