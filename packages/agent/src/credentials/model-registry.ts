@@ -459,6 +459,19 @@ export class ModelRegistry {
         errors.push(`provider_config[${row.provider}]: invalid schema\n${details}`);
         continue;
       }
+      // A row written before OAuth moved onto `Provider.auth.oauth` may carry
+      // an `oauth:` block that `registerOAuthProvider` once consumed. The key
+      // is gone from the schema and `Value.Check` is non-strict, so the row
+      // validates and the block is simply discarded — the provider then
+      // resolves no key and every call through it returns undefined, with
+      // nothing anywhere saying why. Name it instead of dropping it.
+      if (row.config !== null && typeof row.config === "object" && "oauth" in row.config) {
+        errors.push(
+          `provider_config[${row.provider}]: carries a legacy \`oauth:\` block, which is no longer read — ` +
+            `OAuth now lives on the provider itself. Re-register with \`fragua providers login ${row.provider}\`, ` +
+            `or remove the key to silence this.`,
+        );
+      }
       const providerConfig = (wrapped as ModelsConfig).providers[row.provider]!;
       try {
         this.validateConfig({ providers: { [row.provider]: providerConfig } });

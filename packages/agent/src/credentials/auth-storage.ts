@@ -27,6 +27,13 @@ import { SqliteAuthStorageBackend } from "./sqlite-auth-backend.ts";
  * failure, because it holds every LLM node waiting on the credential. */
 const OAUTH_REFRESH_TIMEOUT_MS = 30_000;
 
+/** How long a failed refresh suppresses the next attempt for that provider.
+ * Without it a revoked or unreachable token endpoint costs every LLM call the
+ * full refresh timeout, serialized through the store lock — the credential
+ * stays expired, so each call retries from scratch. Short enough that a
+ * transient outage self-heals within a node's retry budget. */
+const OAUTH_REFRESH_BACKOFF_MS = 60_000;
+
 /** `oauth.refresh` with a deadline on its signal. `getApiKey` runs on every LLM
  * invocation, so an unbounded refresh is not a slow call — it wedges every node
  * waiting on the credential until the process restarts, with no daemon-internal
@@ -208,6 +215,9 @@ export class AuthStorage {
     return this.current();
   }
 
+  /** Last failed refresh per provider — the backoff window's only state. */
+  private readonly refreshFailedAt = new Map<string, number>();
+
   drainErrors(): Error[] {
     const drained = [...this.errors];
     this.errors = [];
@@ -282,19 +292,34 @@ export class AuthStorage {
       if (!oauth) return undefined;
       const needsRefresh = Date.now() >= cred.expires;
       if (needsRefresh) {
+        const failedAt = this.refreshFailedAt.get(providerId);
+        if (failedAt !== undefined && Date.now() - failedAt < OAUTH_REFRESH_BACKOFF_MS) {
+          // Inside the window a recent failure stands in for the attempt, so a
+          // revoked credential fails fast instead of charging every call the
+          // refresh timeout.
+          return undefined;
+        }
         try {
           const result = await this.refreshOAuthTokenWithLock(providerId);
-          if (result) return result.apiKey;
+          if (result) {
+            this.refreshFailedAt.delete(providerId);
+            return result.apiKey;
+          }
+          this.refreshFailedAt.set(providerId, Date.now());
           // A null return is the non-throwing failure: the refresh completed
           // but yielded no usable key. Without this the caller gets `undefined`
           // indistinguishable from "no credential configured", `drainErrors()`
           // stays empty, and every later call silently re-runs the refresh.
           this.recordError(new Error(`OAuth refresh for ${providerId} produced no API key`));
         } catch (error) {
+          this.refreshFailedAt.set(providerId, Date.now());
           this.recordError(error);
           // Another process may have refreshed meanwhile — re-read.
           const updatedCred = this.current()[providerId];
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
+            // Another process won the refresh, so our throw was a race, not a
+            // broken credential — don't hold the backoff against it.
+            this.refreshFailedAt.delete(providerId);
             return (await oauth.toAuth(updatedCred)).apiKey;
           }
           return undefined;
