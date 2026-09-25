@@ -24,7 +24,7 @@ steps:
     expect(outputs["loc"]).toEqual({ kind: "number" });
   });
 
-  test("tool step outputs: throws ParseError (llm-only in the MVP)", () => {
+  test("tool step outputs: parse into node.attrs.outputs", () => {
     const src = `
 name: wf
 steps:
@@ -36,11 +36,51 @@ steps:
         type: number
     next: exit
 `;
+    const g = parseWorkflow(src);
+    const node = g.nodes["collect"]!;
+    expect(node.attrs.outputs).toBeDefined();
+    expect(node.attrs.outputs!["total"]).toEqual({ kind: "number" });
+  });
+
+  test("human step outputs: throws ParseError with E053", () => {
+    const src = `
+name: wf
+steps:
+  ask:
+    type: human
+    text: Approve?
+    outputs:
+      total:
+        type: number
+    next: exit
+`;
     expect(() => parseWorkflow(src)).toThrow(ParseError);
     try {
       parseWorkflow(src);
     } catch (e) {
-      expect((e as ParseError).message).toContain("only supported on `llm`");
+      expect((e as ParseError).message).toContain("E053");
+    }
+  });
+
+  test("tool step declaring both outputs: and routes: throws ParseError", () => {
+    const src = `
+name: wf
+steps:
+  collect:
+    type: tool
+    run: ./collect.sh
+    routes:
+      a: exit
+      b: exit
+    outputs:
+      total:
+        type: number
+`;
+    expect(() => parseWorkflow(src)).toThrow(ParseError);
+    try {
+      parseWorkflow(src);
+    } catch (e) {
+      expect((e as ParseError).message).toContain("mutually exclusive");
     }
   });
 

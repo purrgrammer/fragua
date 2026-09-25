@@ -17,7 +17,7 @@
 // its shutdown path and the run exports no bundle.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseWorkflow } from "@fragua/core";
 
@@ -28,7 +28,7 @@ const gha = readFileSync(join(root, ".github/workflows/pr-review.yml"), "utf8");
 const canonicalSrc = readFileSync(wf("pr_review.yaml"), "utf8");
 
 /** What `fragua ci <name>` the review job actually runs. */
-const ciTarget = /^\s*fragua ci ([A-Za-z_][\w-]*)/m.exec(gha)?.[1];
+const ciTarget = ciTargetOf(gha);
 /** The binary the action installs — the SHA next to it pins the ACTION, not this. */
 const pinnedVersion = /version:\s*v(\d+)\.(\d+)\.(\d+)/.exec(gha);
 
@@ -36,6 +36,86 @@ const pinnedVersion = /version:\s*v(\d+)\.(\d+)\.(\d+)/.exec(gha);
 const STEP_TYPE_SINCE: Record<string, [number, number, number]> = {
   judge: [0, 11, 0],
 };
+
+/** First release that parses a given FEATURE — a shape the pinned engine can
+ *  reject even though every step type in the file is one it has always known.
+ *  `STEP_TYPE_SINCE` alone does not cover these: `tool` is as old as the
+ *  parser, but `outputs:` ON a tool is not, so a workflow adopting it would
+ *  pass the step-type gate and still fail to parse in CI. Each entry pairs the
+ *  release that ships it with a detector for the shape. */
+const FEATURE_SINCE: Array<{
+  name: string;
+  since: [number, number, number];
+  used: (src: string) => boolean;
+}> = [
+  {
+    name: "outputs: on a tool step",
+    // Unreleased at the time of writing — the parser gate widened to admit
+    // `tool` in the same change that added `$FRAGUA_OUTPUT`. Bump this to the
+    // release that actually ships it.
+    since: [0, 12, 0],
+    used: (src) => toolStepsDeclaringOutputs(src).length > 0,
+  },
+];
+
+/** The workflow a GHA file runs under `fragua ci`. Scans line by line and
+ *  skips comments: `fragua ci` appears in prose too (a comment mentioning
+ *  `fragua ci --export` once matched a naive pattern and yielded "--export").
+ *  It also appears in two shapes — inline (`run: fragua ci drift …`) and
+ *  inside a block scalar at line start (the review job wraps it in
+ *  `timeout`) — and anchoring to line start silently skipped every inline
+ *  one, which is how `drift.yml` escaped this guard. */
+function ciTargetOf(src: string): string | undefined {
+  for (const line of src.split("\n")) {
+    if (/^\s*#/.test(line)) continue;
+    const m = /\bfragua ci ([A-Za-z_][\w-]*)/.exec(line);
+    if (m?.[1] !== undefined) return m[1];
+  }
+  return undefined;
+}
+
+/** Every GitHub Actions workflow that runs `fragua ci <name>` against a pinned
+ *  engine, paired with the version it pins. This is the set the feature guard
+ *  has to cover: each one hands a RELEASED binary a workflow file from the
+ *  tree, so each one can meet a shape its release predates. */
+function pinnedCiJobs(): Array<{ workflow: string; ghaFile: string; pin: readonly number[] }> {
+  const dir = join(root, ".github/workflows");
+  const out: Array<{ workflow: string; ghaFile: string; pin: readonly number[] }> = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+    const src = readFileSync(join(dir, file), "utf8");
+    const target = ciTargetOf(src);
+    if (target === undefined) continue;
+    if (!existsSync(wf(`${target}.yaml`))) continue;
+    const v = /version:\s*v(\d+)\.(\d+)\.(\d+)/.exec(src);
+    // An unpinned job resolves `latest`, so it always parses the tree — the
+    // "binary is pinned" test below is what objects to that, not this one.
+    out.push({ workflow: target, ghaFile: file, pin: v ? [Number(v[1]), Number(v[2]), Number(v[3])] : [99, 99, 99] });
+  }
+  return out;
+}
+
+/** Node ids of `tool` steps that declare `outputs:`. Walks the file by
+ *  indentation rather than parsing it, so the guard holds without importing
+ *  the very parser whose capability is in question. */
+function toolStepsDeclaringOutputs(src: string): string[] {
+  const lines = src.split("\n");
+  const hits: string[] = [];
+  let stepId: string | null = null;
+  let isTool = false;
+  for (const line of lines) {
+    const step = /^ {2}([A-Za-z_][\w-]*):\s*(#.*)?$/.exec(line);
+    if (step) {
+      stepId = step[1] ?? null;
+      isTool = false;
+      continue;
+    }
+    if (stepId === null) continue;
+    if (/^ {4}type:\s*tool\s*(#.*)?$/.test(line)) isTool = true;
+    else if (isTool && /^ {4}outputs:\s*(#.*)?$/.test(line)) hits.push(stepId);
+  }
+  return hits;
+}
 
 const cmp = (a: readonly number[], b: readonly number[]): number =>
   (a[0] ?? 0) - (b[0] ?? 0) || (a[1] ?? 0) - (b[1] ?? 0) || (a[2] ?? 0) - (b[2] ?? 0);
@@ -65,6 +145,53 @@ describe("the pinned review engine parses the workflow it is given", () => {
       expect(cmp(pinned, since)).toBeGreaterThanOrEqual(0);
     });
   }
+
+  // EVERY pinned CI job, not just this one. `drift.yml` runs `fragua ci drift`
+  // against its own pin, two releases behind the review job's at the time this
+  // was written — so a feature adopted into `drift.yaml` breaks the weekly job
+  // exactly as one adopted into `pr_review.yaml` breaks the merge gate. Scoping
+  // the guard to one file is how that went unnoticed.
+  for (const { workflow, ghaFile, pin } of pinnedCiJobs()) {
+    const src = readFileSync(wf(`${workflow}.yaml`), "utf8");
+    for (const { name, since, used } of FEATURE_SINCE) {
+      const inUse = used(src);
+      test(`${workflow}.yaml uses ${name} (${inUse}) ⇒ ${ghaFile} pin is ≥ v${since.join(".")}`, () => {
+        if (!inUse) return;
+        expect(cmp(pin, since)).toBeGreaterThanOrEqual(0);
+      });
+    }
+  }
+
+  for (const { name, since, used } of FEATURE_SINCE) {
+    const inUse = used(canonicalSrc);
+    test(`pr_review.yaml uses ${name} (${inUse}) ⇒ pin is ≥ v${since.join(".")}`, () => {
+      if (!inUse) return;
+      // If this fails: cut a release that parses the feature, then bump BOTH
+      // pins in pr-review.yml — the action SHA and `with: version:`. This is
+      // the guard issue #44 describes: nothing else stops a contributor
+      // "helpfully" adopting a new shape into the pinned merge gate.
+      expect(cmp(pinned, since)).toBeGreaterThanOrEqual(0);
+    });
+  }
+
+  test("the tool-outputs detector actually fires (it guards by matching, so a broken matcher is a silent pass)", () => {
+    const src = [
+      "steps:",
+      "  plain:",
+      "    type: tool",
+      "    run: echo hi",
+      "  producer:              # a comment here must not hide it",
+      "    type: tool",
+      "    outputs:",
+      "      spec: { type: string }",
+      "  llm_producer:",
+      "    type: llm",
+      "    outputs:",
+      "      note: { type: string }",
+      "",
+    ].join("\n");
+    expect(toolStepsDeclaringOutputs(src)).toEqual(["producer"]);
+  });
 
   test("the judge-free twin is gone", () => {
     // It existed only while no release parsed `judge`. Now one does, and a

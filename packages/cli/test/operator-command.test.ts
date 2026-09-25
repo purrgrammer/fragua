@@ -822,8 +822,13 @@ describe("fragua forensics verbs", () => {
       "text/plain",
     );
     const written: Uint8Array[] = [];
-    const spy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    // The real `write` invokes its callback once the chunk has drained, and
+    // the command now awaits that — a mock that swallows the callback hangs
+    // rather than fails, so it has to honour the contract it stands in for.
+    const spy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown, ...rest: unknown[]) => {
       written.push(chunk as Uint8Array);
+      const done = rest.find((a) => typeof a === "function") as ((e?: Error) => void) | undefined;
+      done?.();
       return true;
     });
     const code = await artifactCommand({ runId: "ar2", nodeId: "n1", key: "out.txt", dbPath: r.dbPath });

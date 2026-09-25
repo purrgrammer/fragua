@@ -403,4 +403,22 @@ describe("WorktreeEnvironment", () => {
     await second.dispose();
     expect(existsSync(second.worktreePath)).toBe(false);
   });
+
+  test("createScratchFile allocates outside the worktree and reads back an in-place write", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "scratch-run" });
+    await env.init();
+    const scratch = await env.createScratchFile({ runId: "scratch-run", nodeId: "collect", iteration: 0 });
+    try {
+      expect(scratch.path.startsWith(env.worktreePath)).toBe(false);
+      await env.exec(`printf '{"branch":"feat"}' > "$FRAGUA_OUTPUT"`, {
+        env: { FRAGUA_OUTPUT: scratch.path },
+      });
+      const r = await scratch.read(1024, new AbortController().signal);
+      expect(r.kind).toBe("ok");
+      if (r.kind === "ok") expect(JSON.parse(r.text)).toEqual({ branch: "feat" });
+    } finally {
+      await scratch.dispose();
+      await env.dispose();
+    }
+  });
 });

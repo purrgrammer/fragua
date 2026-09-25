@@ -60,6 +60,12 @@ defaults:
   provider: anthropic
   model: claude-opus-4-8
 
+# The run's typed result. propose's deliverable is a file in docs/proposals/ —
+# name it, so a caller doesn't have to parse the transcript to find what was
+# written. `draft` runs on every completing path, so `path` is always present.
+outputs:
+  path: {from: draft.path}
+
 steps:
   survey:                              # heavy research, runs ONCE — outside the revision loop
     type: llm

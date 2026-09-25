@@ -2,11 +2,19 @@
 // cwd + node:fs + node:child_process + Bun.Glob. Blocked commands refused before spawn.
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { existsSync, constants as fsConstants, realpathSync } from "node:fs";
+import { type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isBlockedCommand } from "./blocklist.ts";
-import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
+import type {
+  DirEntry,
+  ExecResult,
+  ExecutionEnvironment,
+  ScratchFile,
+  ScratchKey,
+  ScratchReadResult,
+} from "./types.ts";
 
 /**
  * Thrown by {@link LocalEnvironment} when a path argument resolves
@@ -391,6 +399,23 @@ export class LocalEnvironment implements ExecutionEnvironment {
     });
   }
 
+  /** Allocate a `$FRAGUA_OUTPUT` scratch file at a DETERMINISTIC path keyed by
+   *  (run, node, iteration), under the OS temp dir and OUTSIDE cwd() — so it
+   *  never enters a snapshot delta and its read never runs through the
+   *  cwd-jailed {@link resolvePath}. Unlinks any file already at that path, then
+   *  creates a fresh inode with O_CREAT | O_EXCL and RETAINS the fd for the
+   *  read-back; a surviving stale file fails the O_EXCL create loudly rather
+   *  than being read as this dispatch's emission. */
+  async createScratchFile(key: ScratchKey): Promise<ScratchFile> {
+    const dir = join(tmpdir(), "fragua-scratch", key.runId);
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${key.nodeId}-${key.iteration}`);
+    await unlink(path).catch(() => {});
+    const flags = fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR;
+    const handle = await open(path, flags, 0o600);
+    return new LocalScratchFile(path, handle);
+  }
+
   /** Scan a shell command for a `cd <abs-path>` segment whose target
    *  is outside the env's cwd. Returns the offending path or undefined.
    *  Used by {@link exec} to refuse the command before spawning. */
@@ -412,5 +437,70 @@ export class LocalEnvironment implements ExecutionEnvironment {
       }
     }
     return undefined;
+  }
+}
+
+/** A retained-fd scratch file for the `$FRAGUA_OUTPUT` channel. The read-back
+ *  reads from the fd {@link LocalEnvironment.createScratchFile} retained at
+ *  O_EXCL-create, never by re-opening the child-controlled path — so a child
+ *  that swaps a symlink/FIFO/device onto the path leaves the retained fd on the
+ *  original (empty) inode and the read comes back `absent`, failing closed. */
+class LocalScratchFile implements ScratchFile {
+  private handle: FileHandle | null;
+  constructor(
+    readonly path: string,
+    handle: FileHandle,
+  ) {
+    this.handle = handle;
+  }
+
+  async read(maxBytes: number, signal: AbortSignal): Promise<ScratchReadResult> {
+    const handle = this.handle;
+    if (handle === null) return { kind: "absent" };
+    const buf = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total <= maxBytes) {
+      if (signal.aborted) {
+        const err = new Error("scratch read aborted");
+        err.name = "AbortError";
+        throw err;
+      }
+      const { bytesRead } = await handle.read(buf, total, buf.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > maxBytes) return { kind: "oversize" };
+    if (total === 0) {
+      return (await this.pathHoldsBytesOnDifferentInode(handle)) ? { kind: "renamed" } : { kind: "absent" };
+    }
+    return { kind: "ok", text: buf.subarray(0, total).toString("utf8") };
+  }
+
+  /** Metadata-only comparison (never a byte read, never a re-open for reading):
+   *  the retained inode is empty, but the path now resolves to a DIFFERENT
+   *  regular inode holding bytes — the child wrote via a temp-file + rename
+   *  idiom the retained fd never saw. A symlink/FIFO/device stat-reports a
+   *  non-regular type or size 0, so it stays `absent`, not `renamed`. */
+  private async pathHoldsBytesOnDifferentInode(handle: FileHandle): Promise<boolean> {
+    try {
+      const fdStat = await handle.stat();
+      const pathStat = await stat(this.path);
+      return pathStat.isFile() && pathStat.ino !== fdStat.ino && pathStat.size > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    const handle = this.handle;
+    this.handle = null;
+    if (handle !== null) {
+      try {
+        await handle.close();
+      } catch {
+        // already closed
+      }
+    }
+    await unlink(this.path).catch(() => {});
   }
 }
