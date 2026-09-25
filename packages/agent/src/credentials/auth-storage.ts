@@ -22,6 +22,33 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { IProviderCredentialStore } from "@fragua/store";
 import { SqliteAuthStorageBackend } from "./sqlite-auth-backend.ts";
 
+/** Deadline for a single OAuth token refresh. Generous against a slow token
+ * endpoint, decisive against a hung one: past this the call is worse than a
+ * failure, because it holds every LLM node waiting on the credential. */
+const OAUTH_REFRESH_TIMEOUT_MS = 30_000;
+
+/** `oauth.refresh` with a deadline on its signal. `getApiKey` runs on every LLM
+ * invocation, so an unbounded refresh is not a slow call — it wedges every node
+ * waiting on the credential until the process restarts, with no daemon-internal
+ * escape (the `login` path can at least defer to an interaction signal; there is
+ * no interaction here). The signal is the provider's own cancellation channel,
+ * so the deadline unwinds the in-flight request rather than orphaning it. */
+export async function refreshWithDeadline(
+  oauth: Pick<OAuthAuth, "refresh">,
+  cred: Parameters<OAuthAuth["refresh"]>[0],
+  timeoutMs: number = OAUTH_REFRESH_TIMEOUT_MS,
+): Promise<Awaited<ReturnType<OAuthAuth["refresh"]>>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`OAuth token refresh exceeded ${timeoutMs}ms`));
+  }, timeoutMs);
+  try {
+    return await oauth.refresh(cred, controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Built-in OAuth providers, keyed by provider id. pi-ai exposes OAuth as
  * `Provider.auth.oauth` rather than a global registry now; the built-in set
  * is static, so it is memoised on first read. */
@@ -218,8 +245,7 @@ export class AuthStorage {
         const auth = await oauth.toAuth(cred);
         return { result: auth.apiKey ? { apiKey: auth.apiKey, newCredentials: cred } : null };
       }
-      const controller = new AbortController();
-      const refreshed = await oauth.refresh(cred, controller.signal);
+      const refreshed = await refreshWithDeadline(oauth, cred);
       const auth = await oauth.toAuth(refreshed);
       if (!auth.apiKey) return { result: null };
       const merged: AuthStorageData = {
