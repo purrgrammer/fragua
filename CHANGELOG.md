@@ -10,6 +10,20 @@ guarantee.
 
 ### Added
 
+- **`type: judge` steps can name a backend.** `provider:` on a judge step picks
+  which System One model answers, and `judge: {provider, model}` in
+  `~/.fragua/config.yaml` sets the default. Two backends ship: `typesafe`
+  (hosted Jev) and `ollaya`, a local runtime serving open decision models on
+  `127.0.0.1:11435` whose API is wire-identical. A local backend needs no API
+  key and costs nothing. Further backends are `judge:<id>` rows in
+  `provider_config` carrying the base URL, auth mode, default model, price, and
+  the request/state token budgets — per model as well as per provider, since
+  local model windows vary by two orders of magnitude. Thresholds do not
+  transfer between backends: `fragua judge calibrate` now prints one line per
+  `provider/model`, takes `--provider` / `--model`, and says so when two models
+  answered under one bound. Two new validator codes: **E055** (a `provider:`
+  with no record) and **E056** (a provider with no default model where the step
+  names none).
 - **`tool` steps can produce typed `outputs:`.** A tool step may declare
   `outputs:` over the same type grammar `llm` steps use. The engine hands the
   process a scratch path in `$FRAGUA_OUTPUT`; the process writes one JSON
@@ -81,6 +95,14 @@ guarantee.
 
 ### Fixed
 
+- **`provider:` on a judge step no longer does nothing.** It parsed, validated,
+  and was then dropped before the handler saw it.
+- **An oversized state on a backend that refuses to truncate fails the node
+  instead of halting the run.** A `422 STATE_TRUNCATED` now points at
+  `state-max-bytes:`; an unknown model reports `MODEL_NOT_FOUND` as a node
+  failure rather than a provider pause. Judge calls also share the retry
+  classification the rest of fragua uses, so a backend that is briefly
+  unavailable (503) is retried.
 - **`fragua runs tail` and `runs wait` settle on legacy runs.** The follow loop
   tested only the current contract's terminal facts, so a run terminated under
   an older event contract never settled and the command waited forever.

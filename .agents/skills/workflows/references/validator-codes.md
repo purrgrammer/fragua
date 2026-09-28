@@ -50,6 +50,9 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E050 | A `for-each` judge question references `` `item.<path>` `` into a field the producer's item type does not declare (a typo the model would answer anyway, about nothing). |
 | E051 | The items a `for-each` judge iterates carry a field named `judge` — the answers land under `judge` on `kept` / `dropped` and would overwrite it. Rename the producer's field. |
 | E052 | A judge `composite:` is named like one of its questions or a fold field (`answers`, `kept`, `dropped`, `judge`, `item`), or weights a question that is undeclared or a `choice` — only `noul` and `score` answers have an order to average. |
+| E053 | A step declares `outputs:` with a type other than `llm` or `tool`. A **parse error**, raised before the validator runs. |
+| E055 | A `judge` step's `provider:` names a backend no record is configured for. Built-ins are `typesafe` and `ollaya`; add others as a `judge:<id>` row in `provider_config`. Offline (`fragua validate`) this is a warning, since a row may exist in a store this process cannot see. |
+| E056 | A `judge` step resolves to a provider that declares no default model and names no `model:`. Model ids do not cross providers, so there is nothing to fall back to. |
 
 ## Warnings
 

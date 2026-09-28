@@ -19,6 +19,10 @@ export interface JudgeCalibrateOptions {
   workflow?: string;
   /** Half-width of the flip-risk window around a bound. Default 0.10. */
   margin?: number;
+  /** Narrow to one backend / one model. A bound answered under two models has
+   * two distributions, and these pick one to read. */
+  provider?: string;
+  model?: string;
 }
 
 /** The band TypeSafe's own cookbooks route to a human: outside it the answer
@@ -37,7 +41,10 @@ interface Reads {
   /** Every bound that tests this question. `keep` and `review` both bound the
    * same noul, and each wants its own line. */
   gates: Gate[];
-  values: number[];
+  /** `<provider>/<model>` → the reads that model produced. Thresholds are
+   * calibrated against one model's answers, so pooling two models under one
+   * bound yields a confident-looking number that means nothing. */
+  byModel: Map<string, number[]>;
 }
 
 /** Every noul / composite bound a judge node authors, by question id. */
@@ -111,13 +118,18 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
     for (const row of rows) {
       if (row.nodeId == null) continue;
       seenRuns.add(row.runId);
-      let parsed: { role?: string; answers?: Record<string, unknown> };
+      let parsed: { role?: string; answers?: Record<string, unknown>; provider?: string; model?: string };
       try {
         parsed = JSON.parse(row.content) as typeof parsed;
       } catch {
         continue;
       }
       if (parsed.role !== "judge_node" || parsed.answers === undefined) continue;
+      const rowProvider = parsed.provider ?? "typesafe";
+      const rowModel = parsed.model ?? "unknown";
+      if (opts.provider !== undefined && rowProvider !== opts.provider) continue;
+      if (opts.model !== undefined && rowModel !== opts.model) continue;
+      const source = `${rowProvider}/${rowModel}`;
 
       const cacheKey = `${row.workflowSha}::${row.nodeId}`;
       let gates = gateCache.get(cacheKey);
@@ -141,8 +153,10 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
         const nodeGates = gates.get(id) ?? [];
         const value = readValue(answer, nodeGates);
         if (value === undefined) continue;
-        const reads = questions.get(id) ?? { gates: nodeGates, values: [] };
-        reads.values.push(value);
+        const reads = questions.get(id) ?? { gates: nodeGates, byModel: new Map<string, number[]>() };
+        const bucket = reads.byModel.get(source) ?? [];
+        bucket.push(value);
+        reads.byModel.set(source, bucket);
         questions.set(id, reads);
       }
     }
@@ -150,6 +164,8 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
     let totalGated = 0;
     let totalNear = 0;
     let totalBand = 0;
+    let mixed = 0;
+    const sources = new Set<string>();
 
     console.log(chalk.bold("judge calibrate"));
     console.log(
@@ -164,29 +180,40 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
       for (const [nodeId, questions] of gatedNodes) {
         console.log(`  ${chalk.cyan(nodeId)}`);
         for (const [qid, reads] of [...questions].sort()) {
-          const vs = reads.values;
-          if (vs.length === 0) continue;
-          const band = vs.filter((v) => v >= UNCERTAIN_LO && v <= UNCERTAIN_HI).length;
-          const pct = (k: number): string => `${Math.round((k / vs.length) * 100)}%`;
-          // The same reads, once per bound that tests them. Only the primary
-          // decision counts toward the totals, so a `review:` band beside a
-          // `keep:` does not double-count its own question.
-          reads.gates.forEach((gate, i) => {
-            const near = vs.filter((v) => distanceToBound(gate.bound, v) <= margin).length;
-            if (i === 0) {
-              totalGated += vs.length;
-              totalNear += near;
-              totalBand += band;
-            }
-            const nearText = near === 0 ? chalk.green("0") : chalk.yellow(`${near} (${pct(near)})`);
-            console.log(
-              `    ${(i === 0 ? qid : "").padEnd(16)} ${chalk.dim(gate.source.padEnd(14))}` +
-                ` ${describeBound(gate.bound).padEnd(13)}` +
-                ` n=${String(vs.length).padStart(4)}  near bound ${nearText}` +
-                `  uncertain ${band} (${pct(band)})` +
-                `  ${chalk.dim(`range ${Math.min(...vs).toFixed(2)}-${Math.max(...vs).toFixed(2)}`)}`,
-            );
-          });
+          const models = [...reads.byModel].filter(([, vs]) => vs.length > 0).sort();
+          if (models.length === 0) continue;
+          for (const [s] of models) sources.add(s);
+          // One bound answered by two models is two distributions. Say so, and
+          // print a line per model rather than one pooled number.
+          const split = models.length > 1;
+          if (split) mixed += 1;
+          let firstLine = true;
+          for (const [source, vs] of models) {
+            const band = vs.filter((v) => v >= UNCERTAIN_LO && v <= UNCERTAIN_HI).length;
+            const pct = (k: number): string => `${Math.round((k / vs.length) * 100)}%`;
+            // The same reads, once per bound that tests them. Only the primary
+            // decision counts toward the totals, so a `review:` band beside a
+            // `keep:` does not double-count its own question.
+            reads.gates.forEach((gate, i) => {
+              const near = vs.filter((v) => distanceToBound(gate.bound, v) <= margin).length;
+              if (i === 0) {
+                totalGated += vs.length;
+                totalNear += near;
+                totalBand += band;
+              }
+              const nearText = near === 0 ? chalk.green("0") : chalk.yellow(`${near} (${pct(near)})`);
+              const label = i === 0 && firstLine ? qid : "";
+              console.log(
+                `    ${label.padEnd(16)} ${chalk.dim(gate.source.padEnd(14))}` +
+                  ` ${describeBound(gate.bound).padEnd(13)}` +
+                  ` n=${String(vs.length).padStart(4)}  near bound ${nearText}` +
+                  `  uncertain ${band} (${pct(band)})` +
+                  `  ${chalk.dim(`range ${Math.min(...vs).toFixed(2)}-${Math.max(...vs).toFixed(2)}`)}` +
+                  (split ? `  ${chalk.magenta(source)}` : chalk.dim(`  ${source}`)),
+              );
+            });
+            firstLine = false;
+          }
         }
       }
     }
@@ -206,6 +233,16 @@ export function judgeCalibrateCommand(opts: JudgeCalibrateOptions): Promise<numb
           "  model reports as unsure — consider a `review:` band, or a bound further from where the mass sits",
       ),
     );
+    if (sources.size > 1) {
+      console.log(
+        chalk.yellow(
+          `\n  ${sources.size} models answered here (${[...sources].sort().join(", ")})` +
+            (mixed > 0 ? `, ${mixed} question(s) under one bound` : "") +
+            "\n  thresholds are calibrated against one model's answers — read each line on its own, or narrow\n" +
+            "  with `--provider` / `--model`",
+        ),
+      );
+    }
     return 0;
   });
 }

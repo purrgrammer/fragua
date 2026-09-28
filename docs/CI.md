@@ -56,10 +56,11 @@ is no `fragua providers add` step in CI. Set the provider's conventional env
 var in the job/step `env` and it is seeded automatically; `fragua ci` prints
 `creds seeded for <provider>` so you can confirm which one resolved. Every
 provider pi-ai knows an env var for works the same way (`OPENAI_API_KEY`,
-`GEMINI_API_KEY`, …) — see [providers.md](providers.md). The judge provider
-for `type: judge` steps is seeded from **`TYPESAFE_API_KEY`**; a workflow with
-judge steps and no key halts at its first judge with "provider typesafe not
-credentialed".
+`GEMINI_API_KEY`, …) — see [providers.md](providers.md). Judge providers for
+`type: judge` steps are seeded the same way (**`TYPESAFE_API_KEY`**,
+**`OLLAYA_API_KEY`**); a workflow whose judge steps resolve to a provider that
+requires a key and has none halts at its first judge with "provider <id> is not
+credentialed". A local judge provider needs no key at all.
 
 ```yaml
 - run: fragua ci my-workflow

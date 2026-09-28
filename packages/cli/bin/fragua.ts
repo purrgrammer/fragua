@@ -501,6 +501,8 @@ cli
   .command("judge [action] [workflow]", "Judge-step tooling: `calibrate` reports where each gate's answers landed")
   .option("--db <path>", "Store path (default ~/.fragua/fragua.db, the harness store)")
   .option("--margin <n>", "calibrate: half-width of the flip-risk window around a bound (default 0.10)")
+  .option("--provider <id>", "calibrate: only reads answered by this judge provider")
+  .option("--model <id>", "calibrate: only reads answered by this model")
   .action(async (action: string | undefined, workflow: string | undefined, options: Record<string, unknown>) => {
     if (action !== "calibrate") {
       console.error(action === undefined ? "usage: fragua judge calibrate [workflow]" : `unknown action "${action}"`);
@@ -513,10 +515,14 @@ cli
       console.error("--margin must be a number in [0, 1]");
       process.exit(1);
     }
+    const provider = typeof options["provider"] === "string" ? (options["provider"] as string) : undefined;
+    const model = typeof options["model"] === "string" ? (options["model"] as string) : undefined;
     const code = await judgeCalibrateCommand({
       ...(db !== undefined ? { dbPath: db } : {}),
       ...(workflow !== undefined ? { workflow } : {}),
       ...(margin !== undefined ? { margin } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(model !== undefined ? { model } : {}),
     });
     process.exit(code);
   });
