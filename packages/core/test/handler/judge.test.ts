@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@fragua/types";
 import { makeJudgeHandler } from "../../src/handler/handlers/judge.ts";
 import {
-  JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeAnswer,
   type JudgeClient,
   JudgeNotCredentialedError,
   JudgeProviderError,
   type JudgeRequest,
 } from "../../src/handler/judge-contract.ts";
+import { JUDGE_BUILTIN_PROVIDERS, JUDGE_USD_PER_INPUT_TOKEN } from "../../src/handler/judge-provider.ts";
 import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
 import type { ExecutionEnvironment } from "../../src/types/execution.ts";
 import type { JudgeQuestion } from "../../src/types/judge.ts";
@@ -34,10 +34,12 @@ function stubJudge(
   usage = { input_tokens: 500, output_tokens: 70 },
 ): JudgeClient {
   return {
-    provider: "typesafe",
+    defaultProvider: "typesafe",
+    resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
     async ask(req) {
       captured.requests.push(req);
       return {
+        provider: "typesafe",
         model: "jev-1.13.0",
         answers: typeof answers === "function" ? answers(req) : answers,
         usage,
@@ -49,7 +51,8 @@ function stubJudge(
 
 function throwingJudge(err: unknown): JudgeClient {
   return {
-    provider: "typesafe",
+    defaultProvider: "typesafe",
+    resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
     async ask() {
       throw err;
     },
@@ -495,7 +498,8 @@ describe("judge handler — failure modes", () => {
     const cap = fresh();
     const ctrl = new AbortController();
     const judge: JudgeClient = {
-      provider: "typesafe",
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
       async ask() {
         ctrl.abort();
         throw new Error("aborted");
@@ -666,5 +670,105 @@ describe("judge handler — composite", () => {
     expect(res.outcomeStatus).toBe("fail");
     expect((res.outputs as Record<string, unknown>)["quality"]).toBeCloseTo(0.35, 6);
     expect((res.outputs as Record<string, Record<string, unknown>>)["ok"]!["noul"]).toBe(0.2);
+  });
+});
+
+describe("judge handler — provider records", () => {
+  const OK_Q: JudgeQuestion = { type: "noul", instructions: "ok?" };
+
+  function recordingJudge(cap: Captured, model = "laya"): JudgeClient {
+    return {
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
+      async ask(req) {
+        cap.requests.push(req);
+        return {
+          provider: req.provider ?? "typesafe",
+          model,
+          answers: { ok: { type: "noul", noul: 0.8 } },
+          usage: { input_tokens: 10, output_tokens: 0 },
+          costUsd: 0,
+        };
+      },
+    };
+  }
+
+  test("`provider:` on the step reaches the request and the recorded row", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "laya", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge: recordingJudge(c) }));
+    expect(res.kind).toBe("transition");
+    expect(c.requests[0]!.provider).toBe("ollaya");
+    expect(c.messages[0]).toMatchObject({ role: "judge_node", provider: "ollaya", model: "laya" });
+    expect(c.events.find((e) => e.type === "judge.requested")!.payload["provider"]).toBe("ollaya");
+  });
+
+  test("a provider with no default model fails the node rather than sending another's id", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge: recordingJudge(c) }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect(c.requests).toHaveLength(0);
+  });
+
+  test("an unconfigured provider halts naming the id", async () => {
+    const c = fresh();
+    const h = makeJudgeHandler({ nodeId: "j", provider: "nope", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge: recordingJudge(c) }));
+    expect(res).toMatchObject({ kind: "halt", reason: "error" });
+    expect((res as { detail: string }).detail).toMatch(/unknown provider "nope"/);
+  });
+
+  test("422 STATE_TRUNCATED is a node fail pointing at state-max-bytes, not a halt", async () => {
+    const c = fresh();
+    const judge: JudgeClient = {
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
+      async ask() {
+        throw new JudgeProviderError("state too long", "ollaya", 422, undefined, "STATE_TRUNCATED");
+      },
+    };
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "laya", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/state-max-bytes/);
+  });
+
+  test("a 422 with no code keeps halting — it is a request-shape bug", async () => {
+    const c = fresh();
+    const judge: JudgeClient = {
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
+      async ask() {
+        throw new JudgeProviderError("bad question", "ollaya", 422);
+      },
+    };
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "laya", state: "x", questions: { ok: OK_Q } });
+    expect(await h.handler(stubCtx(c, { judge }))).toMatchObject({ kind: "halt", reason: "error" });
+  });
+
+  test("MODEL_NOT_FOUND is a node fail naming the model and the test command", async () => {
+    const c = fresh();
+    const judge: JudgeClient = {
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
+      async ask() {
+        throw new JudgeProviderError("no such model", "ollaya", 404, undefined, "MODEL_NOT_FOUND");
+      },
+    };
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "nope", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/does not serve model "nope"/);
+  });
+
+  test("the record's state cap applies without an authored state-max-bytes", async () => {
+    const c = fresh();
+    // The ollaya record caps state at 4 KiB where typesafe allows 64 KiB.
+    const big = "y".repeat(5_000);
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "laya", state: big, questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge: recordingJudge(c) }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/state-max-bytes/);
   });
 });

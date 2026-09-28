@@ -16,6 +16,14 @@ export type { JudgeClientOpts } from "./judge-client.ts";
 export { makeJudgeClient, TYPESAFE_BASE_URL } from "./judge-client.ts";
 export type { JudgeAnswer, JudgeClient, JudgeRequest, JudgeResponse } from "./judge-contract.ts";
 export { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "./judge-contract.ts";
+export type { JudgeModelLimits, JudgeProviderRecord } from "./judge-provider.ts";
+export {
+  JUDGE_BUILTIN_PROVIDERS,
+  JUDGE_OLLAYA_BASE_URL,
+  JUDGE_TYPESAFE_BASE_URL,
+  JUDGE_USD_PER_INPUT_TOKEN,
+  judgeLimitsFor,
+} from "./judge-provider.ts";
 export type { LlmAccounting, LlmCallFn, LlmClientOpts } from "./llm-client.ts";
 export { makeLlmClient } from "./llm-client.ts";
 export { sha256Hex } from "./sha256.ts";

@@ -4,7 +4,11 @@
 // entry.
 
 import type { JudgeJson, JudgeQuestion } from "../types/judge.ts";
+import type { JudgeProviderRecord } from "./judge-provider.ts";
+
 export interface JudgeRequest {
+  /** Which backend answers. Absent → the client's default provider. */
+  provider?: string;
   model: string;
   state: JudgeJson;
   questions: Record<string, JudgeQuestion>;
@@ -22,6 +26,9 @@ export type JudgeAnswer =
   | { type: "noul"; noul: number };
 
 export interface JudgeResponse {
+  /** The provider that actually answered — with a router in front, the
+   * request's `provider` may be absent and the default is not a constant. */
+  provider: string;
   /** Resolved model id (`jev-1.13.0`), never the alias the author wrote. */
   model: string;
   answers: Record<string, JudgeAnswer>;
@@ -30,20 +37,31 @@ export interface JudgeResponse {
   costUsd: number;
 }
 
-/** Pre-wired System One client on `ctx.judge`. Handlers may not `fetch`. */
+/** Pre-wired System One client on `ctx.judge`. Handlers may not `fetch`.
+ *
+ * `resolve` exists because the handler needs the record BEFORE it calls: for
+ * the default model, for the chunk planner's budgets, and for the `provider`
+ * on `judge.requested`, which is emitted ahead of any response. */
 export interface JudgeClient {
-  readonly provider: string;
+  readonly defaultProvider: string;
+  resolve(id?: string): JudgeProviderRecord | undefined;
   ask(req: JudgeRequest, signal: AbortSignal): Promise<JudgeResponse>;
 }
 
 /** A provider-side failure the handler maps onto a result: 401/403 → a
- * non-retryable fail, 422 → an error halt, 429/529/network → `pause_provider`. */
+ * non-retryable fail, a bad request shape → an error halt, retryable status or
+ * network → `pause_provider`.
+ *
+ * `code` is the provider's own machine-readable code when its error body
+ * carries one (`STATE_TRUNCATED`, `MODEL_NOT_FOUND`, …); the handler branches
+ * on it rather than on message text. */
 export class JudgeProviderError extends Error {
   constructor(
     message: string,
     public readonly provider: string,
     public readonly httpStatus: number | null,
     public readonly retryAfterMs?: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "JudgeProviderError";
@@ -57,10 +75,6 @@ export class JudgeNotCredentialedError extends Error {
     this.name = "JudgeNotCredentialedError";
   }
 }
-
-/** Input-token price for Jev; output tokens are free. Per-provider constant
- * until a second System One model exists. */
-export const JUDGE_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000;
 
 /** The `cost.recorded` payload for one judge call — the same shape the llm
  * boundary emits, so the run-level cost fold and the per-step window need no

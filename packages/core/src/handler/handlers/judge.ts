@@ -17,8 +17,6 @@ import {
   forEachQuestionId,
   isJudgeFileLeaf,
   JUDGE_DEFAULT_FOR_EACH_MAX_ITEMS,
-  JUDGE_DEFAULT_MODEL,
-  JUDGE_DEFAULT_STATE_MAX_BYTES,
   JUDGE_FOR_EACH_ITEMS_KEY,
   type JudgeComposite,
   type JudgeDecide,
@@ -38,6 +36,7 @@ import {
   JudgeProviderError,
   judgeCostPayload,
 } from "../judge-contract.ts";
+import { judgeLimitsFor } from "../judge-provider.ts";
 import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
 
 export interface JudgeConfig {
@@ -53,10 +52,13 @@ export interface JudgeConfig {
   review?: JudgeReview;
   composites?: JudgeComposite[];
   forEachMaxItems?: number;
-  /** Test seams: the provider budgets the chunk planner sizes against. */
+  /** Overrides for the budgets the chunk planner sizes against. Absent → the
+   * resolved provider record's numbers for the resolved model. */
   requestTokenBudget?: number;
   stateTokenBudget?: number;
   stateMaxBytes?: number;
+  /** `provider:` on the step. Absent → the client's default provider. */
+  provider?: string;
   model?: string;
   maxMs?: number;
 }
@@ -66,16 +68,24 @@ const STATE_PREVIEW_CHARS = 2_000;
 
 export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
   const maxMs = cfg.maxMs ?? DEFAULT_JUDGE_MAX_MS;
-  const stateMaxBytes = cfg.stateMaxBytes ?? JUDGE_DEFAULT_STATE_MAX_BYTES;
-  const model = cfg.model ?? JUDGE_DEFAULT_MODEL;
 
   const handler: Handler = async (ctx) => {
     const judge = ctx.judge;
     if (judge === undefined) {
-      return halt(
-        `judge step "${cfg.nodeId}": no judge client wired — configure the judge provider (\`fragua providers add typesafe\`)`,
-      );
+      return halt(`judge step "${cfg.nodeId}": no judge client wired — configure a judge provider`);
     }
+    const provider = cfg.provider ?? judge.defaultProvider;
+    const record = judge.resolve(provider);
+    if (record === undefined) {
+      return halt(`judge step "${cfg.nodeId}": unknown provider "${provider}" — no record is configured for it`);
+    }
+    const model = cfg.model ?? record.defaultModel;
+    if (model === undefined) {
+      // Model ids do not cross providers, so there is no sane fallback to pick.
+      return fail(`judge provider "${provider}" declares no default model — set \`model:\` on step "${cfg.nodeId}"`);
+    }
+    const limits = judgeLimitsFor(record, model);
+    const stateMaxBytes = cfg.stateMaxBytes ?? limits.stateMaxBytes;
 
     // One request for a plain judge; for a list, one request per chunk that
     // fits the provider's budgets. Every request shares the model and the
@@ -126,8 +136,9 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
         itemBytes: items.map(bytesOf),
         questionBytesPerItem: questionSizes.reduce((a, b) => a + b, 0),
         longestQuestionBytes: Math.max(...questionSizes),
-        ...(cfg.requestTokenBudget !== undefined ? { requestTokenBudget: cfg.requestTokenBudget } : {}),
-        ...(cfg.stateTokenBudget !== undefined ? { stateTokenBudget: cfg.stateTokenBudget } : {}),
+        requestTokenBudget: cfg.requestTokenBudget ?? limits.requestTokenBudget,
+        stateTokenBudget: cfg.stateTokenBudget ?? limits.stateTokenBudget,
+        bytesPerToken: record.bytesPerToken,
       });
       if (!Array.isArray(chunks)) {
         return fail(
@@ -165,7 +176,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     // provider / model fields the read plane opens the step with.
     const questionIds = Object.keys(cfg.questions);
     ctx.emit("judge.requested", {
-      provider: judge.provider,
+      provider,
       model,
       questionIds,
       stateBytes,
@@ -180,7 +191,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     for (const req of plan) {
       let response: Awaited<ReturnType<typeof judge.ask>>;
       try {
-        response = await judge.ask({ model, state: req.state, questions: req.questions }, ctx.signal);
+        response = await judge.ask({ provider, model, state: req.state, questions: req.questions }, ctx.signal);
       } catch (err) {
         if (ctx.signal.aborted) return halt("judge aborted");
         if (err instanceof JudgeNotCredentialedError) return halt(err.message);
@@ -197,6 +208,24 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
             // ~32k tokens ≈ 64 KB of diff text) — a node fail an `on: {fail}`
             // edge or a smaller `state-max-bytes` can address, not a halt.
             return fail(`judge state rejected by "${err.provider}" (400) — ${err.message}`);
+          }
+          if (err.code === "MODEL_NOT_FOUND") {
+            // The author named a model this backend does not serve. Addressable
+            // without a code change (`model:` on the step, or `ollaya pull`), so
+            // a node fail rather than a halt.
+            return fail(
+              `judge provider "${err.provider}" does not serve model "${model}" — ${err.message}; ` +
+                `check \`fragua providers test ${err.provider}\``,
+            );
+          }
+          if (err.httpStatus === 422 && err.code === "STATE_TRUNCATED") {
+            // The provider refused to answer a state it would have had to cut.
+            // Same class as TypeSafe's 400: the author fixes it with a smaller
+            // `state-max-bytes:`, a narrower state, or an `on: {fail}` edge.
+            return fail(
+              `judge state does not fit "${err.provider}" model "${model}" — ${err.message}; ` +
+                `lower \`state-max-bytes:\` or narrow the state`,
+            );
           }
           if (err.httpStatus === 422) {
             return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
@@ -220,10 +249,10 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       resolvedModel = response.model;
       // Emitted per chunk, before the next request: a provider failure on chunk
       // two must not lose chunk one's billed spend from the log.
-      ctx.emit("cost.recorded", judgeCostPayload(judge.provider, response));
+      ctx.emit("cost.recorded", judgeCostPayload(response.provider, response));
     }
     const durationMs = Date.now() - startedAt;
-    const response = { model: resolvedModel, answers, usage, costUsd };
+    const response = { provider, model: resolvedModel, answers, usage, costUsd };
 
     const composites = cfg.composites ?? [];
     let outputs: OutputsValue;
@@ -272,7 +301,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
 
     const message: JudgeNodeMessage = {
       role: "judge_node",
-      provider: judge.provider,
+      provider,
       model: response.model,
       statePreview: stateText.slice(0, STATE_PREVIEW_CHARS),
       stateBytes,
@@ -289,7 +318,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     ctx.messages.append(message);
 
     ctx.emit("judge.answered", {
-      provider: judge.provider,
+      provider,
       model: response.model,
       durationMs,
       // A list judge's N×Q answers cross the 4 KiB event cap at ~7 items and

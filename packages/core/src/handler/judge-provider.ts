@@ -1,0 +1,92 @@
+// A System One backend, as data. The wire is one endpoint with three question
+// shapes, so a second backend is not a second client — it is a record the one
+// client is parameterised by.
+//
+// Budgets live per model, not only per provider: Ollaya's context windows span
+// 512 (`laya:en`) to 32768 (`qwen3guard`) tokens, a 64x spread, where TypeSafe
+// serves one 64k/32k pair for every model it hosts.
+
+import {
+  JUDGE_BYTES_PER_TOKEN,
+  JUDGE_DEFAULT_MODEL,
+  JUDGE_DEFAULT_PROVIDER,
+  JUDGE_DEFAULT_STATE_MAX_BYTES,
+  JUDGE_REQUEST_TOKEN_BUDGET,
+  JUDGE_STATE_TOKEN_BUDGET,
+} from "../types/judge.ts";
+
+/** Per-model overrides for whichever budgets that model's window changes. */
+export interface JudgeModelLimits {
+  requestTokenBudget?: number;
+  stateTokenBudget?: number;
+  stateMaxBytes?: number;
+}
+
+export interface JudgeProviderRecord {
+  id: string;
+  baseUrl: string;
+  /** `optional` → an absent credential is not an error; the client sends a
+   * placeholder bearer, and a server that does enforce a key answers 401 onto
+   * the ordinary auth-failure path. */
+  auth: "required" | "optional";
+  usdPerInputToken: number;
+  /** Absent → a step must name `model:`; there is no cross-provider default. */
+  defaultModel?: string;
+  requestTokenBudget: number;
+  stateTokenBudget: number;
+  /** A measured property of one tokenizer, so it belongs to the record. */
+  bytesPerToken: number;
+  stateMaxBytes: number;
+  models?: Record<string, JudgeModelLimits>;
+}
+
+export const JUDGE_TYPESAFE_BASE_URL = "https://api.typesafe.ai";
+export const JUDGE_OLLAYA_BASE_URL = "http://127.0.0.1:11435";
+
+/** Jev's input-token price; output tokens are free. Kept as a named export
+ * because tests and the cost fold price against this exact rate. */
+export const JUDGE_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000;
+
+const TYPESAFE: JudgeProviderRecord = {
+  id: JUDGE_DEFAULT_PROVIDER,
+  baseUrl: JUDGE_TYPESAFE_BASE_URL,
+  auth: "required",
+  usdPerInputToken: JUDGE_USD_PER_INPUT_TOKEN,
+  defaultModel: JUDGE_DEFAULT_MODEL,
+  requestTokenBudget: JUDGE_REQUEST_TOKEN_BUDGET,
+  stateTokenBudget: JUDGE_STATE_TOKEN_BUDGET,
+  bytesPerToken: JUDGE_BYTES_PER_TOKEN,
+  stateMaxBytes: JUDGE_DEFAULT_STATE_MAX_BYTES,
+};
+
+/** Ollaya serves open decision models locally behind a `/v1/systemone` that is
+ * wire-identical to TypeSafe's. Every number here is UNMEASURED — the smallest
+ * documented window in its library is 512 tokens, so the defaults are sized to
+ * chunk rather than to be refused, and `bytesPerToken` is borrowed from Jev's
+ * measured ratio until a real call divides bytes sent by `usage.input_tokens`. Per-model
+ * entries belong in a `judge:ollaya` config row once measured. */
+const OLLAYA: JudgeProviderRecord = {
+  id: "ollaya",
+  baseUrl: JUDGE_OLLAYA_BASE_URL,
+  auth: "optional",
+  usdPerInputToken: 0,
+  requestTokenBudget: 400,
+  stateTokenBudget: 200,
+  bytesPerToken: JUDGE_BYTES_PER_TOKEN,
+  stateMaxBytes: 4 * 1024,
+};
+
+export const JUDGE_BUILTIN_PROVIDERS: Readonly<Record<string, JudgeProviderRecord>> = {
+  [TYPESAFE.id]: TYPESAFE,
+  [OLLAYA.id]: OLLAYA,
+};
+
+/** The budgets that apply to one model of one provider. */
+export function judgeLimitsFor(record: JudgeProviderRecord, model: string): Required<JudgeModelLimits> {
+  const over = record.models?.[model];
+  return {
+    requestTokenBudget: over?.requestTokenBudget ?? record.requestTokenBudget,
+    stateTokenBudget: over?.stateTokenBudget ?? record.stateTokenBudget,
+    stateMaxBytes: over?.stateMaxBytes ?? record.stateMaxBytes,
+  };
+}

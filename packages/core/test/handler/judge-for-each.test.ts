@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { AgentMessage, JudgeNodeMessage } from "@fragua/types";
 import { makeJudgeHandler } from "../../src/handler/handlers/judge.ts";
 import {
-  JUDGE_USD_PER_INPUT_TOKEN,
   type JudgeAnswer,
   type JudgeClient,
   JudgeProviderError,
   type JudgeRequest,
 } from "../../src/handler/judge-contract.ts";
+import { JUDGE_BUILTIN_PROVIDERS, JUDGE_USD_PER_INPUT_TOKEN } from "../../src/handler/judge-provider.ts";
 import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
 import type { JudgeQuestion } from "../../src/types/judge.ts";
 import type { OutputsValue } from "../../src/types/outputs.ts";
@@ -33,10 +33,12 @@ function fresh(): Captured {
 
 function stubJudge(answer: (req: JudgeRequest) => Record<string, JudgeAnswer>, captured: Captured): JudgeClient {
   return {
-    provider: "typesafe",
+    defaultProvider: "typesafe",
+    resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
     async ask(req) {
       captured.requests.push(req);
       return {
+        provider: "typesafe",
         model: "jev-1.13.0",
         answers: answer(req),
         usage: { input_tokens: 900, output_tokens: 40 },
@@ -229,12 +231,14 @@ describe("judge handler — for-each", () => {
     const c = fresh();
     let calls = 0;
     const flaky: JudgeClient = {
-      provider: "typesafe",
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
       async ask(req) {
         c.requests.push(req);
         calls += 1;
         if (calls === 2) throw new JudgeProviderError("rate limited", "typesafe", 429, 1000);
         return {
+          provider: "typesafe",
           model: "jev-1.13.0",
           answers: perItem(req),
           usage: { input_tokens: 900, output_tokens: 40 },

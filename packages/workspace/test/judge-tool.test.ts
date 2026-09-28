@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ExecutionEnvironment } from "@fragua/core";
-import { type JudgeClient, JudgeProviderError, type JudgeRequest } from "@fragua/core/handler";
+import { JUDGE_BUILTIN_PROVIDERS, type JudgeClient, JudgeProviderError, type JudgeRequest } from "@fragua/core/handler";
 import { judgeTool } from "../src/judge-tool.ts";
 import type { FraguaToolContext } from "../src/types.ts";
 
@@ -27,10 +27,12 @@ function ctxWith(
 
 function stubJudge(requests: JudgeRequest[]): JudgeClient {
   return {
-    provider: "typesafe",
+    defaultProvider: "typesafe",
+    resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
     async ask(req) {
       requests.push(req);
       return {
+        provider: "typesafe",
         model: "jev-1.13.0",
         answers: {
           c1: { type: "noul", noul: 0.91 },
@@ -86,12 +88,13 @@ describe("judge tool", () => {
       fraguaContext: ctxWith(undefined),
     });
     expect(out.is_error).toBe(true);
-    expect(out.text).toMatch(/no judge provider is credentialed/);
+    expect(out.text).toMatch(/no judge provider is configured/);
   });
 
   test("a 400 from the provider explains the input cap", async () => {
     const failing: JudgeClient = {
-      provider: "typesafe",
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
       async ask() {
         throw new JudgeProviderError("max_tokens_exceeded", "typesafe", 400);
       },
