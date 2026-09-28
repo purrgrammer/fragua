@@ -9,7 +9,7 @@
 // authoritative model check happens at enqueue.
 
 import { readFile } from "node:fs/promises";
-import { validateWorkflowModelsOffline } from "@fragua/agent";
+import { validateWorkflowJudgeProvidersOffline, validateWorkflowModelsOffline } from "@fragua/agent";
 import { DEFAULT_TOOL_MAX_MS, parseWorkflow, validate } from "@fragua/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
@@ -29,6 +29,10 @@ export async function validateCommand(workflow: string): Promise<number> {
   const graph = parseWorkflow(source);
   const diags = validate(graph);
   const modelCheck = validateWorkflowModelsOffline(source);
+  // Store-free, so only the built-in judge records are visible: an unknown
+  // provider warns (it may be a `judge:<id>` row), a known one with no default
+  // model still errors.
+  const judgeCheck = validateWorkflowJudgeProvidersOffline(source);
 
   const modelErrors = modelCheck.offenders.filter((o) => o.severity === "error");
   const modelWarnings = modelCheck.offenders.filter((o) => o.severity === "warning");
@@ -47,14 +51,19 @@ export async function validateCommand(workflow: string): Promise<number> {
     }
   }
 
-  if (diags.length === 0 && modelCheck.offenders.length === 0 && toolTimeoutInfos.length === 0) {
+  if (
+    diags.length === 0 &&
+    modelCheck.offenders.length === 0 &&
+    judgeCheck.length === 0 &&
+    toolTimeoutInfos.length === 0
+  ) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;
   }
   for (const info of toolTimeoutInfos) {
     console.log(info);
   }
-  if (diags.length === 0 && modelCheck.offenders.length === 0) {
+  if (diags.length === 0 && modelCheck.offenders.length === 0 && judgeCheck.length === 0) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;
   }
@@ -73,6 +82,11 @@ export async function validateCommand(workflow: string): Promise<number> {
     const where = o.provider ? `${o.provider}/${o.model}` : o.model;
     console.log(chalk.yellow(`[model] warning: node "${o.nodeId}" → ${where}: ${o.reason}`));
   }
-  console.log(`\n${diags.length + modelCheck.offenders.length} issue(s), ${errors} error(s)`);
+  for (const d of judgeCheck) {
+    const color = d.severity === "error" ? chalk.red : chalk.yellow;
+    console.log(color(`[${d.code}] ${d.severity}: ${d.message}`));
+    if (d.severity === "error") errors++;
+  }
+  console.log(`\n${diags.length + modelCheck.offenders.length + judgeCheck.length} issue(s), ${errors} error(s)`);
   return errors > 0 ? 1 : 0;
 }

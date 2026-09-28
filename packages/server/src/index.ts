@@ -22,7 +22,11 @@ import { runFilesRoutes } from "./routes/run-files.ts";
 import { runSnapshotsRoutes } from "./routes/run-snapshots.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
 import { analyticsRoutes } from "./store/analytics-routes.ts";
-import { createRoutes as createStoreRoutes, type WorkflowModelValidator } from "./store/routes.ts";
+import {
+  createRoutes as createStoreRoutes,
+  type WorkflowJudgeValidator,
+  type WorkflowModelValidator,
+} from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
 import { createScheduleRoutes } from "./store/schedule-routes.ts";
 import { skillsRoutes } from "./store/skills-routes.ts";
@@ -70,6 +74,7 @@ export interface ServerOptions {
    * The CLI's `daemon` command wires in the real pi-ai-backed resolver;
    * tests can omit it or inject a stub. */
   validateWorkflowModels?: WorkflowModelValidator;
+  validateWorkflowJudge?: WorkflowJudgeValidator;
   /** Backpressure cap on queued runs. POST /runs returns 429 with a
    * Retry-After header when the cap is met. Undefined = uncapped. */
   maxQueuedRuns?: number;
@@ -116,6 +121,7 @@ function buildApiApp(opts: ServerOptions): Hono {
       ...(ports.runActions !== undefined ? { runActions: ports.runActions } : {}),
       ...(opts.preflightProviders !== undefined ? { preflightProviders: opts.preflightProviders } : {}),
       ...(opts.validateWorkflowModels !== undefined ? { validateWorkflowModels: opts.validateWorkflowModels } : {}),
+      ...(opts.validateWorkflowJudge !== undefined ? { validateWorkflowJudge: opts.validateWorkflowJudge } : {}),
       ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
     }),
   );
@@ -316,6 +322,6 @@ export {
 } from "./schemas.ts";
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
-export type { WorkflowModelValidator } from "./store/routes.ts";
+export type { WorkflowJudgeValidator, WorkflowModelValidator } from "./store/routes.ts";
 export { registryPreflight } from "./store/routes.ts";
 export { storeRunsRoutes } from "./store/runs-routes.ts";
