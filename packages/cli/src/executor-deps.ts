@@ -27,6 +27,7 @@ import {
   AuthStorage,
   defaultSummariserModel,
   firstCredentialedProvider,
+  loadJudgeProviders,
   ModelRegistry,
   makeLlmHandler,
   PiSummariserBackend,
@@ -289,8 +290,26 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
   if (timeouts.llm !== undefined) defaultMaxMs.llm = timeouts.llm;
   if (timeouts.tool !== undefined) defaultMaxMs.tool = timeouts.tool;
   if (timeouts.judge !== undefined) defaultMaxMs.judge = timeouts.judge;
+  // Judge providers: built-in records overlaid by `judge:<id>` rows in the same
+  // `provider_config` table the llm registry reads. A bad row is reported, not
+  // fatal — the built-ins still serve.
+  const judgeProviders = loadJudgeProviders(store);
+  if (judgeProviders.error !== null) console.warn(`[judge] ${judgeProviders.error}`);
+  const judgeDefaultProvider = config.judge?.provider ?? JUDGE_PROVIDER;
+  // `judge.model` selects the default model for the selected provider — the
+  // same override `defaults.model` is for llm steps. It lands on the record so
+  // a step that names neither still resolves one.
+  const judgeConfigModel = config.judge?.model;
+  const selected = judgeProviders.providers[judgeDefaultProvider];
+  if (judgeConfigModel !== undefined && selected !== undefined) {
+    judgeProviders.providers[judgeDefaultProvider] = { ...selected, defaultModel: judgeConfigModel };
+  }
   const judgeClient = handler.makeJudgeClient({
-    getApiKey: () => authStorage.getApiKey(JUDGE_PROVIDER),
+    // Per provider: one router serves several backends, and a credential added
+    // after boot is picked up on the next call.
+    getApiKey: (p) => authStorage.getApiKey(p),
+    providers: judgeProviders.providers,
+    defaultProvider: judgeDefaultProvider,
   });
   dispatcher.setResolver(
     autoDispatcherResolver({
