@@ -2,7 +2,7 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import type { FactEvent } from "../src/index.ts";
+import { crashRequeueActiveMsDelta, type FactEvent } from "../src/index.ts";
 import { freshStore, seedRun } from "./helpers.ts";
 
 describe("startupSweep", () => {
@@ -237,6 +237,32 @@ describe("startupSweep", () => {
     const payload = requeued.payload as { prevNode?: string; lastAliveAt?: number };
     expect(payload.lastAliveAt).toBe(HEARTBEAT_TS);
     expect(payload.prevNode).toBe("a");
+    store.close();
+  });
+
+  test("credits activeMs via the same helper the reducer uses (no SQL/fold drift)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
+        },
+      ],
+      s0.version,
+    );
+    const dispatchStartedAt = store.getState(runId)!.dispatchStartedAt;
+    const HEARTBEAT_TS = (dispatchStartedAt ?? 0) + 4_321;
+
+    store.startupSweep({ priorHeartbeatAt: HEARTBEAT_TS });
+
+    const after = store.getState(runId)!;
+    // The SQL sweep must credit exactly what the pure reducer helper computes.
+    expect(after.metrics.activeMs).toBe(crashRequeueActiveMsDelta(dispatchStartedAt, HEARTBEAT_TS));
+    expect(after.metrics.activeMs).toBe(4_321);
     store.close();
   });
 

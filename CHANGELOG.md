@@ -70,6 +70,13 @@ guarantee.
 
 ### Changed
 
+- **A run's title and its schedule's audit trail now land with the write they
+  belong to.** An operator-supplied run title (`fragua run --title`, the API
+  `title`, a schedule's title) is folded into the enqueue event instead of a
+  second write after it, so it is part of the replayable log. Creating,
+  pausing, resuming, or deleting a schedule writes the schedule row and its
+  audit event in one transaction rather than two, so the two can no longer land
+  separately.
 - **`review` resolves its target and posts its verdict with tool steps.**
   Turning a free-form `--input target` into a diff spec, a path list, and a PR
   number is mechanism, and so is choosing between `--approve`,
@@ -96,6 +103,12 @@ guarantee.
 
 ### Fixed
 
+- **A crash-requeued run reports the same in-flight node whether read live or
+  replayed.** Reconstructing a run's state from its event log (bundle import,
+  `fragua show`) used to blank the current node for any run recovered from a
+  daemon crash, disagreeing with the live view, which kept it so the run
+  resumes on that node. Both now preserve it, and the pre-crash active-time
+  credit is computed one way so the log fold and the live projection can't drift.
 - **The HTTP server enforces a same-origin gate.** Every route now refuses a
   cross-origin `Origin`, a foreign `Host` (DNS-rebinding defence), or a bodied
   request that isn't `application/json`, so a web page open in the operator's

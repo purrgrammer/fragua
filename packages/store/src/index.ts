@@ -40,7 +40,14 @@ export {
   MIN_COMPATIBLE_CONTRACT_VERSION,
   MIN_COMPATIBLE_SCHEMA_VERSION,
 } from "./pragmas.ts";
-export { applyFact, deriveRunState, emptyMetrics, foldFacts, genesisToInitialState } from "./reducers.ts";
+export {
+  applyFact,
+  crashRequeueActiveMsDelta,
+  deriveRunState,
+  emptyMetrics,
+  foldFacts,
+  genesisToInitialState,
+} from "./reducers.ts";
 export {
   BLOB_REF_SENTINEL,
   type BlobRef,

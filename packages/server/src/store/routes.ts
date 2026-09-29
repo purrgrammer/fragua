@@ -437,15 +437,13 @@ export function createRoutes(deps: ServerDeps): Hono {
         ? { workflowScope: body.workflowScope }
         : {}),
       ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
+      ...(typeof body.title === "string" && body.title.length > 0 ? { title: body.title } : {}),
     });
     if (!enq.ok) {
       return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
     }
     try {
       plane.commitEnqueue(enq.params);
-      if (typeof body.title === "string" && body.title.length > 0) {
-        deps.store.setRunTitle(enq.runId, body.title);
-      }
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }

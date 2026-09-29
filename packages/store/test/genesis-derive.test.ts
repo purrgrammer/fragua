@@ -8,7 +8,14 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RunEnqueuedPayload } from "@fragua/types";
-import { applyFact, type FactEvent, genesisToInitialState, newRunId, type RunState } from "../src/index.ts";
+import {
+  applyFact,
+  EVENT_CONTRACT_VERSION,
+  type FactEvent,
+  genesisToInitialState,
+  newRunId,
+  type RunState,
+} from "../src/index.ts";
 import { freshStore, seedWorkflow } from "./helpers.ts";
 
 /** Replay an event log into a `run_state` the way import will: seed from the
@@ -99,6 +106,54 @@ describe("genesis derivation", () => {
     expect(normalize(derived)).toEqual(normalize(live));
     store.close();
   });
+
+  test.each([[undefined], [1_699_999_999_000]])(
+    "crash-requeued run: deriveRunState == live getState (priorHeartbeatAt=%p)",
+    async (priorHeartbeatAt) => {
+      const store = freshStore();
+      const sha = await seedWorkflow(store);
+      const runId = newRunId();
+      store.enqueueRun({
+        runId,
+        workflowSha: sha,
+        cwd: "/home/dev/proj",
+        projectId: "proj-id-1",
+        projectName: "proj",
+        initialRouting: { input: "do the thing" },
+      });
+
+      // Drive the run to 'running' on node "work", then crash-recover via the
+      // startup sweep (which appends fact.run_requeued_after_crash).
+      const v = store.getState(runId)!.version;
+      store.appendFact(
+        runId,
+        [
+          {
+            type: "fact.run_started",
+            payload: { workflowSha: sha, contractVersion: EVENT_CONTRACT_VERSION, startNode: "work" },
+          },
+        ],
+        v,
+      );
+      expect(store.getState(runId)!.status).toBe("running");
+
+      store.startupSweep(priorHeartbeatAt !== undefined ? { priorHeartbeatAt } : undefined);
+
+      const live = store.getState(runId)!;
+      // Sweep preserves the in-flight node so the executor re-dispatches it.
+      expect(live.status).toBe("queued");
+      expect(live.currentNode).toBe("work");
+
+      const derived = deriveFromLog(runId, store.getEvents(runId));
+      // The whole point: the pure fold agrees with the live projection — both
+      // the preserved currentNode and the activeMs credit computed by the
+      // shared helper (present only when priorHeartbeatAt was captured).
+      expect(derived.currentNode).toBe("work");
+      expect(derived.metrics.activeMs).toBe(live.metrics.activeMs);
+      expect(normalize(derived)).toEqual(normalize(live));
+      store.close();
+    },
+  );
 
   test("pinned base seeds run_state.base_git_{sha,ref} at enqueue and round-trips through the log", async () => {
     const store = freshStore();

@@ -608,6 +608,10 @@ export interface EnqueueRunParams {
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
+  /** Operator-supplied run title. Folded into the genesis `intent.run_enqueued`
+   * payload and seeded onto `run_state.title` in the same transaction, so it is
+   * part of the replayable log rather than a second `setRunTitle` write. */
+  title?: string;
   /** Pinned worktree base, resolved to a commit sha at enqueue from
    * `fragua run --base <ref>`. Seeds `run_state.base_git_sha`; the provisioner
    * reads it and provisions the worktree detached at this sha. Omitted =
@@ -1180,6 +1184,12 @@ export interface IDaemonCoordinator {
    * `appendDaemonEvent`.
    */
   createSchedule(params: CreateScheduleParams, now: number): Schedule;
+  /** Create a schedule AND its `intent.schedule_create` audit row in one
+   * transaction. The single write surface for operator schedule creation
+   * (server route + CLI both route here through the intent plane) so the row
+   * and its audit event can't land separately. `event` is the pre-built
+   * `DaemonEvent`; the caller (plane) owns its shape. */
+  createScheduleAudited(params: CreateScheduleParams, event: DaemonEvent, now: number): Schedule;
   /** Single row by id, or `null` if missing. */
   getSchedule(id: string): Schedule | null;
   /** All schedules for `cwd` (or every schedule when `cwd` is
@@ -1190,13 +1200,25 @@ export interface IDaemonCoordinator {
   getDueSchedules(now: number): Schedule[];
   /** Mark a schedule paused. Idempotent: re-pause is a no-op. */
   pauseSchedule(id: string, now: number): void;
+  /** Pause a schedule AND write its `intent.schedule_pause` audit row in one
+   * transaction. The single operator pause surface (server + CLI via the
+   * intent plane). */
+  pauseScheduleAudited(id: string, event: DaemonEvent, now: number): void;
   /** Clear `paused_at` and re-anchor `next_fire_at = now + intervalMs`.
    *  Per the proposal: resume must NOT retroactively contradict the
    *  pause window, so no catch-up fire is emitted. */
   resumeSchedule(id: string, now: number): void;
+  /** Resume a schedule AND write its `intent.schedule_resume` audit row in one
+   * transaction. The single operator resume surface (server + CLI via the
+   * intent plane). */
+  resumeScheduleAudited(id: string, event: DaemonEvent, now: number): void;
   /** Hard `DELETE FROM schedules WHERE id = ?`. Past runs retain their
    *  `schedule_id` for lineage. */
   deleteSchedule(id: string): void;
+  /** Delete a schedule AND write its `intent.schedule_delete` audit row in one
+   * transaction. The single operator delete surface (server + CLI via the
+   * intent plane). */
+  deleteScheduleAudited(id: string, event: DaemonEvent, now: number): void;
   /**
    * Atomically advance after a successful fire: set `last_fire_at = now`,
    * `last_run_id = runId`, `next_fire_at = now + interval_ms`. Anchored

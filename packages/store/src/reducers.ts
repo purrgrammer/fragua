@@ -327,20 +327,20 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_requeued_after_crash": {
-      // If sweep captured the dying daemon's last heartbeat, use it as a
-      // tight upper bound on real active time (heartbeat updates ~every 5s,
-      // so this gives crash-time accuracy within ~5s). Otherwise fall back
-      // to dropping the pre-crash span entirely — we can't tell active
-      // time from dead-daemon time.
-      if (next.dispatchStartedAt != null) {
-        const lastAlive = (fact.payload as { lastAliveAt?: number }).lastAliveAt;
-        if (typeof lastAlive === "number" && lastAlive > next.dispatchStartedAt) {
-          next.metrics.activeMs += lastAlive - next.dispatchStartedAt;
-        }
-        next.dispatchStartedAt = null;
-      }
+      // If sweep captured the dying daemon's last heartbeat, credit the
+      // pre-crash active span (heartbeat updates ~every 5s, so within ~5s of
+      // crash time); otherwise drop the span — dead-daemon time is
+      // indistinguishable from active time. The credit is computed by the
+      // shared helper the sweep also calls, so SQL and fold can't drift.
+      next.metrics.activeMs += crashRequeueActiveMsDelta(
+        next.dispatchStartedAt,
+        (fact.payload as { lastAliveAt?: number }).lastAliveAt,
+      );
+      next.dispatchStartedAt = null;
       next.status = "queued";
-      next.currentNode = null;
+      // Preserve currentNode so the resume re-dispatches the in-flight node,
+      // matching sweep.ts (which leaves current_node untouched). Nulling it
+      // here made deriveRunState disagree with the live projection.
       next.nodeStartedAt = null;
       next.readyAt = now;
       return next;
@@ -417,7 +417,7 @@ export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload
     nodeStartedAt: null,
     dispatchStartedAt: null,
     updatedAt: ts,
-    title: null,
+    title: payload.title ?? null,
     baseGitSha: payload.baseGitSha ?? null,
     baseGitRef: payload.baseGitRef ?? null,
     finalGitSha: null,
@@ -473,6 +473,17 @@ function closeDispatchInterval(next: RunState, now: number): void {
     next.metrics.activeMs += now - next.dispatchStartedAt;
     next.dispatchStartedAt = null;
   }
+}
+
+/** activeMs to credit for a crash requeue's pre-crash dispatch span. Returns
+ * the span `lastAliveAt - dispatchStartedAt` when the sweep captured the dying
+ * daemon's last heartbeat (a tight upper bound on real active time), else 0 —
+ * dead-daemon time can't be told from active time. The single place both the
+ * reducer arm and the SQL sweep compute this, so they can't drift. */
+export function crashRequeueActiveMsDelta(dispatchStartedAt: number | null, lastAliveAt: number | undefined): number {
+  if (dispatchStartedAt == null) return 0;
+  if (typeof lastAliveAt !== "number" || lastAliveAt <= dispatchStartedAt) return 0;
+  return lastAliveAt - dispatchStartedAt;
 }
 
 function cloneMetrics(m: RunMetrics): RunMetrics {

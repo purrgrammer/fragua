@@ -2,17 +2,26 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { SqliteStore } from "@fragua/store";
+import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { newRunId, SqliteStore } from "@fragua/store";
 import { createScheduleRoutes } from "../../src/store/schedule-routes.ts";
 
 let store: SqliteStore;
 let server: { fetch: (req: Request) => Response | Promise<Response> };
 let nowMs = 1_700_000_000_000;
+let scheduleSeq = 0;
 
 beforeEach(() => {
   store = new SqliteStore({ path: ":memory:" });
   nowMs = 1_700_000_000_000;
-  server = createScheduleRoutes({ store, now: () => nowMs });
+  scheduleSeq = 0;
+  const plane = makeIntentPlane({
+    store,
+    newRunId,
+    daemonStore: store,
+    newScheduleId: () => `sch_${++scheduleSeq}`,
+  });
+  server = createScheduleRoutes({ store, plane, now: () => nowMs });
 });
 
 afterEach(() => {

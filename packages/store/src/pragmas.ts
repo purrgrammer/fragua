@@ -48,8 +48,16 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * registered last). A v4 daemon has no fold case for it, so a v4 reducer meeting
  * a v5 stream would ignore the receipt. `MIN_COMPATIBLE` stays 1 — the fact is
  * observability-only and folds to `next` unchanged, so no run's `run_state`
- * depends on it and v1-v4 runs resume untouched. */
-export const EVENT_CONTRACT_VERSION = 5;
+ * depends on it and v1-v4 runs resume untouched.
+ * v6 makes `fact.run_requeued_after_crash` PRESERVE `currentNode` (it used to
+ * null it) so the pure fold agrees with the crash-recovery sweep, which always
+ * left `current_node` untouched; and adds an optional `title` to the genesis
+ * `intent.run_enqueued` payload that `genesisToInitialState` seeds onto
+ * `run_state.title`. A v5 daemon folding a v6 run would null `currentNode` on
+ * requeue and miss the seeded title. `MIN_COMPATIBLE` stays 1 — pre-v6 runs
+ * carry no genesis title and their requeue facts still fold (currentNode was
+ * already null at the point they were nulled), so v1-v5 runs resume untouched. */
+export const EVENT_CONTRACT_VERSION = 6;
 
 /** Lowest contract version the daemon folds. THE RULE: write the newest
  * version, READ ALL versions. Events are an immutable, append-only log, so the

@@ -382,6 +382,17 @@ export interface RunEnqueuedPayload {
   workflowScope?: "global" | "local" | "path" | "ephemeral";
   workflowPath?: string;
   scheduleId?: string;
+  /** Operator-supplied run title, folded into the genesis event so it is part of
+   * the replayable log rather than a second, non-transactional `setRunTitle`
+   * write after enqueue. Seeded onto `run_state.title` by
+   * `genesisToInitialState`. Absent when no `--title` (CLI) / `title` (API) /
+   * schedule title was given; the daemon's auto-titler may still fill it later.
+   *
+   * contract: no-bump — hashed here for completeness, but the v6 bump this
+   * field ships under is driven by the requeue `currentNode` fold change; this
+   * is an additive optional genesis field read only by `genesisToInitialState`
+   * at enqueue/import time, no fact fold reads it. */
+  title?: string;
   /** Pinned worktree base, resolved to a commit sha AT ENQUEUE from the CLI's
    * `--base <ref>`. When set, the provisioner runs `git worktree add --detach
    * <path> <baseGitSha>` instead of the run cwd's live HEAD. Absent = default

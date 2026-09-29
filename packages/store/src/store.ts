@@ -817,6 +817,7 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+      ...(params.title != null && params.title.length > 0 ? { title: params.title } : {}),
       ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
       ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
     } satisfies RunEnqueuedPayload);
@@ -853,6 +854,7 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
+        title: params.title != null && params.title.length > 0 ? params.title : null,
         baseGitSha: params.baseGitSha ?? null,
         baseGitRef: params.baseGitRef ?? null,
       });
@@ -1548,41 +1550,21 @@ export class SqliteStore implements IEventStore {
   // ─────────────── Schedules ───────────────
 
   createSchedule(params: CreateScheduleParams, now: number): Schedule {
-    const fireOnCreate = params.fireOnCreate ?? true;
-    const overlapPolicy = params.overlapPolicy ?? "skip";
-    const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
-    const title = params.title ?? null;
-    const projectId = params.projectId ?? params.cwd;
+    const { insertArgs, schedule } = buildScheduleInsert(params, now);
     this.writeTxn(() => {
-      insertSchedule(this.db, {
-        id: params.id,
-        workflowRef: params.workflowRef,
-        cwd: params.cwd,
-        projectId,
-        intervalMs: params.intervalMs,
-        intervalText: params.intervalText,
-        title,
-        overlapPolicy,
-        nextFireAt,
-        createdAt: now,
-      });
+      insertSchedule(this.db, insertArgs);
     });
-    return {
-      id: params.id,
-      workflowRef: params.workflowRef,
-      cwd: params.cwd,
-      projectId,
-      intervalMs: params.intervalMs,
-      intervalText: params.intervalText,
-      title,
-      overlapPolicy,
-      nextFireAt,
-      lastFireAt: null,
-      lastRunId: null,
-      pausedAt: null,
-      lastError: null,
-      createdAt: now,
-    };
+    return schedule;
+  }
+
+  createScheduleAudited(params: CreateScheduleParams, event: DaemonEvent, now: number): Schedule {
+    const { insertArgs, schedule } = buildScheduleInsert(params, now);
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      insertSchedule(this.db, insertArgs);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+    return schedule;
   }
 
   getSchedule(id: string): Schedule | null {
@@ -1615,15 +1597,39 @@ export class SqliteStore implements IEventStore {
     });
   }
 
+  pauseScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      updateSchedulePaused(this.db, id, now);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+  }
+
   resumeSchedule(id: string, now: number): void {
     this.writeTxn(() => {
       updateScheduleResumed(this.db, id, now);
     });
   }
 
+  resumeScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      updateScheduleResumed(this.db, id, now);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+  }
+
   deleteSchedule(id: string): void {
     this.writeTxn(() => {
       deleteScheduleRow(this.db, id);
+    });
+  }
+
+  deleteScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      deleteScheduleRow(this.db, id);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
     });
   }
 
@@ -2574,4 +2580,38 @@ function slimLlmStartForExport(payload: unknown): Record<string, unknown> {
   if (src["budget"] !== undefined) out["budget"] = src["budget"];
   if (src["system_prompt"] !== undefined) out["system_prompt"] = src["system_prompt"];
   return out;
+}
+
+/** Derive a schedule's insert args + its public `Schedule` shape from the
+ * create params. Pure — shared by `createSchedule` and `createScheduleAudited`
+ * so the two can't compute `nextFireAt` / `projectId` / defaults differently. */
+function buildScheduleInsert(
+  params: CreateScheduleParams,
+  now: number,
+): { insertArgs: Parameters<typeof insertSchedule>[1]; schedule: Schedule } {
+  const fireOnCreate = params.fireOnCreate ?? true;
+  const overlapPolicy = params.overlapPolicy ?? "skip";
+  const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
+  const title = params.title ?? null;
+  const projectId = params.projectId ?? params.cwd;
+  const insertArgs = {
+    id: params.id,
+    workflowRef: params.workflowRef,
+    cwd: params.cwd,
+    projectId,
+    intervalMs: params.intervalMs,
+    intervalText: params.intervalText,
+    title,
+    overlapPolicy,
+    nextFireAt,
+    createdAt: now,
+  };
+  const schedule: Schedule = {
+    ...insertArgs,
+    lastFireAt: null,
+    lastRunId: null,
+    pausedAt: null,
+    lastError: null,
+  };
+  return { insertArgs, schedule };
 }

@@ -450,7 +450,12 @@ const NON_MUTATOR_BUILDERS: {
     },
   }),
   "fact.run_quarantined": () => ({ type: "fact.run_quarantined", payload: { reason: "other" } }),
-  "fact.run_requeued_after_crash": () => ({ type: "fact.run_requeued_after_crash", payload: {} }),
+  // Carry prevNode + lastAliveAt so the frontier-isolation property exercises
+  // the credited (heartbeat-captured) requeue path, not just the bare one.
+  "fact.run_requeued_after_crash": (n) => ({
+    type: "fact.run_requeued_after_crash",
+    payload: { prevNode: n, lastAliveAt: 3_000 },
+  }),
   "fact.handler_timeout_leaked": (n) => ({
     type: "fact.handler_timeout_leaked",
     payload: { nodeId: n, leakedAt: 1_500 },

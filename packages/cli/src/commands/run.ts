@@ -140,6 +140,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(opts.title !== undefined && opts.title.length > 0 ? { title: opts.title } : {}),
       ...(base !== undefined ? { baseGitSha: base.sha, baseGitRef: base.ref } : {}),
     });
     if (!enq.ok) {
@@ -147,7 +148,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       return 1;
     }
     client.plane.commitEnqueue(enq.params);
-    if (opts.title !== undefined && opts.title.length > 0) client.store.setRunTitle(enq.runId, opts.title);
     console.log(chalk.green(`run queued: ${enq.runId}`));
     if (base !== undefined) {
       console.log(chalk.dim(`base ${base.ref} -> ${base.sha.slice(0, 12)}`));

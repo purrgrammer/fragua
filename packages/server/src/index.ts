@@ -4,11 +4,13 @@
 // @fragua/store. `workflowReader` (disk-backed workflow listing) stays optional
 // for the Workflows page.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
-import type { IEventStore } from "@fragua/store";
+import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { type IEventStore, newRunId } from "@fragua/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
@@ -133,7 +135,13 @@ function buildApiApp(opts: ServerOptions): Hono {
       ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
     }),
   );
-  api.route("/", createScheduleRoutes({ store: opts.store }));
+  const schedulePlane = makeIntentPlane({
+    store: opts.store,
+    newRunId,
+    daemonStore: opts.store,
+    newScheduleId,
+  });
+  api.route("/", createScheduleRoutes({ store: opts.store, plane: schedulePlane }));
   api.route("/", skillsRoutes({ store: opts.store, homeDir: homedir(), cwd }));
   if (opts.authStorage && opts.modelRegistry && opts.defaultModels && opts.testProvider) {
     api.route(
@@ -335,3 +343,13 @@ export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export type { WorkflowJudgeValidator, WorkflowModelValidator } from "./store/routes.ts";
 export { registryPreflight } from "./store/routes.ts";
 export { storeRunsRoutes } from "./store/runs-routes.ts";
+
+/** Mint a schedule id — Crockford-ish `sch_<rand>`. Injected into the intent
+ * plane (core stays browser-safe, so id minting is a host-side seam). */
+function newScheduleId(): string {
+  const buf = randomBytes(6);
+  const alph = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let s = "";
+  for (let i = 0; i < buf.length; i++) s += alph[buf[i]! % 36];
+  return `sch_${s}`;
+}
