@@ -18,7 +18,7 @@ fragua <cmd> --help           # detailed flags for a command
 | Command | What it does |
 |---|---|
 | `fragua harness` | Foreground harness — daemon + HTTP server under one supervisor against `~/.fragua/fragua.db`. Default port 6767. Web bundle auto-builds when sources are newer than `dist/`. The `ready` line prints a clickable hyperlink. |
-| `fragua run <workflow> [...args] [--input name=value]` | Upload a workflow, enqueue a run, stream events to stdout. Trailing args feed `$ARGUMENTS`; `--input name=value` (repeatable) binds typed `inputs:`, validated at enqueue. Bare names resolve under `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`. Discovers the running harness via `daemon_lock.http_url`. |
+| `fragua run <workflow> [...args] [--input name=value]` | Upload a workflow, enqueue a run, stream events to stdout. Trailing args feed `$ARGUMENTS`; `--input name=value` (repeatable) binds typed `inputs:`, validated at enqueue. Bare names resolve under `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`. A direct store-client: opens `--db` (default `~/.fragua/fragua.db`) and writes/reads through the intent + read planes — no HTTP, works daemon-down. |
 | `fragua validate <workflow.yaml>` | Parse + lint a workflow file without executing. |
 | `fragua init` | Initialise the current directory as a fragua project (writes `.fragua/config.yaml`). |
 
@@ -74,10 +74,11 @@ fragua daemon stop              # ask the running daemon to exit
 fragua serve  --db <path>       # standalone HTTP + SSE on :3000
 ```
 
-`fragua run`'s server discovery cascade:
-`--url` flag → `<cwd>/.fragua/serve.json` (CI primitive) →
-`~/.fragua/fragua.db` `daemon_lock.http_url` (harness) →
-`http://localhost:3000` last-resort default.
+`fragua run` / `fragua runs` are direct store-clients: they open the store
+(`--db`, else `~/.fragua/fragua.db`) and go through the intent + read planes.
+They do not talk to the HTTP server and need no server discovery — only the
+Web UI is an HTTP client, and it finds the listener via the store's
+`server_endpoint` row.
 
 ## Config
 

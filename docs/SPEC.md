@@ -104,11 +104,9 @@ The branch set is **static per run** — materialised at parse time, never grown
 
 Loops are **backward edges** — there is no `loop` primitive. A step that should re-run on failure routes back to itself or to an upstream step via `on: {fail: <step>}`, or declares `retry: <step>`, which compiles to `goal_gate: true` + `retry_target: <step>`.
 
-**Only the goal-gate form is bounded by `max-retries`.** The per-node counter (`internal.retry_count.<node>`) is bumped in exactly one place — the retry gate, which runs when a handler returns `outcomeStatus: "retry"` — and is **reset to 0 whenever the node succeeds**. A goal gate produces that outcome, so its loop is capped and the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise via `intent.max_retries_adjusted`).
+**Both loop forms are bounded by `max-retries`.** The per-node counter (`internal.retry_count.<node>`) is **reset to 0 whenever the node succeeds** and is bumped in two places, both in the pure transition planner. First: the retry gate, when a handler returns `outcomeStatus: "retry"` — a goal gate produces that outcome, so its loop is capped. Second: edge selection, when a node's `outcome=fail` edge targets the node itself or an upstream node (a back-edge that re-enters the source) — the counter for the *source* node is bumped before the edge is taken. On either path, once the count would exceed the node's `max-retries` the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise via `intent.max_retries_adjusted`).
 
-A plain `on: {fail: <step>}` back-edge does **not** produce a `retry` outcome — a `tool` step yields `success`/`fail` from its exit code, and edge selection simply routes. So the counter is never bumped, and if the edge's target succeeds on each pass it is also reset every time. `max-retries` on such a node is inert: the cycle is bounded only by the run `budget` and the executor's per-run dispatch ceiling (`max_loops`, default 1000, raisable via `intent.max_loops_adjusted`), both of which surface as operator gates rather than a clean halt.
-
-> Status: known gap. The bound authors most often want — "cap this check→fix cycle" — is not expressible on a plain back-edge today. Either the retry gate should count fail-edge re-entries, or `max-loops` should become authorable per workflow. Until one of those lands, prefer `retry:` when you need a cap.
+`max-retries` **defaults to 0, which means unbounded** on a plain `on: {fail: <step>}` back-edge — every shipped workflow that sets none keeps its existing behaviour, bounded only by the run `budget` and the executor's per-run dispatch ceiling (`max_loops`, default 1000, raisable via `intent.max_loops_adjusted`). Set `max-retries: N` on the failing step to cap a check→fix cycle cleanly.
 
 Workflows are uploaded via `POST /workflows { name, source }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha; `workflow_sha` is pinned at enqueue time.
 
@@ -202,7 +200,7 @@ After a node completes, the executor picks the next edge using a two-case algori
 
 **Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 
-Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route halts the run with `aborted_exit`. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_terminated{status:"completed"}` rather than halting. Per-node `retry_target` serves goal-gate retargeting (§3.7), not per-node failure.
+Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal — a node that fails with no fail route goes to `__end__` and halts the run with `aborted_exit`; there is no per-node `retry_target` fallback for a plain step's failure. A fail-edge whose target is the `exit` sink is the one graceful exception: it is a sanctioned failure landing the author opted into, so the run reaches the terminal and emits `fact.run_terminated{status:"completed"}` rather than halting. Per-node `retry_target` serves goal-gate retargeting (§3.7) only, and is rejected at validate-time (E057) on a step that is not a goal gate.
 
 **Outcome shape.** Every handler returns an `Outcome` (defined in `packages/core/src/types/outcome.ts`):
 
@@ -218,7 +216,7 @@ Fail recovery is authored explicitly: add an `outcome=fail` edge from the node t
 
 ### 3.7 Retries and goal gates
 
-**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}`.
+**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}`. The same `internal.retry_count.<node>` counter and the same `max_retries` cap also bound an `outcome=fail` **back-edge** (a fail edge whose target re-enters the source node, §3.1). A `fail` back-edge does not add a backoff delay — it re-routes immediately — and, unlike the `retry` path, it is counted only for a non-goal-gate node (a goal gate's loop is bounded by its own retarget cap, §3.4). The counter resets on the node's next success, so a check→fix cycle whose check eventually passes starts fresh.
 
 `retry-policy` (node attr, authoring kebab-case; IR: `retry_policy`) names a backoff preset. Resolution order: node `retry-policy` → graph `default-retry-policy` → `"none"`.
 

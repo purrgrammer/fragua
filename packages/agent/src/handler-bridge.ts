@@ -77,15 +77,15 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
     // Resolve `${{ inputs.x }}` / `${{ outputs.X.f }}` before the prompt hits
     // the LLM. Without this the agent sees the literal placeholder and every
     // workflow with an abort-on-empty guard halts on its first node.
-    // `wrapOutputs`: interpolated outputs are delimited with a SHA-256-derived
-    // boundary so an upstream-laundered value can't pose as an instruction
-    // (substitution.ts §6.4).
+    // `wrapValues`: interpolated outputs and non-empty inputs are delimited with
+    // a SHA-256-derived boundary so an upstream-laundered value or an
+    // attacker-supplied run input can't pose as an instruction (substitution.ts §6.4).
     // An unpopulated `${{ outputs.X.f }}` read FAILS CLOSED as a node `fail`
     // (routes via fail-edge / goal-gate / aborted_exit), never an uncaught throw
     // that the executor would turn into a fatal `reason:"error"` halt.
     let prompt: string;
     try {
-      prompt = substitute(rawPrompt, { args: ctx.args, wrapOutputs: true });
+      prompt = substitute(rawPrompt, { args: ctx.args, wrapValues: true });
     } catch (err) {
       if (err instanceof UnpopulatedOutputError) {
         return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };

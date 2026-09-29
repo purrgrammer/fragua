@@ -25,12 +25,12 @@ import {
   OPERATOR_NOTES_MAX_BYTES,
   PAUSE_AFTER_DISPATCH_KEY,
   PENDING_STEER_KEY,
+  reachableFrom,
   readGateOutcomes,
   readGoalGateRetries,
   readOperatorNotes,
   readPauseAfterDispatch,
   readPendingSteer,
-  resolveFailRetarget,
   retryCountKey,
   retryStep,
   selectEdge,
@@ -250,16 +250,11 @@ export function selectTransitionEdge(args: {
         } else if (result.outcomeStatus === "fail") {
           // No fail-edge claimed the failure. A goal_gate node routes
           // through the terminal so the *capped* goalGateStep below
-          // applies the retarget (and bumps the cap counter) rather
-          // than the unbounded resolveFailRetarget path. Non-gate
-          // nodes consult §3.7 retry_target before the `__end__`
-          // terminal halt.
-          if (srcNode.attrs.goal_gate === true) {
-            result.nextNode = "__end__";
-          } else {
-            const retarget = resolveFailRetarget(graph, currentNode);
-            result.nextNode = retarget ?? "__end__";
-          }
+          // applies the retarget (and bumps the cap counter). A non-gate
+          // node has no retry_target fallback (E057 rejects one at
+          // validate-time) — it goes to the terminal and halts
+          // `aborted_exit` (SPEC §3.6).
+          result.nextNode = "__end__";
         } else {
           // No outgoing edges or no viable selection — terminal.
           result.nextNode = "__end__";
@@ -508,13 +503,53 @@ export function applyRetryGate(args: {
     }
   }
   let retryPause: RetryPause | undefined;
-  // Stage 3: retry-counter exhaustion becomes an operator-resumable
-  // pause instead of a terminal halt. Sentinel mirrors `budgetPause`
-  // / `retryPause` —
-  // populated in the action.kind === "halt" branch below, consumed
-  // in the post-resultToFacts pass that swaps fact.node_started for
-  // fact.run_paused{reason:"max_retries"}.
+  // Stage 3 (§3.1): retry-counter exhaustion becomes an operator-resumable
+  // pause instead of a terminal halt — populated below (retry-status exhaustion
+  // and fail-edge back-edge exhaustion) and consumed in the post-resultToFacts
+  // pass that swaps fact.node_started for fact.run_paused{reason:"max_retries"}.
   let retriesExhaustedPause: RetriesExhaustedPause | undefined;
+
+  // Fail-edge back-edge cap (§3.1). Edge selection (Stage 1) already pointed
+  // `nextNode` at the fail target; when that target re-enters the source node
+  // (self-loop or an upstream node — `reachableFrom(target)` contains the
+  // source), the fail edge closes a loop that would otherwise be bounded only
+  // by budget / max_loops. Count it against the source node's `max_retries`
+  // (the SAME `internal.retry_count.<node>` counter the retry-status path uses,
+  // reset on success above), and pause on exhaustion exactly as that path does.
+  // `max_retries` defaults to 0 = UNBOUNDED here, so every shipped workflow
+  // that sets none keeps its behaviour. Goal gates are excluded — their loop is
+  // bounded by the separate goal-gate retarget cap (§3.4).
+  {
+    const completedNode = graph?.nodes[currentNode];
+    if (
+      result.kind === "transition" &&
+      result.outcomeStatus === "fail" &&
+      result.nextNode != null &&
+      graph != null &&
+      completedNode != null &&
+      completedNode.attrs.goal_gate !== true &&
+      reachableFrom(graph, result.nextNode).has(currentNode)
+    ) {
+      const maxRetriesOverride = getLimits(effectiveRouting).maxRetries(currentNode) ?? 0;
+      const maxRetries =
+        maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
+      if (maxRetries > 0) {
+        const priorRetries = getRetry(state.routing).count(currentNode);
+        if (priorRetries >= maxRetries) {
+          observability.push({
+            type: "node.retry_exhausted",
+            payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
+          });
+          // Park at the source (mirrors the retry-status pause): resume
+          // re-dispatches this node, not the fail target.
+          result.nextNode = currentNode;
+          retriesExhaustedPause = { nodeId: currentNode, currentLimit: maxRetries, attempts: priorRetries + 1 };
+        } else {
+          retryCounterPatch = { [retryCountKey(currentNode)]: priorRetries + 1 };
+        }
+      }
+    }
+  }
   if (result.kind === "transition" && result.outcomeStatus === "retry") {
     const completedNode = graph?.nodes[currentNode];
     if (graph != null && completedNode != null) {

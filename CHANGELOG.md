@@ -70,6 +70,14 @@ guarantee.
 
 ### Changed
 
+- **Plain `on: {fail: <step>}` back-edges honour `max-retries`.** When a step's
+  `fail` edge re-enters the step itself or an upstream step, the engine now
+  counts the re-entries against that step's `max-retries` and pauses
+  `max_retries` on exhaustion (operator-resumable, raise via the cap intent) —
+  the same bound goal gates already had. `max-retries` still **defaults to 0 =
+  unbounded**, so every existing workflow that sets none is unchanged; set
+  `max-retries: N` to cap a check→fix cycle cleanly. The counter resets on the
+  step's next success.
 - **Internal discipline lints are AST-based rather than regex source scans.** The
   transaction-purity, routing-index, inline-import, handler-I/O, and
   browser-safety checks now parse the TypeScript AST, so a forbidden call can no
@@ -107,6 +115,18 @@ guarantee.
 
 ### Fixed
 
+- **A shared `thread:` no longer lets one step inherit another's route or
+  output.** The scans that recover a step's `route()` / `emit_output()` call
+  walked the whole rehydrated transcript, so on a shared thread a step that
+  ended its turn without calling the tool picked up an upstream step's call:
+  `route_not_picked` could never fire and a downstream `outputs:` step inherited
+  the upstream struct. All three scans (route, emit, and the emit reminder) are
+  now scoped to the current turn, like the self-abort scan already was.
+- **A non-goal-gate `retry_target` no longer creates an unbounded fail loop.**
+  A step could carry `retry_target` without being a goal gate; on failure the
+  engine retargeted through it forever. `retry_target` on a non-gate step is now
+  a validate-time error (E057), and a plain step that fails with no `fail` edge
+  halts (`aborted_exit`) instead of retargeting.
 - **A halt or pause that lost an OCC race no longer leaves the run stranded in
   `running`.** The pre-dispatch pauses and halts (engine-incompatible,
   unparseable workflow, worktree-provision failure, `max_loops`, leaked handler,

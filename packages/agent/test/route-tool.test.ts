@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -83,6 +84,10 @@ interface RunWithRouteOpts {
   responses: AssistantMessage[];
   /** Optional spy invoked with each request's `tools` array. */
   onContext?: (ctx: Context) => void;
+  /** Shared-thread id — when set, the node hydrates `priorMessages`. */
+  threadId?: string;
+  /** Rehydrated shared-thread prefix (an upstream node's transcript). */
+  priorMessages?: AgentMessage[];
 }
 
 async function runWithRoute(opts: RunWithRouteOpts): Promise<{
@@ -116,7 +121,8 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
     const outcome = await backend.run({
       node: { id: "n1", type: "llm", attrs: opts.attrs },
       prompt: "decide a route",
-      thread_id: undefined,
+      thread_id: opts.threadId,
+      ...(opts.priorMessages !== undefined ? { priorMessages: opts.priorMessages } : {}),
       signal: new AbortController().signal,
       run_id: "test-route-tool",
       workflow_sha: "sha",
@@ -308,6 +314,45 @@ describe("PiLlmBackend route tool synthesis", () => {
       expect(advertised).toContain("route");
       expect(outcome.status).toBe("success");
       expect(outcome.route).toBe("b");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("a shared-thread node that ends without route halts route_not_picked even with an upstream route call in the hydrated prefix", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-route-shared-thread-"));
+    try {
+      // The rehydrated prefix carries an UPSTREAM routing node's committed
+      // route() call (assistant toolCall + its paired toolResult). The current
+      // node ends its turn with text only. A whole-transcript scan would
+      // return the upstream "upstream" route and never fire route_not_picked;
+      // the scan must be scoped to this turn's slice.
+      const priorMessages = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "up1", name: "route", arguments: { name: "upstream" } }],
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "up1",
+          toolName: "route",
+          content: [{ type: "text", text: "route called" }],
+          isError: false,
+          timestamp: 2,
+        },
+      ] as unknown as AgentMessage[];
+      const { outcome } = await runWithRoute({
+        scratch,
+        registry: coreRegistry(),
+        attrs: { routes: ["a", "b"], thread_id: "shared" },
+        threadId: "shared",
+        priorMessages,
+        responses: [fauxAssistantMessage([fauxText("I considered it")], { stopReason: "stop" })],
+      });
+      expect(outcome.status).toBe("fail");
+      expect(outcome.halt_reason).toBe("route_not_picked");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

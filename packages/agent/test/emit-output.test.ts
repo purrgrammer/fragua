@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -69,6 +70,10 @@ interface RunWithOutputsOpts {
   attrs: NodeAttrs;
   responses: AssistantMessage[];
   onContext?: (ctx: Context) => void;
+  /** Shared-thread id — when set, the node hydrates `priorMessages`. */
+  threadId?: string;
+  /** Rehydrated shared-thread prefix (an upstream node's transcript). */
+  priorMessages?: AgentMessage[];
 }
 
 async function runWithOutputs(opts: RunWithOutputsOpts): Promise<{
@@ -97,7 +102,8 @@ async function runWithOutputs(opts: RunWithOutputsOpts): Promise<{
     const outcome = await backend.run({
       node: { id: "n1", type: "llm", attrs: opts.attrs },
       prompt: "produce outputs",
-      thread_id: undefined,
+      thread_id: opts.threadId,
+      ...(opts.priorMessages !== undefined ? { priorMessages: opts.priorMessages } : {}),
       signal: new AbortController().signal,
       run_id: "test-emit-output",
       workflow_sha: "sha",
@@ -293,6 +299,49 @@ describe("emit_output tool synthesis", () => {
       });
       expect(outcome.status).toBe("fail");
       expect(outcome.failure_reason).toContain("alone");
+      expect(outcome.outputs).toBeUndefined();
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("a shared-thread outputs: node that never emits fails, not inheriting an upstream emit_output struct", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-shared-thread-"));
+    try {
+      // The rehydrated prefix carries an UPSTREAM node's committed emit_output
+      // struct (assistant toolCall + its paired toolResult). The current node
+      // ends without emitting. A whole-transcript scan would return the
+      // upstream struct and the node would succeed with an inherited value;
+      // the scan must be scoped to this turn's slice (two text turns — the
+      // corrective emit reminder consumes the second).
+      const priorMessages = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "up1", name: "emit_output", arguments: { pr_number: "999", loc: 7 } }],
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "up1",
+          toolName: "emit_output",
+          content: [{ type: "text", text: "emit_output called" }],
+          isError: false,
+          timestamp: 2,
+        },
+      ] as unknown as AgentMessage[];
+      const { outcome } = await runWithOutputs({
+        scratch,
+        registry: coreRegistry(),
+        attrs: { outputs: PR_OUTPUTS_DECL, thread_id: "shared" },
+        threadId: "shared",
+        priorMessages,
+        responses: [
+          fauxAssistantMessage([fauxText("thinking about it")], { stopReason: "stop" }),
+          fauxAssistantMessage([fauxText("still no emit")], { stopReason: "stop" }),
+        ],
+      });
+      expect(outcome.status).toBe("fail");
       expect(outcome.outputs).toBeUndefined();
     } finally {
       await rm(scratch, { recursive: true, force: true });

@@ -804,7 +804,7 @@ export class PiLlmBackend implements LlmBackend {
         !hasRoutes &&
         !input.signal?.aborted &&
         lastAssistantMessage(agent.state.messages) !== undefined &&
-        findEmitOutputCall(agent.state.messages) == null &&
+        findEmitOutputCall(agent.state.messages.slice(hydratedCount)) == null &&
         findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
       ) {
         await agent.prompt(EMIT_OUTPUT_REMINDER);
@@ -990,7 +990,7 @@ export class PiLlmBackend implements LlmBackend {
     // routing via `routes=`. Abort wins above — a self-abort cancels
     // the route concern entirely.
     if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
-      const routeCall = findRouteToolCall(agent.state.messages);
+      const routeCall = findRouteToolCall(agent.state.messages.slice(hydratedCount));
       if (routeCall == null) {
         return failHalt("route_not_picked", "agent ended turn without calling route()");
       }
@@ -1002,7 +1002,7 @@ export class PiLlmBackend implements LlmBackend {
 
     // emit_output resolution for nodes that declare outputs: but no routes:.
     if (outputsDecl !== undefined) {
-      const emitCall = findEmitOutputCall(agent.state.messages);
+      const emitCall = findEmitOutputCall(agent.state.messages.slice(hydratedCount));
       if (emitCall == null) {
         return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
       }

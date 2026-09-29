@@ -430,6 +430,25 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E057: `retry_target` is only valid on a goal gate. Authored via `retry:`
+  // the parser sets `goal_gate=true` alongside it, but a raw `retry_target:`
+  // attr passes through without the gate flag — which would drive an unbounded
+  // non-gate fail retarget at runtime. `retry_target` serves goal-gate
+  // retargeting (SPEC §3.7) only; a plain step's failure routes via
+  // `on: {fail: …}` (bounded by max-retries, SPEC §3.1).
+  for (const n of nodes) {
+    const target = n.attrs.retry_target;
+    if (typeof target !== "string" || target === "") continue;
+    if (n.attrs.goal_gate === true) continue;
+    diags.push({
+      severity: "error",
+      code: "E057",
+      message: `node "${n.id}" sets retry_target="${target}" but is not a goal gate — retry_target only drives goal-gate retargeting; author the gate with \`retry: <step>\`, or route failure with \`on: {fail: …}\``,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
   // W014: unrecognised retry_policy / default_retry_policy preset name.
   // Unknown values silently fall back to "none" at runtime; surface the
   // typo at validate-time so the author knows they got no backoff.
