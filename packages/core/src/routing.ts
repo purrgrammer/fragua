@@ -333,6 +333,20 @@ export function readRawInputs(routing: Record<string, unknown>): Record<string, 
   return v as Record<string, unknown>;
 }
 
+/** Whether `routing.inputs` has been seeded. The intent-plane build path uses
+ * this to decide whether an explicit `routing.inputs` already won the merge,
+ * keeping the presence probe inside the accessor seam. */
+export function hasInputs(routing: Record<string, unknown>): boolean {
+  return routing[INPUTS_KEY] !== undefined;
+}
+
+/** Seed `routing.inputs` on a routing object under construction. The one
+ * sanctioned write of the inputs key, kept inside the accessor module so no
+ * builder indexes `routing` directly. */
+export function setInputs(routing: Record<string, unknown>, inputs: Record<string, unknown>): void {
+  routing[INPUTS_KEY] = inputs;
+}
+
 /** Read the fan-out frontier. Element-validated: the only non-typed write path
  * is a tampered bundle fed through `fragua import` — degrade to `null` ("no
  * fan-out", self-heals on re-derive) instead of propagating junk. This is the

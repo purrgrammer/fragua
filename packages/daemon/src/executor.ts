@@ -1821,6 +1821,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (committed === undefined) return;
       let next: Record<string, unknown> | undefined;
       for (const [k, v] of Object.entries(committed)) {
+        // routing-index-allow: dynamic-key fold of committed same-turn retry counts
         if (k.startsWith(retryCountPrefix) && liveRouting[k] !== v) {
           if (next === undefined) next = { ...liveRouting };
           next[k] = v;

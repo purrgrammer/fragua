@@ -70,6 +70,10 @@ guarantee.
 
 ### Changed
 
+- **Internal discipline lints are AST-based rather than regex source scans.** The
+  transaction-purity, routing-index, inline-import, handler-I/O, and
+  browser-safety checks now parse the TypeScript AST, so a forbidden call can no
+  longer slip past by renaming a binding or routing through a helper.
 - **A run's title and its schedule's audit trail now land with the write they
   belong to.** An operator-supplied run title (`fragua run --title`, the API
   `title`, a schedule's title) is folded into the enqueue event instead of a

@@ -1,124 +1,151 @@
 // Structural lint — ARCHITECTURE.md §5, invariant I1.
 //
-// The store module wraps every write in `db.transaction(() => ...)` or the
-// equivalent BEGIN IMMEDIATE / COMMIT pair. Inside those bodies we MUST NOT
-// await or serialize JSON — both would either block the write lock (await)
-// or allocate on the hot path under the write lock (JSON.stringify). The
-// rule is enforced by grepping the source tree for either pattern inside
-// the body of a txn-like block.
+// Every store write runs inside a `this.writeTxn(() => ...)` (or a raw
+// `db.transaction(() => ...)`) callback whose body executes under the SQLite
+// write lock. Inside that body we MUST NOT `await` (blocks the lock), serialize
+// or parse JSON (allocates on the hot path under the lock), reach the network
+// (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` — the caller
+// pre-serializes and validates before the transaction opens.
 //
-// This isn't a full AST parse — it's a conservative regex over the source
-// files in packages/store/src and packages/daemon/src. False positives get
-// caught via a small allowlist keyed off the file path.
+// This is an AST scan (not a regex over source text): it walks the callback body
+// AND, one level deep, the bodies of any function declared in the SAME file that
+// the callback calls — so routing a `JSON.stringify` through a private helper no
+// longer escapes the rule the way the old substring scan let it.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import {
+  callbackBodiesOf,
+  collectAwaits,
+  collectCalls,
+  lineOf,
+  parseSource,
+  sameFileFunctionBodies,
+} from "@fragua/test-utils";
+import ts from "typescript";
 
 const ROOTS = [join(__dirname, "..", "src"), join(__dirname, "..", "..", "daemon", "src")];
 
-/** Files we trust to break the rule because they never run inside a txn. */
-const ALLOWLIST = new Set<string>([
-  // none at present — add with a reason when needed
-]);
+const TXN_CALLEES = ["writeTxn", "transaction"];
+
+/** Callee text that must never appear in a transaction body. `fetch` is matched
+ * by its identifier name separately. */
+const BANNED_CALL_TEXT = new Set(["JSON.stringify", "JSON.parse", "Value.Check", "Value.Compile"]);
+
+interface Offender {
+  file: string;
+  kind: string;
+  line: number;
+}
 
 function collectSources(root: string): string[] {
   const out: string[] = [];
-  const walk = (dir: string) => {
+  const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
-      const st = statSync(full);
-      if (st.isDirectory()) walk(full);
-      else if (name.endsWith(".ts")) out.push(full);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith(".ts") && !name.endsWith(".test.ts")) out.push(full);
     }
   };
   walk(root);
   return out;
 }
 
-/**
- * Extract text between a `.transaction(` and its matching `)` / the
- * paired `BEGIN IMMEDIATE` and `COMMIT` lines. Very coarse — keyed on
- * the common shapes used in this codebase.
- */
-function* txnBodies(source: string): IterableIterator<string> {
-  // Shape A: .transaction(() => { ... })()
-  const TXN_RE = /\.transaction\s*\(\s*\(\s*\)\s*=>\s*\{/g;
-  for (const match of source.matchAll(TXN_RE)) {
-    const start = match.index + match[0].length;
-    const end = matchBrace(source, start - 1);
-    if (end > start) yield source.slice(start, end);
+/** Scan one node (a transaction body or an inlined helper body) for the banned
+ * constructs, excluding nested deferred functions. */
+function scanBody(body: ts.Node, sf: ts.SourceFile, file: string): Offender[] {
+  const offenders: Offender[] = [];
+  for (const a of collectAwaits(body)) offenders.push({ file, kind: "await", line: lineOf(sf, a) });
+  for (const call of collectCalls(body, sf, true)) {
+    if (call.name === "fetch") offenders.push({ file, kind: "fetch", line: lineOf(sf, call.node) });
+    else if (BANNED_CALL_TEXT.has(call.text)) offenders.push({ file, kind: call.text, line: lineOf(sf, call.node) });
   }
-  // Shape B: BEGIN IMMEDIATE ... COMMIT wrapped in a try block
-  const BEGIN = /this\.db\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[\s\S]*?this\.db\.exec\(\s*["']COMMIT["']\s*\)/g;
-  for (const match of source.matchAll(BEGIN)) {
-    yield match[0];
-  }
-  // Shape C: db.exec("BEGIN IMMEDIATE") ... db.exec("COMMIT") via free db var
-  const BEGIN2 = /\bdb\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[\s\S]*?\bdb\.exec\(\s*["']COMMIT["']\s*\)/g;
-  for (const match of source.matchAll(BEGIN2)) {
-    yield match[0];
-  }
-  // Shape D: this.writeTxn(() => { ... }) — the primary store write path. The
-  // body runs under BEGIN IMMEDIATE just like Shape A, so it gets the same scan.
-  const WRITE_TXN_RE = /\bwriteTxn\s*\(\s*\(\s*\)\s*=>\s*\{/g;
-  for (const match of source.matchAll(WRITE_TXN_RE)) {
-    const start = match.index + match[0].length;
-    const end = matchBrace(source, start - 1);
-    if (end > start) yield source.slice(start, end);
-  }
-  // Shape E: writeProjection's own body. It is only ever invoked from inside a
-  // writeTxn (Shape D), so its body executes under the write lock and must obey
-  // I1 too. Scanning its body directly is simpler than inline-expanding the call.
-  const PROJ_RE = /\bprivate\s+writeProjection\b[\s\S]*?\)\s*:\s*void\s*\{/g;
-  for (const match of source.matchAll(PROJ_RE)) {
-    const start = match.index + match[0].length;
-    const end = matchBrace(source, start - 1);
-    if (end > start) yield source.slice(start, end);
-  }
+  return offenders;
 }
 
-function matchBrace(source: string, openIdx: number): number {
-  let depth = 0;
-  for (let i = openIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-// invariant: I1 — every store write is one txn; no await / JSON.stringify may
-// run inside a txn body. Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
-describe("I1 — no await / JSON.stringify inside transaction bodies", () => {
-  const offenders: { file: string; snippet: string; kind: string }[] = [];
-  for (const root of ROOTS) {
-    for (const file of collectSources(root)) {
-      if (ALLOWLIST.has(file)) continue;
-      const src = readFileSync(file, "utf8");
-      for (const body of txnBodies(src)) {
-        if (/\bawait\b/.test(body)) {
-          offenders.push({ file, snippet: body.slice(0, 120), kind: "await" });
-        }
-        if (/\bJSON\.stringify\s*\(/.test(body)) {
-          offenders.push({
-            file,
-            snippet: body.slice(0, 120),
-            kind: "JSON.stringify",
-          });
-        }
+function scanFile(file: string): Offender[] {
+  const sf = parseSource(file);
+  const helpers = sameFileFunctionBodies(sf);
+  const offenders: Offender[] = [];
+  for (const body of callbackBodiesOf(sf, TXN_CALLEES)) {
+    offenders.push(...scanBody(body, sf, file));
+    // One level of same-file helper inlining: a function declared in this file
+    // and called directly in the txn body runs under the same lock.
+    const seen = new Set<string>();
+    for (const call of collectCalls(body, sf, true)) {
+      const helperBody = helpers.get(call.name);
+      if (helperBody !== undefined && !seen.has(call.name)) {
+        seen.add(call.name);
+        offenders.push(...scanBody(helperBody, sf, file));
       }
     }
   }
+  return offenders;
+}
 
-  test("no offenders", () => {
+// invariant: I1 — every store write is one txn; no await / JSON serialization /
+// fetch / TypeBox check may run inside a txn body. Load-bearing sentinel for
+// daemon/test/invariant-coverage.test.ts.
+describe("I1 — no serialization / IO inside transaction bodies", () => {
+  test("no offenders in store + daemon src", () => {
+    const offenders: Offender[] = [];
+    for (const root of ROOTS) {
+      for (const file of collectSources(root)) offenders.push(...scanFile(file));
+    }
     if (offenders.length > 0) {
-      const msg = offenders.map((o) => `  ${o.file}: ${o.kind} in txn body\n    ${o.snippet}`).join("\n");
+      const msg = offenders.map((o) => `  ${o.file}:${o.line} → ${o.kind} in txn body`).join("\n");
       throw new Error(`I1 violations found:\n${msg}`);
     }
     expect(offenders).toHaveLength(0);
+  });
+
+  const scanSynthetic = (src: string): Offender[] => {
+    const sf = ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const helpers = sameFileFunctionBodies(sf);
+    const out: Offender[] = [];
+    for (const body of callbackBodiesOf(sf, TXN_CALLEES)) {
+      out.push(...scanBody(body, sf, "synthetic.ts"));
+      const seen = new Set<string>();
+      for (const call of collectCalls(body, sf, true)) {
+        const helperBody = helpers.get(call.name);
+        if (helperBody !== undefined && !seen.has(call.name)) {
+          seen.add(call.name);
+          out.push(...scanBody(helperBody, sf, "synthetic.ts"));
+        }
+      }
+    }
+    return out;
+  };
+
+  test("catches await / fetch / JSON.parse directly in a txn callback", () => {
+    const src = `this.writeTxn(() => { const x = JSON.parse(s); fetch(u); });`;
+    const kinds = scanSynthetic(src).map((o) => o.kind);
+    expect(kinds).toContain("JSON.parse");
+    expect(kinds).toContain("fetch");
+  });
+
+  test("catches JSON.stringify reached through a same-file helper", () => {
+    const src = `
+      function ser(p) { return JSON.stringify(p); }
+      this.writeTxn(() => { insert(ser(payload)); });
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("does not flag serialization inside a nested deferred callback", () => {
+    // An event listener registered inside the txn runs later, not under the lock.
+    const src = `this.writeTxn(() => { on("x", () => JSON.stringify(y)); });`;
+    expect(scanSynthetic(src)).toHaveLength(0);
+  });
+
+  test("does not inline a second level of helper", () => {
+    // `a` calls `b`; only `a`'s own body is scanned when the txn calls `a`.
+    const src = `
+      function b() { return JSON.stringify(z); }
+      function a() { return b(); }
+      this.writeTxn(() => { a(); });
+    `;
+    expect(scanSynthetic(src)).toHaveLength(0);
   });
 });

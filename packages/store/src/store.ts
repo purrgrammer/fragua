@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { INPUTS_KEY, validateRoutingPatch } from "@fragua/core";
+import { readRawInputs, validateRoutingPatch } from "@fragua/core";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
@@ -688,28 +688,34 @@ export class SqliteStore implements IEventStore {
     const startAt = performance.now();
 
     const truncated: { type: string; bytes: number }[] = [];
+    // Serialize + size-check (and, for an oversized event, build the truncation
+    // marker) BEFORE the transaction opens — the txn body must not serialize
+    // JSON under the write lock (I1). One oversized event must not tank the rest
+    // of the batch: swap its payload for a truncation marker that keeps routing
+    // info (nodeId, iteration) so UI step-grouping still works. Full content for
+    // llm turns is already in the `messages` table.
+    const prepared: { type: string; payload: string }[] = [];
+    for (const event of events) {
+      if (typeof event.type !== "string" || event.type.length === 0) {
+        throw new Error("observability event.type must be a non-empty string");
+      }
+      let payload: string;
+      try {
+        payload = this.validatePayload(event.payload);
+      } catch (err) {
+        if (!(err instanceof PayloadTooLargeError)) throw err;
+        truncated.push({ type: event.type, bytes: err.sizeBytes });
+        payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
+      }
+      prepared.push({ type: event.type, payload });
+    }
     this.writeTxn(() => {
       const row = selectRunStateRow(this.db, runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
-      for (const event of events) {
-        if (typeof event.type !== "string" || event.type.length === 0) {
-          throw new Error("observability event.type must be a non-empty string");
-        }
-        // One oversized event must not tank the rest of the batch. Swap
-        // the payload for a truncation marker that keeps routing info
-        // (nodeId, iteration) so UI step-grouping still works. Full
-        // content for llm turns is already in the `messages` table.
-        let payload: string;
-        try {
-          payload = this.validatePayload(event.payload);
-        } catch (err) {
-          if (!(err instanceof PayloadTooLargeError)) throw err;
-          truncated.push({ type: event.type, bytes: err.sizeBytes });
-          payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
-        }
+      for (const p of prepared) {
         const seq = bumpRunSeq(this.db, runId);
         seqs.push(seq);
-        insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
+        insertEventDaemon(this.db, runId, seq, p.type, p.payload, ts);
       }
     });
     if (truncated.length > 0) {
@@ -777,7 +783,7 @@ export class SqliteStore implements IEventStore {
     // is safer than the inverse. The rows are inserted inside writeTxn below.
     let effectiveRouting = params.initialRouting ?? {};
     let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
-    if (effectiveRouting[INPUTS_KEY] != null) {
+    if (readRawInputs(effectiveRouting) !== undefined) {
       const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
         this.blobs.put(sha, bytes);
       });
@@ -1003,6 +1009,15 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const role = row.content.role;
     const nodeId = row.nodeId;
+    // Pre-serialize the static fields of the fact.message_appended payload. Only
+    // `ordinal` is minted under the write lock, so it is spliced in as a bare
+    // number and no JSON runs inside the transaction (I1). Size-checked here
+    // against an upper-bound ordinal so the cap is still enforced pre-lock.
+    const messageAppendedTail = `,"role":${JSON.stringify(role)},"nodeId":${nodeId == null ? "null" : JSON.stringify(nodeId)},"iteration":${iteration}}`;
+    const messageAppendedGuardBytes = utf8ByteLength(`{"ordinal":${Number.MAX_SAFE_INTEGER}${messageAppendedTail}`);
+    if (messageAppendedGuardBytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(messageAppendedGuardBytes, MAX_EVENT_PAYLOAD_BYTES);
+    }
     let ordinal = 0;
     this.writeTxn(() => {
       // Opt-in dedup. When the caller asserts the message is replay-safe
@@ -1047,7 +1062,7 @@ export class SqliteStore implements IEventStore {
       // emits `agent.message_end`. Dedup hits don't insert a row, so
       // they don't emit either — the client's last refetch already
       // covers the existing ordinal.
-      const eventPayload = this.validatePayload({ ordinal, role, nodeId, iteration });
+      const eventPayload = `{"ordinal":${ordinal}${messageAppendedTail}`;
       const seq = bumpRunSeq(this.db, runId);
       insertEventDaemon(this.db, runId, seq, "fact.message_appended", eventPayload, ts);
     });

@@ -24,12 +24,12 @@
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; lint rule: no `await`/`fetch`/`JSON.stringify` inside `db.transaction()` bodies |
+| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback or a same-file helper it calls |
 | **I2** | No handler state outside the projection | HandlerContext API; pure-function handler signature |
 | **I3** | Intents always-appendable; facts OCC-checked | Two distinct store methods (`appendIntent`, `appendFact`) |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract | HandlerContext carries signal; pre-wired LLM/HTTP clients auto-propagate |
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay | `SideEffectEnvelope.idempotencyKey`; startup sweep emits `fact.run_quarantined` |
-| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
+| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts; every dispatch-driving read/write routes through the typed `@fragua/core` routing.ts accessors | `CHECK (length(routing) < 8192)` column constraint; AST routing-index lint (`packages/daemon/test/routing-index-discipline.test.ts`) flags element access / destructuring on any routing-named or `RoutingDict`-typed binding outside the accessor module |
 | **I7** | Event payloads ≤ 4KB | `store.ts::validatePayload` (binding 4 KiB-**byte** guard via `utf8ByteLength` = `Buffer.byteLength(s, "utf8")`); the `CHECK (length(payload) < 4096)` column constraint is a coarse code-point backstop only |
 | **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)`; replay-safe by default — same-content rewrite is a no-op, different-content rewrite at the same scope throws `ArtifactCollisionError` unless the caller passes `{ replace: true }` | Store API writes file→row in that order so orphans are always files, never dangling rows; `putArtifact` checks existing ref and either matches sha (no-op), throws collision, or overwrites with explicit replace |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages < 1,048,576 characters | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
@@ -351,8 +351,12 @@ A `HandlerSpec` registers a node kind with its `sideEffect` class (`none` / `ide
 Handlers never compute `argsHash` themselves. The framework owns canonicalisation so structurally-equal args across replay boundaries produce a stable key regardless of how the handler built them.
 
 ### Enforced at review
-- `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.
-- AST rule: no `await`/`JSON.stringify` inside `.transaction(() => ...)` bodies.
+The discipline lints are AST scans (not regex over source text), so a forbidden call can't slip past by renaming or by routing through a helper:
+- Handler discipline (`packages/core/test/handler/discipline.test.ts`): no `node:*`/`undici` import, `fetch`/`globalThis.fetch`, `Bun.*`, or `process.env` inside `handlers/` — I/O routes through `ctx`. A biome `noRestrictedImports` rule bans `node:fs`/`node:child_process`/`undici` there as a pre-commit backstop.
+- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback or a same-file helper it calls.
+- Browser safety (same file): no `node:`/`bun:`/`@fragua/store` value import transitively reachable from `packages/core/src/index.ts`.
+- SQL location (`packages/store/test/sql-location.lint.test.ts`): table DML/DQL lives only in `*-queries.ts` (a named maintenance allowlist aside).
+- Inline imports (`packages/server/test/inline-import-discipline.test.ts`): no dynamic `import()`/`require()` in production source across `packages/*/src` + `cli/bin`.
 - Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for llm-style handlers that self-bound via cost/tokens), include replay property test for external tools.
 
 ---

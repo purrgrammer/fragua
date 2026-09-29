@@ -33,6 +33,7 @@ import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
+import { hasInputs, setInputs } from "../routing.ts";
 import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
@@ -358,11 +359,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       // can't spill yet, so an oversized one gets a clean validation error
       // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
       // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
-      if (
-        effectiveInputs != null &&
-        Object.keys(effectiveInputs).length > 0 &&
-        initialRouting["inputs"] === undefined
-      ) {
+      if (effectiveInputs != null && Object.keys(effectiveInputs).length > 0 && !hasInputs(initialRouting)) {
         const structured = new Set((input.inputDecls ?? []).filter((d) => isStructuredInput(d)).map((d) => d.name));
         const nonSpillable: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(effectiveInputs)) {
@@ -392,7 +389,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
             inputErrors: [],
           };
         }
-        initialRouting["inputs"] = effectiveInputs;
+        setInputs(initialRouting, effectiveInputs);
       }
       const runId = deps.newRunId(); // always minted — no operator/client-supplied ids
       const params: EnqueueRunParams = {

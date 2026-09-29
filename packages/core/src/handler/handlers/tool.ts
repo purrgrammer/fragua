@@ -417,6 +417,7 @@ function errorMessage(err: unknown): string {
  */
 export async function runWithBun(cmd: string, signal: AbortSignal): Promise<ToolRunResult> {
   const start = Date.now();
+  // handler-discipline-allow: default injected spawner; real dispatch runs through the env-provided runner
   const proc = Bun.spawn(["sh", "-c", cmd], {
     stdout: "pipe",
     stderr: "pipe",
