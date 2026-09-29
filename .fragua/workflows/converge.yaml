@@ -1,0 +1,93 @@
+# converge.yaml — plan → implement → review (loop) → format → ci (loop) → exit.
+#
+# A work/review job for a brief that is already scoped: no triage. The brief
+# is a full work order (problem, evidence, build list, constraints), passed as
+# a file. Review rejects retarget implement; CI failures retarget fix. The run
+# ends with green CI and an uncommitted tree for the operator to accept.
+#
+#   bun run fragua run converge --input brief=@.fragua/briefs/critical-path/01-origin-gate.txt
+
+name: converge
+goal: Drive one scoped engineering brief through implement → review → CI until it converges.
+
+budget: 20.00
+budget-policy: pause
+
+inputs:
+  brief:
+    type: string
+    required: true
+    description: The full work order (pass @path to a file)
+
+defaults:
+  provider: anthropic
+  model: claude-opus-4-8
+
+steps:
+  plan:
+    type: llm
+    thread: build
+    effort: high
+    allowed-tools: [read, grep, find, ls]
+    prompt: |
+      Brief:
+      ${{ inputs.brief }}
+
+      Verify each claim the brief makes against the code (open every cited file and line; the numbers may have drifted). Then produce a numbered plan:
+        1. Files to create/modify (full paths, grouped by package), citing the symbols and lines you will touch.
+        2. Tests to add or change: path, exact test name, one assertion sentence each.
+        3. Docs the brief requires, with the section per file.
+        4. Order of work, and what you will leave out if the budget runs short (the brief may say).
+      If a brief claim is false in the code, say so and plan around what is actually there. Load the repo skill for any package you will touch (`backend`, `frontend`, `design`) before planning inside it.
+    next: implement
+
+  implement:
+    type: llm
+    thread: build
+    effort: high
+    allowed-tools: [read, write, edit, grep, find, ls, bash]
+    prompt: |
+      Realise the plan exactly, in its order. Follow AGENTS.md ground rules (no inline imports, no useless comments, handlers route I/O through ctx, pure write transactions, fold all contract versions).
+      Per modified package run its typecheck (`bun run --filter='<pkg>' typecheck`) and the tests you touched (`bun test ./packages/<pkg>/test/<file>`); cap fix cycles at 5, then `abort` with `blocked: <top error>`.
+      Realise every test and doc change the plan promised. Do not commit.
+      End with PLAN_REALISED: files / tests / docs / skipped (status each, one line each).
+    next: review
+
+  review:
+    type: llm
+    thread: build
+    retry: implement
+    max-retries: 3
+    next: format
+    effort: high
+    allowed-tools: [read, grep, find, bash]
+    prompt: |
+      Judge `git diff HEAD` against the brief and PLAN_REALISED:
+        (a) every numbered build item in the brief is realised or explicitly listed under skipped with the brief's permission;
+        (b) every promised test exists, is named as planned, and is non-trivial (run one or two);
+        (c) correctness: bugs, type errors, invariant violations (I1 pure transactions, OCC results never discarded, planners pure);
+        (d) nothing outside the brief's scope changed;
+        (e) doc claims match the code after the change.
+      `APPROVE: <one line>`, or `abort` with `REJECT: <one line>. fixes: <1-5, each one sentence>`.
+
+  format:
+    type: tool
+    run: bun run format
+    next: ci
+
+  ci:
+    type: tool
+    run: bun run ci
+    timeout-minutes: 20
+    max-retries: 5
+    on:
+      success: exit
+      fail: fix
+
+  fix:
+    type: llm
+    model: claude-sonnet-4-6
+    allowed-tools: [read, write, edit, grep, bash]
+    prompt: |
+      CI failed. Re-run `bun run ci`, read the first failure, make the minimal fix, and stop. Never disable tests, weaken assertions, relax linters, or add allowlist entries to a discipline lint to make it pass.
+    next: ci
