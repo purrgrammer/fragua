@@ -24,13 +24,17 @@ import {
   validateWorkflowModels,
 } from "@fragua/agent";
 import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
-import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
+import { createServer, daemonInfoFromStore, isLoopbackBind, registryPreflight, type ServerPorts } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, loadGlobalConfig } from "../config.ts";
 import { streamSimpleProviderTester } from "../provider-tester.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
+
+// Re-exported for `serve.test.ts` (and any consumer that imported it from here
+// before the predicate moved into @fragua/server).
+export { isLoopbackBind };
 
 /** True when running inside a `bun build --compile` binary. In that mode
  * the source tree is gone and the web bundle ships embedded; on-disk
@@ -44,14 +48,6 @@ const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
  * `portRetries` below) so a stray collision doesn't kill startup. */
 export const DEFAULT_WEB_PORT = 6767;
 export const DEFAULT_WEB_HOST = "127.0.0.1";
-/** Is this bind address reachable only from this machine? The whole
- * `127.0.0.0/8` block is loopback, not just `127.0.0.1` — an exact-match set
- * cried wolf on a `127.0.0.2` bind. `localhost` counts: it is resolver-
- * dependent in principle, but a hosts file that maps it off-loopback is a
- * compromise this warning is not the defence against. */
-export function isLoopbackBind(host: string): boolean {
-  return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
-}
 
 /** Host part of the URL we publish for a given bind address. A wildcard bind
  * is reachable as `localhost`; a concrete address must be printed verbatim
@@ -181,10 +177,12 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     typeof cfg["max-queued-runs"] === "number" && Number.isFinite(cfg["max-queued-runs"]) && cfg["max-queued-runs"] > 0
       ? cfg["max-queued-runs"]
       : undefined;
+  let bound: { host: string; port: number } | undefined;
   const app = createServer({
     cwd,
     store,
     ports,
+    boundOrigin: () => bound,
     preflightProviders: registryPreflight({
       // `getAvailable()` counts pi-ai MODELS, so a judge-only operator — whose
       // single credential is `typesafe`, which contributes no models — read as
@@ -268,6 +266,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   }
   void lastErr;
   const port = server.port ?? 0;
+  bound = { host: hostname, port };
   const origin = `http://${originHost(hostname)}:${port}`;
   if (!isLoopbackBind(hostname)) {
     console.warn(chalk.yellow(`serve: binding ${hostname} exposes the unauthenticated API beyond this machine`));

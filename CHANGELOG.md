@@ -96,6 +96,10 @@ guarantee.
 
 ### Fixed
 
+- **The HTTP server enforces a same-origin gate.** Every route now refuses a
+  cross-origin `Origin`, a foreign `Host` (DNS-rebinding defence), or a bodied
+  request that isn't `application/json`, so a web page open in the operator's
+  browser on another origin can no longer drive the control plane.
 - **`provider:` on a judge step no longer does nothing.** It parsed, validated,
   and was then dropped before the handler saw it.
 - **A judge state the provider refuses now fails the node instead of halting
