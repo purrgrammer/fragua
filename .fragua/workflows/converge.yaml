@@ -10,7 +10,7 @@
 name: converge
 goal: Drive one scoped engineering brief through implement → review → CI until it converges.
 
-budget: 20.00
+budget: 60.00
 budget-policy: pause
 
 inputs:
