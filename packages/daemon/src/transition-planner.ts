@@ -722,196 +722,218 @@ export function rewriteTerminalFacts(args: {
   // Copy up front so every rewrite below (including the provider-auto-retry
   // branch's in-place facts[i]/push) operates on our list, never the caller's.
   let facts = [...args.facts];
-
-  // A goal-gate retarget's node_started opens the NEXT pass: the epoch bump
-  // (`goal_gates.__retries`) rides this same commit's routingPatch, but
-  // resultToFacts stamped the pre-bump value read from state — leaving the
-  // target's pass-N projection entry "running" forever while every later
-  // fact for it carries pass N+1. Stamp the post-bump epoch.
-  if (goalGateRetargetTarget !== undefined && goalGateRetriesPatch !== undefined) {
-    facts = facts.map((f) =>
-      f.type === "fact.node_started" && f.payload.nodeId === goalGateRetargetTarget
-        ? { ...f, payload: { ...f.payload, pass: goalGateRetriesPatch } }
-        : f,
-    );
-  }
-
-  // R3 — pause defers when paired with steer/hitl: keep the
-  // node_completed accounting, then pause instead of advancing to
-  // the next node. wakePending will rouse the run on the next
-  // intent.human_input. Terminal halts (run_terminated{errored}) beat pause;
-  // we only swap the success continuations (node_started /
-  // run_terminated{completed}).
-  // Mid-dispatch pause races (intent arrives AFTER the fold but
-  // BEFORE the handler returned) flow through the abort-throw path:
-  // the llm agent rethrows on signal-tripped + aborted-stream
-  // so the executor's catch block writes fact.node_aborted, leaves
-  // the run running, and the next dispatch's fold consumes the
-  // pause intent normally.
-  if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
-    const isSuccessContinuation = (f: FactEvent): boolean =>
-      f.type === "fact.node_started" || (f.type === "fact.run_terminated" && f.payload.status === "completed");
-    const swapped = facts.some(isSuccessContinuation);
-    if (swapped) {
-      facts = facts.filter((f) => !isSuccessContinuation(f));
-      facts.push({
-        type: "fact.run_paused",
-        payload: {
-          reason: "operator",
-          nodeId: state.currentNode ?? "",
-        },
-      });
-    }
-  }
-
-  // Retry pause: swap fact.node_started for
-  // fact.run_paused{reason:"handler_retry"} so the run releases its
-  // concurrency slot during the backoff window. node_completed is
-  // preserved (metrics + the nextNode=currentNode routing fact).
-  // wake-pending re-queues the run once `resumeAt` has elapsed.
-  // An operator pause (shouldPauseAfterDispatch) takes precedence over
-  // backoff: skip the retry-pause arm so we don't append a second
-  // fact.run_paused{reason:"handler_retry"} — that reason is in
-  // AUTO_WAKE_PAUSE_REASONS and would let wake-pending auto-resume,
-  // silently cancelling the operator's manual pause.
-  if (retryPause !== undefined && !decision.shouldPauseAfterDispatch) {
-    facts = facts.filter((f) => f.type !== "fact.node_started");
-    facts.push({
-      type: "fact.run_paused",
-      payload: {
-        reason: "handler_retry",
-        nodeId: retryPause.nodeId,
-        attempt: retryPause.attempt,
-        delayMs: retryPause.delayMs,
-        resumeAt: retryPause.resumeAt,
-        maxRetries: retryPause.maxRetries,
-      },
-    });
-  }
-
-  // Stage 3 (§3.1): retry exhaustion swap. Strip fact.node_started
-  // (the run pauses instead of advancing) and emit
-  // fact.run_paused{reason:"max_retries"}. fact.node_completed is
-  // preserved so the metrics + the nextNode=currentNode routing fact
-  // are recorded; an operator who clicks Resume re-dispatches the
-  // same (nodeId, iteration) with
-  // the retry counter intact (§4). The reason is not in
-  // AUTO_WAKE_PAUSE_REASONS so the reducer projects status="paused"
-  // (operator must act).
-  if (retriesExhaustedPause !== undefined) {
-    facts = facts.filter((f) => f.type !== "fact.node_started");
-    facts.push({
-      type: "fact.run_paused",
-      payload: {
-        reason: "max_retries",
-        nodeId: retriesExhaustedPause.nodeId,
-        currentLimit: retriesExhaustedPause.currentLimit,
-        attempts: retriesExhaustedPause.attempts,
-      },
-    });
-  }
-
-  // Provider exhausted: rewrite the existing
-  // fact.run_paused{reason:"provider_error"} (from result-to-facts'
-  // pause_provider arm) to a recoverable
-  // fact.run_paused{reason:"provider_exhausted"} pause. Stage 3 of
-  // recoverable-budget-pause.md flipped this from terminal halt to
-  // paused — operators may know the underlying transport issue is
-  // fixed and want to retry the chain. cumulativeMs is best-effort
-  // 0 because the executor doesn't track elapsed time across the
-  // chain locally; the per-attempt facts in fact.provider_retry_attempted
-  // carry the timeline.
-  if (providerExhausted !== undefined) {
-    facts = facts.filter((f) => f.type !== "fact.run_paused");
-    facts.push({
-      type: "fact.run_paused",
-      payload: {
-        reason: "provider_exhausted",
-        nodeId: state.currentNode ?? "",
-        attempts: providerExhausted.attempt,
-        cumulativeMs: 0,
-      },
-    });
-  }
-
-  // Provider auto-retry: rewrite the fact.run_paused payload from
-  // reason="provider_error" to reason="provider_retry" with
-  // attempt + resumeAt so the reducer projects status to
-  // `paused_auto` and the wake-pending sweeper auto-resumes once
-  // `resumeAt` has elapsed. The chain is recorded separately via
-  // fact.provider_retry_attempted (one per attempt).
-  if (providerRetryDecision?.kind === "auto-retry") {
-    for (let i = 0; i < facts.length; i++) {
-      const f = facts[i]!;
-      if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
-        facts[i] = {
-          type: "fact.run_paused",
-          payload: {
-            reason: "provider_retry",
-            nodeId: f.payload.nodeId,
-            httpStatus: f.payload.httpStatus,
-            provider: f.payload.provider,
-            errorMessage: f.payload.errorMessage,
-            attempt: providerRetryDecision.attempt,
-            resumeAt: providerRetryDecision.resumeAt,
-          },
-        };
-        break;
-      }
-    }
-    facts.push({
-      type: "fact.provider_retry_attempted",
-      payload: {
-        nodeId: state.currentNode ?? "",
-        attempt: providerRetryDecision.attempt,
-        httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
-        delayMs: providerRetryDecision.delayMs,
-      },
-    });
-  }
-
-  // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"}
-  // so the run releases its slot and waits for `intent.budget_adjusted`
-  // + `intent.resume`. node_completed is preserved (metrics + the
-  // nextNode routing fact). Workflow-declared terminal exits
-  // (fact.run_terminated) are preserved — the run is
-  // finished and budget enforcement on a clean exit is moot.
-  if (budgetPause !== undefined) {
-    const alreadyTerminal = facts.some((f) => f.type === "fact.run_terminated");
-    if (!alreadyTerminal) {
-      facts = facts.filter((f) => f.type !== "fact.node_started");
-      facts.push({
-        type: "fact.run_paused",
-        payload: {
-          reason: "budget",
-          nodeId: state.currentNode ?? "",
-          scope: budgetPause.scope,
-          metric: budgetPause.metric,
-          limit: budgetPause.limit,
-          actual: budgetPause.actual,
-        },
-      });
-    }
-  }
-
-  // Budget halt: preserve fact.node_completed (so projection +
-  // per-node cost rollup land), then replace whatever transition fact
-  // came (fact.run_terminated{completed} for terminal-success,
-  // {errored,aborted_exit} for terminal-fail, fact.node_started for non-
-  // terminal) with fact.run_terminated{errored,reason:"budget"}. Mirrors
-  // the budgetPause shape immediately above — same fact-list mutation,
-  // halt instead of pause.
-  if (budgetHaltDetail !== undefined) {
-    facts = facts.filter((f) => f.type !== "fact.run_terminated" && f.type !== "fact.node_started");
-    const haltPayload: { status: "errored"; reason: "budget"; detail?: string } = {
-      status: "errored",
-      reason: "budget",
-    };
-    if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
-    facts.push({ type: "fact.run_terminated", payload: haltPayload });
-  }
-
+  facts = stampGoalGateRetarget(facts, goalGateRetargetTarget, goalGateRetriesPatch);
+  facts = deferPauseAfterDispatch(facts, result, decision, state);
+  facts = swapRetryPause(facts, retryPause, decision);
+  facts = swapRetriesExhausted(facts, retriesExhaustedPause);
+  facts = rewriteProviderExhausted(facts, providerExhausted, state);
+  facts = rewriteProviderAutoRetry(facts, providerRetryDecision, result, state);
+  facts = swapBudgetPause(facts, budgetPause, state);
+  facts = swapBudgetHalt(facts, budgetHaltDetail);
   return facts;
+}
+
+// A goal-gate retarget's node_started opens the NEXT pass: the epoch bump
+// (`goal_gates.__retries`) rides this same commit's routingPatch, but
+// resultToFacts stamped the pre-bump value read from state — leaving the
+// target's pass-N projection entry "running" forever while every later
+// fact for it carries pass N+1. Stamp the post-bump epoch.
+function stampGoalGateRetarget(
+  facts: FactEvent[],
+  target: string | undefined,
+  retriesPatch: number | undefined,
+): FactEvent[] {
+  if (target === undefined || retriesPatch === undefined) return facts;
+  return facts.map((f) =>
+    f.type === "fact.node_started" && f.payload.nodeId === target
+      ? { ...f, payload: { ...f.payload, pass: retriesPatch } }
+      : f,
+  );
+}
+
+// R3 — pause defers when paired with steer/hitl: keep the node_completed
+// accounting, then pause instead of advancing to the next node. wakePending
+// will rouse the run on the next intent.human_input. Terminal halts
+// (run_terminated{errored}) beat pause; we only swap the success continuations
+// (node_started / run_terminated{completed}). Mid-dispatch pause races (intent
+// arrives AFTER the fold but BEFORE the handler returned) flow through the
+// abort-throw path: the llm agent rethrows on signal-tripped + aborted-stream
+// so the executor's catch block writes fact.node_aborted, leaves the run
+// running, and the next dispatch's fold consumes the pause intent normally.
+function deferPauseAfterDispatch(
+  facts: FactEvent[],
+  result: HandlerResult,
+  decision: ProceedDecision,
+  state: RunState,
+): FactEvent[] {
+  if (!(result.kind === "transition" && decision.shouldPauseAfterDispatch)) return facts;
+  const isSuccessContinuation = (f: FactEvent): boolean =>
+    f.type === "fact.node_started" || (f.type === "fact.run_terminated" && f.payload.status === "completed");
+  if (!facts.some(isSuccessContinuation)) return facts;
+  const next = facts.filter((f) => !isSuccessContinuation(f));
+  next.push({ type: "fact.run_paused", payload: { reason: "operator", nodeId: state.currentNode ?? "" } });
+  return next;
+}
+
+// Retry pause: swap fact.node_started for fact.run_paused{reason:"handler_retry"}
+// so the run releases its concurrency slot during the backoff window.
+// node_completed is preserved (metrics + the nextNode=currentNode routing fact);
+// wake-pending re-queues the run once `resumeAt` has elapsed. An operator pause
+// (shouldPauseAfterDispatch) takes precedence over backoff: skip this arm so we
+// don't append a second fact.run_paused{reason:"handler_retry"} — that reason is
+// in AUTO_WAKE_PAUSE_REASONS and would let wake-pending auto-resume, silently
+// cancelling the operator's manual pause.
+function swapRetryPause(
+  facts: FactEvent[],
+  retryPause: RetryPause | undefined,
+  decision: ProceedDecision,
+): FactEvent[] {
+  if (retryPause === undefined || decision.shouldPauseAfterDispatch) return facts;
+  const next = facts.filter((f) => f.type !== "fact.node_started");
+  next.push({
+    type: "fact.run_paused",
+    payload: {
+      reason: "handler_retry",
+      nodeId: retryPause.nodeId,
+      attempt: retryPause.attempt,
+      delayMs: retryPause.delayMs,
+      resumeAt: retryPause.resumeAt,
+      maxRetries: retryPause.maxRetries,
+    },
+  });
+  return next;
+}
+
+// Stage 3 (§3.1): retry exhaustion swap. Strip fact.node_started (the run pauses
+// instead of advancing) and emit fact.run_paused{reason:"max_retries"}.
+// fact.node_completed is preserved so the metrics + the nextNode=currentNode
+// routing fact are recorded; an operator who clicks Resume re-dispatches the
+// same (nodeId, iteration) with the retry counter intact (§4). The reason is
+// not in AUTO_WAKE_PAUSE_REASONS so the reducer projects status="paused".
+function swapRetriesExhausted(
+  facts: FactEvent[],
+  retriesExhaustedPause: RetriesExhaustedPause | undefined,
+): FactEvent[] {
+  if (retriesExhaustedPause === undefined) return facts;
+  const next = facts.filter((f) => f.type !== "fact.node_started");
+  next.push({
+    type: "fact.run_paused",
+    payload: {
+      reason: "max_retries",
+      nodeId: retriesExhaustedPause.nodeId,
+      currentLimit: retriesExhaustedPause.currentLimit,
+      attempts: retriesExhaustedPause.attempts,
+    },
+  });
+  return next;
+}
+
+// Provider exhausted: rewrite the existing fact.run_paused{reason:"provider_error"}
+// (from result-to-facts' pause_provider arm) to a recoverable
+// fact.run_paused{reason:"provider_exhausted"} pause. Stage 3 of
+// recoverable-budget-pause.md flipped this from terminal halt to paused —
+// operators may know the underlying transport issue is fixed and want to retry
+// the chain. cumulativeMs is best-effort 0 because the executor doesn't track
+// elapsed time across the chain locally; the per-attempt facts in
+// fact.provider_retry_attempted carry the timeline.
+function rewriteProviderExhausted(
+  facts: FactEvent[],
+  providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined,
+  state: RunState,
+): FactEvent[] {
+  if (providerExhausted === undefined) return facts;
+  const next: FactEvent[] = facts.filter((f) => f.type !== "fact.run_paused");
+  next.push({
+    type: "fact.run_paused",
+    payload: {
+      reason: "provider_exhausted",
+      nodeId: state.currentNode ?? "",
+      attempts: providerExhausted.attempt,
+      cumulativeMs: 0,
+    },
+  });
+  return next;
+}
+
+// Provider auto-retry: rewrite the fact.run_paused payload from
+// reason="provider_error" to reason="provider_retry" with attempt + resumeAt so
+// the reducer projects status to `paused_auto` and the wake-pending sweeper
+// auto-resumes once `resumeAt` has elapsed. The chain is recorded separately via
+// fact.provider_retry_attempted (one per attempt).
+function rewriteProviderAutoRetry(
+  facts: FactEvent[],
+  providerRetryDecision: ProviderRetryDecision | undefined,
+  result: HandlerResult,
+  state: RunState,
+): FactEvent[] {
+  if (providerRetryDecision?.kind !== "auto-retry") return facts;
+  const next = [...facts];
+  for (let i = 0; i < next.length; i++) {
+    const f = next[i]!;
+    if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
+      next[i] = {
+        type: "fact.run_paused",
+        payload: {
+          reason: "provider_retry",
+          nodeId: f.payload.nodeId,
+          httpStatus: f.payload.httpStatus,
+          provider: f.payload.provider,
+          errorMessage: f.payload.errorMessage,
+          attempt: providerRetryDecision.attempt,
+          resumeAt: providerRetryDecision.resumeAt,
+        },
+      };
+      break;
+    }
+  }
+  next.push({
+    type: "fact.provider_retry_attempted",
+    payload: {
+      nodeId: state.currentNode ?? "",
+      attempt: providerRetryDecision.attempt,
+      httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
+      delayMs: providerRetryDecision.delayMs,
+    },
+  });
+  return next;
+}
+
+// Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"} so
+// the run releases its slot and waits for `intent.budget_adjusted` +
+// `intent.resume`. node_completed is preserved (metrics + the nextNode routing
+// fact). Workflow-declared terminal exits (fact.run_terminated) are preserved —
+// the run is finished and budget enforcement on a clean exit is moot.
+function swapBudgetPause(facts: FactEvent[], budgetPause: BudgetPause | undefined, state: RunState): FactEvent[] {
+  if (budgetPause === undefined) return facts;
+  if (facts.some((f) => f.type === "fact.run_terminated")) return facts;
+  const next = facts.filter((f) => f.type !== "fact.node_started");
+  next.push({
+    type: "fact.run_paused",
+    payload: {
+      reason: "budget",
+      nodeId: state.currentNode ?? "",
+      scope: budgetPause.scope,
+      metric: budgetPause.metric,
+      limit: budgetPause.limit,
+      actual: budgetPause.actual,
+    },
+  });
+  return next;
+}
+
+// Budget halt: preserve fact.node_completed (so projection + per-node cost
+// rollup land), then replace whatever transition fact came
+// (fact.run_terminated{completed} for terminal-success, {errored,aborted_exit}
+// for terminal-fail, fact.node_started for non-terminal) with
+// fact.run_terminated{errored,reason:"budget"}. Mirrors the budgetPause shape —
+// same fact-list mutation, halt instead of pause.
+function swapBudgetHalt(facts: FactEvent[], budgetHaltDetail: string | undefined): FactEvent[] {
+  if (budgetHaltDetail === undefined) return facts;
+  const next: FactEvent[] = facts.filter((f) => f.type !== "fact.run_terminated" && f.type !== "fact.node_started");
+  const haltPayload: { status: "errored"; reason: "budget"; detail?: string } = { status: "errored", reason: "budget" };
+  if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
+  next.push({ type: "fact.run_terminated", payload: haltPayload });
+  return next;
 }
 
 /** Bytes of the routing column held back for the rest of THIS turn's patch —

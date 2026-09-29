@@ -372,12 +372,14 @@ The executor loop (`runExecutor`) claims the next run (`claimNextRun(MAX_CONCURR
 ### 6.1 Executor module decomposition
 
 `packages/daemon/src/executor.ts` is the orchestration entry point
-(`runExecutor`, `runOne`, the `dispatchOne` turn loop) and the public
-facade — call sites and tests import `runExecutor`, `runOne`,
+(`runExecutor`, `runOne`, and the per-run turn loop that walks `dispatchOne`)
+and the public facade — call sites and tests import `runExecutor`, `runOne`,
 `ExecutorOpts`, `makeLeakBudget`, and the re-exported `classifyAbortCause`
-/ `buildSubstitutionArgs` / `resolveBackoff` from it. The behaviour-bearing
-leaf logic lives in focused sibling modules, each owning one concern and
-reaching only into the store API:
+/ `buildSubstitutionArgs` / `resolveBackoff` / `mergeFanoutAppendOpts` from it.
+`runOneInner` assembles a `RunDeps` bundle plus a fresh `RunTurnState` and
+threads them through the turn functions below; it holds no mutable closure state
+of its own. The behaviour-bearing leaf logic lives in focused sibling modules,
+each owning one concern and reaching only into the store API:
 
 - **Pure decision core** (no store / clock / RNG / I/O — injected `now` /
   `random` / `leakedAt`, guarded by `decision-core-discipline.test.ts`;
@@ -390,6 +392,29 @@ reaching only into the store API:
   seed/join/dispatch frontier decision; plus the run-level disposition helpers
   `noteDisposition` / `planBranchTerminal` / `planBranchAbortLoop`). Each
   returns a plan the driver applies.
+- `run-turn-state.ts` — the explicit `RunTurnState` record (the
+  consecutive-abort streak, per-branch abort streaks, the fan-out disposition +
+  pending-warn slots, the lazy graph / outputs caches, the last committed
+  fan-out projection, the provisioned env) with a `create()` and small
+  updaters. It replaces `runOneInner`'s closure locals and is threaded by
+  reference into each turn. Pure data — no store handle, no clock, no I/O
+  (guarded by `decision-core-discipline.test.ts`).
+- `dispatch-wiring.ts` — the per-dispatch wiring both the linear and
+  fan-out-branch paths use: `buildDispatchContext` (compose the abort signals +
+  deadlines, the pre-commit recorder, the streaming observability sink, the
+  usage accumulator, tool scoping, and the handler context), plus the `RunDeps`
+  dependency bundle, the store-reading lazy graph / outputs caches
+  (`graphFor` / `outputsFor` / `invalidateOutputsCacheIf`), and
+  `mergeFanoutAppendOpts`. The two paths once carried near-identical copies of
+  this block; one builder keeps them from drifting.
+- `dispatch-turn.ts` — `dispatchOne` (the linear turn) and its commit arms:
+  the contract-version entry gate, the cancel / operator-pause commits, the
+  run-start emit + auto-title seed, the dispatch-started marker, the `max_loops`
+  gate, the handler dispatch, and the leak / abort / transition commits. It
+  delegates a `type: parallel` node to `runFanout`.
+- `fanout.ts` — the parallel fan-out region driver: `runFanout` (the on-log
+  reactive frontier superstep), `executeBranchNode`, and the serialized
+  `commitFanoutFact` linearization lane. See §6.2.
 - `executor-helpers.ts` — pure, dependency-light helpers: abort
   classification, the leak-watchdog sentinel, routing/number/string
   coercers, the per-node retry-count reader (`internal.retry_count.<nodeId>`),
@@ -412,7 +437,9 @@ reaching only into the store API:
 
 Event-store invariants are unchanged across the split: facts stay
 OCC-checked, observability stays best-effort and reducer-free, and handler
-I/O still routes through `ctx`.
+I/O still routes through `ctx`. A source-scan lint
+(`function-length.lint.test.ts`) keeps every function under `packages/daemon/src`
+at or below 200 lines, so no turn function silently re-grows into a monolith.
 
 ### 6.2 Parallel fan-out execution
 
