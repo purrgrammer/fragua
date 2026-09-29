@@ -79,7 +79,7 @@ Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immedi
 **Resolution.** A per-run `next_seq` counter on `run_state` is bumped atomically inside each append (the bumped value seeds the event's `seq`) — no scan — and combined with `BEGIN IMMEDIATE`, concurrent appends serialize cleanly without index pressure. I10 captures this.
 
 ### 1.6 Zombie daemon after lock reclaim
-Daemon lock has TTL; on takeover another daemon TTL-reclaims it and re-dispatches the run. The reclaimed (zombie) daemon does **not** re-read `daemon_lock` inside its turn loop — there is no loop-internal lock check. It is stopped only when its *next* fact commit fails OCC against the version the new dispatch has since advanced: the `ConcurrencyError` retries the turn, and once the OCC ceiling saturates the run halts via the `occ_exhausted` path (`packages/daemon/src/occ-append.ts`). Until that next commit, the zombie keeps running its current node and may keep burning provider tokens. This is an accepted trade — status/version is the only fence, there is no dispatch-identity token that would let the zombie notice the reclaim sooner (see the ACCEPTED TRADE note in `packages/daemon/src/recorder.ts`).
+Daemon lock has TTL; on takeover another daemon TTL-reclaims it and re-dispatches the run. The reclaimed (zombie) daemon does **not** re-read `daemon_lock` inside its turn loop — there is no loop-internal lock check. It is stopped only when its *next* fact commit fails OCC against the version the new dispatch has since advanced: the `ConcurrencyError` retries the turn, and once the OCC ceiling saturates the run halts via the `occ_exhausted` path (`packages/daemon/src/occ-append.ts`). Until that next commit, the zombie keeps running its current node and may keep burning provider tokens. This is an accepted trade — status/version is the only fence, there is no dispatch-identity token that would let the zombie notice the reclaim sooner (see the ACCEPTED TRADE note in `packages/daemon/src/recorder.ts`). The fence is now uniform across *every* fact-choosing commit path: the linear pre-dispatch pauses/halts (engine-incompatible, unparseable, worktree, `max_loops`, leak, abort-loop) and the fan-out dispositions all commit through the single `commitParkOrTerminal`, so a lost OCC race re-drives the turn or escalates to `occ_exhausted` instead of silently dropping the fact and leaving the run `running` with no executor until the next daemon-restart sweep.
 
 ### 1.7 Heartbeat outlives stuck executor
 Consolidated into the supervisor fiber (1.3). Heartbeat, intent detection, and stuck-node detection share one 50ms tick. If the executor fiber wedges in a tight sync loop, the event loop is blocked — supervisor also stops, lock stales, another daemon reclaims. Belt and suspenders via handler-level `AbortSignal.timeout()` (§5).
@@ -379,6 +379,17 @@ facade — call sites and tests import `runExecutor`, `runOne`,
 leaf logic lives in focused sibling modules, each owning one concern and
 reaching only into the store API:
 
+- **Pure decision core** (no store / clock / RNG / I/O — injected `now` /
+  `random` / `leakedAt`, guarded by `decision-core-discipline.test.ts`;
+  SPEC §3.11 / I12): `transition-planner.ts` (`planTransition` — the
+  successful turn), `abort-planner.ts` (`planAbort` for the abort arm +
+  `planAbortLoop` for the trend-warn / ceiling-pause), `predispatch-planner.ts`
+  (`planPreDispatch` — the contract-version gate, unparseable-workflow refusal,
+  worktree-provision failure, and `max_loops` ceiling; `planLeakHalt` — the
+  leaked-handler halt), and `fanout-planner.ts` (`planFanoutStep` — the
+  seed/join/dispatch frontier decision; plus the run-level disposition helpers
+  `noteDisposition` / `planBranchTerminal` / `planBranchAbortLoop`). Each
+  returns a plan the driver applies.
 - `executor-helpers.ts` — pure, dependency-light helpers: abort
   classification, the leak-watchdog sentinel, routing/number/string
   coercers, the per-node retry-count reader (`internal.retry_count.<nodeId>`),
@@ -386,9 +397,15 @@ reaching only into the store API:
   observability, substitution-arg building, backoff / max-retries resolution,
   the routing-patch merge, and `sleep`. Unit-tested in isolation.
 - `occ-append.ts` — `tryAppendFact` (the OCC append primitive, conflict →
-  `false`) and `makeOccController` (the per-`runOne` conflict controller:
+  `false`), `makeOccController` (the per-`runOne` conflict controller:
   warn at 2, halt with `occ_exhausted` at 3, with the halt append itself
-  retried against fresh state).
+  retried against fresh state), and the single `commitParkOrTerminal` shared by
+  the linear and fan-out paths: it commits a run-parking / terminal fact
+  HONESTLY — on a lost OCC race it re-reads (return terminal if the run already
+  left `running`), else drives the controller (halt `occ_exhausted` at the
+  ceiling, else park the facts for a re-commit next turn). No call site discards
+  a commit result, so a conflicted halt/pause can no longer strand the run
+  `running` (§1.6). Owns `DispatchOutcome`, re-exported from `executor.ts`.
 - `snapshot-service.ts` — `captureBoundarySnapshot` (per-step / HITL Diff
   snapshots) and `disposeTerminalWorktree` (terminal snapshot then dispose,
   gated on the `fact.snapshot_recorded` append landing).

@@ -60,17 +60,31 @@ import {
   routingString,
   sleep,
 } from "./executor-helpers.ts";
-import { type FanoutPlan, planFanoutStep } from "./fanout-planner.ts";
+import {
+  type FanoutPlan,
+  noteDisposition,
+  planBranchAbortLoop,
+  planBranchTerminal,
+  planFanoutStep,
+} from "./fanout-planner.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 
 // Compatibility re-exports: these helpers moved to executor-helpers.ts but
 // are imported from executor.ts by tests and other call sites.
 export { buildSubstitutionArgs, classifyAbortCause, resolveBackoff } from "./executor-helpers.ts";
+export type { DispatchOutcome } from "./occ-append.ts";
 
-import { planAbort } from "./abort-planner.ts";
+import { planAbort, planAbortLoop } from "./abort-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
-import { makeOccController, tryAppendFact } from "./occ-append.ts";
+import {
+  type CommitResult,
+  commitParkOrTerminal,
+  type DispatchOutcome,
+  makeOccController,
+  tryAppendFact,
+} from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
+import { planLeakHalt, planPreDispatch } from "./predispatch-planner.ts";
 import { CommittingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts } from "./result-to-facts.ts";
 import { captureBoundarySnapshot, disposeTerminalWorktree } from "./snapshot-service.ts";
@@ -80,13 +94,6 @@ import type { Provisioner } from "./worktree-provisioner.ts";
 
 type HandlerResult = core.HandlerResult;
 type LlmCallFn = core.LlmCallFn;
-
-/**
- * Outcome of a single dispatch turn. `dispatchOne` returns this so the
- * outer loop can decide whether to continue iterating or exit (because
- * the run reached a terminal / paused state, or another short-circuit).
- */
-export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
 
 /** Default cap on concurrent in-flight fan-out sub-nodes when a `parallel` node
  * declares no `concurrency:`. Bounds agent loops + provider connections opened
@@ -120,11 +127,6 @@ function applyOptionalCtxFields(
   if (runEnv !== undefined) ctxOpts.env = runEnv;
   if (judgeClient !== undefined) ctxOpts.judge = judgeClient;
 }
-
-/** Outcome of a serialized fan-out commit. A tagged `false`: `occ` is genuine
- * OCC exhaustion (feed the conflict controller), `status` is the run leaving
- * `running` under us (don't — it's already parked). */
-type CommitResult = { ok: true } | { ok: false; reason: "occ" | "status" };
 
 /** Bounded-concurrency gate for fan-out sub-node dispatch. A slot transfers
  * directly to the next waiter on `release()` so `active` never exceeds `limit`. */
@@ -520,50 +522,35 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
-    // Event-contract version gate. A run pins EVENT_CONTRACT_VERSION at
-    // enqueue; pins in [MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]
-    // fold cleanly. The contract version is DISTINCT from the DB-migration
-    // counter (CURRENT_SCHEMA_VERSION) — it bumps only on real fact/intent/
-    // reducer changes, so projection-only migrations never trip this gate.
-    // An out-of-range pin is RECOVERABLE, not terminal — park the run as
-    // `paused{engine_incompatible}` instead of killing it (a downgraded daemon
-    // gets upgraded; an imported run lands on a store that later catches up).
-    // The payload carries the window, so the operator/UI infers too-new
-    // (`pinnedVersion > supportedMax`) vs too-old (`< supportedMin`) without a
-    // second reason. Capability-gated auto-wake for the too-new arm is deferred
-    // — see docs/proposals/archive/event-contract-version.md §3.2.
-    if (state.contractVersion < MIN_COMPATIBLE_CONTRACT_VERSION || state.contractVersion > EVENT_CONTRACT_VERSION) {
-      await tryAppendFact(opts.store, runId, state.version, [
+    // Entry gate — the event-contract version gate and the unparseable-workflow
+    // refusal, both decided by the pure pre-dispatch planner (predispatch-planner.ts)
+    // and applied here. Parse the graph first so `workflowUnparseable` is
+    // populated for the planner; a contract-incompatible pin still wins by
+    // precedence (the parse is a harmless cache fill either way). The
+    // engine_incompatible arm is a RECOVERABLE pause carrying the fold window;
+    // the unparseable arm halts a broken workflow the validator should have
+    // caught at enqueue.
+    const contractWindow = { min: MIN_COMPATIBLE_CONTRACT_VERSION, max: EVENT_CONTRACT_VERSION };
+    if (workflowSha != null) graphFor(workflowSha);
+    const entryGate = planPreDispatch({
+      state,
+      contractWindow,
+      ...(workflowUnparseable ? { graphParseError: workflowParseError ?? "" } : {}),
+      dispatches: 0,
+      effectiveMaxLoops: Number.POSITIVE_INFINITY,
+    });
+    if (entryGate.terminal) {
+      return commitParkOrTerminal(
         {
-          type: "fact.run_paused",
-          payload: {
-            reason: "engine_incompatible",
-            pinnedVersion: state.contractVersion,
-            supportedMin: MIN_COMPATIBLE_CONTRACT_VERSION,
-            supportedMax: EVENT_CONTRACT_VERSION,
-          },
+          store: opts.store,
+          runId,
+          occ,
+          nodeId: state.currentNode ?? "",
+          iteration: nodeRetryCount(state.routing, state.currentNode ?? ""),
+          expectedVersion: state.version,
         },
-      ]);
-      return { kind: "terminal" };
-    }
-
-    // Unparseable workflow refusal. A workflow whose source won't parse
-    // can't have its edges resolved, so the executor's "graph unavailable
-    // → route to __end__" fallback would otherwise let the run complete
-    // as a success — masking a broken workflow. Halt instead. (The
-    // validator catches this at `fragua validate` / enqueue; this is the
-    // last-resort runtime guard for a row that slipped through.)
-    if (workflowSha != null) {
-      graphFor(workflowSha);
-      if (workflowUnparseable) {
-        await tryAppendFact(opts.store, runId, state.version, [
-          {
-            type: "fact.run_terminated",
-            payload: { status: "errored", reason: "error", detail: workflowParseFailedDetail(workflowParseError) },
-          },
-        ]);
-        return { kind: "terminal" };
-      }
+        entryGate.facts,
+      );
     }
 
     // Fold unapplied intents into a single decision.
@@ -703,17 +690,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           { type: "daemon.worktree_provisioned", payload: { runId, ok: false, errorDetail: detail } },
           { runId },
         );
-        await tryAppendFact(opts.store, runId, state.version, [
+        const worktreeHalt = planPreDispatch({
+          state,
+          contractWindow,
+          worktreeError: detail,
+          dispatches: 0,
+          effectiveMaxLoops: Number.POSITIVE_INFINITY,
+        });
+        return commitParkOrTerminal(
           {
-            type: "fact.run_terminated",
-            payload: {
-              status: "errored",
-              reason: "worktree_error",
-              detail: `worktree_provision_failed: ${detail}`,
-            },
+            store: opts.store,
+            runId,
+            occ,
+            nodeId: state.currentNode ?? "",
+            iteration: nodeRetryCount(state.routing, state.currentNode ?? ""),
+            expectedVersion: state.version,
           },
-        ]);
-        return { kind: "terminal" };
+          worktreeHalt.facts,
+        );
       }
     }
 
@@ -884,18 +878,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // resume after a pause already starts at 0; the override raises
     // the ceiling for *this* dispatch loop's pass.
     const effectiveMaxLoops = getLimits(effectiveRouting).maxLoops || maxLoops;
-    if (dispatches >= effectiveMaxLoops) {
-      await tryAppendFact(opts.store, runId, state.version, [
+    const loopGate = planPreDispatch({ state, contractWindow, dispatches, effectiveMaxLoops });
+    if (loopGate.terminal) {
+      return commitParkOrTerminal(
         {
-          type: "fact.run_paused",
-          payload: {
-            reason: "max_loops",
-            currentLimit: effectiveMaxLoops,
-            dispatches,
-          },
+          store: opts.store,
+          runId,
+          occ,
+          nodeId: currentNode,
+          iteration: nodeRetryCount(state.routing, currentNode),
+          expectedVersion: state.version,
         },
-      ]);
-      return { kind: "terminal" };
+        loopGate.facts,
+      );
     }
     dispatches++;
 
@@ -1113,23 +1108,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // flush handles mid-handler streaming, this drain handles the tail.
     if (leakedTimeout) {
       obs.flush();
-      await tryAppendFact(opts.store, runId, recorder.version(), [
-        {
-          type: "fact.handler_timeout_leaked",
-          payload: { nodeId: currentNode, leakedAt: clock() },
-        },
-        {
-          type: "fact.run_terminated",
-          payload: { status: "errored", reason: "error", detail: "handler_leaked" },
-        },
-      ]);
+      const leakHalt = planLeakHalt({ nodeId: currentNode, leakedAt: clock() });
+      const leakOutcome = await commitParkOrTerminal(
+        { store: opts.store, runId, occ, nodeId: currentNode, iteration, expectedVersion: recorder.version() },
+        leakHalt.facts,
+      );
       // Bound the blast radius of misbehaving handlers across the
       // process lifetime. Per-process counter; once we cross the limit
       // the daemon entrypoint trips its shutdown controller via the
       // `onLeakLimitExceeded` callback, the singleton + sweep pick up
       // the slack on restart.
       leakBudget.recordLeak(runId, currentNode);
-      return { kind: "terminal" };
+      return leakOutcome;
     }
 
     if (wasAborted) {
@@ -1171,48 +1161,57 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         return { kind: "terminal" };
       }
       // Reactive-budget halt/pause + timeout-exhausted: one atomic terminal
-      // commit (the terminal/pause fact rides alongside node_aborted).
+      // commit (the terminal/pause fact rides alongside node_aborted) — through
+      // the shared park-or-terminal so a lost OCC race re-drives instead of
+      // stranding the run `running`.
       if (abortPlan.outcome === "halt" || abortPlan.outcome === "pause") {
-        await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
-        return { kind: "terminal" };
+        return commitParkOrTerminal(
+          {
+            store: opts.store,
+            runId,
+            occ,
+            nodeId: currentNode,
+            iteration,
+            expectedVersion: recorder.version(),
+            appendOpts: abortAppendOpts,
+          },
+          abortPlan.facts,
+        );
       }
       // Plain workflow/operator abort: commit node_aborted, then bump the
       // abort-loop counter. A one-shot warning the abort before the ceiling so a
       // watcher sees the trend (observability — no version bump, rides alongside
       // the just-committed node_aborted); at the ceiling, a recoverable
-      // abort_loop pause (a SECOND commit against a re-read version).
-      await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
-      consecutiveAborts++;
-      if (consecutiveAborts === abortLoopCeiling - 1) {
-        opts.store.appendObservabilityEvents(runId, [
-          {
-            type: "abort_loop_warning",
-            payload: {
-              nodeId: currentNode,
-              consecutiveAborts,
-              ceiling: abortLoopCeiling,
-            },
-          },
-        ]);
+      // abort_loop pause (a SECOND commit against a re-read version). An OCC-lost
+      // node_aborted re-drives instead of counting the abort (the abort never
+      // durably landed).
+      const abortStepOk = await tryAppendFact(opts.store, runId, recorder.version(), abortPlan.facts, abortAppendOpts);
+      if (!abortStepOk) {
+        const { halted } = await onOccConflict("fact.node_aborted", currentNode, iteration, recorder.version());
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
       }
-      if (consecutiveAborts >= abortLoopCeiling) {
-        await tryAppendFact(
-          opts.store,
-          runId,
-          // version may have shifted after the abort append; re-read.
-          opts.store.getState(runId)?.version ?? state.version,
-          [
-            {
-              type: "fact.run_paused",
-              payload: {
-                reason: "abort_loop",
-                nodeId: currentNode,
-                consecutiveAborts,
-              },
-            },
-          ],
+      consecutiveAborts++;
+      // Abort-loop trend warning + ceiling pause, decided by the pure planner
+      // (abort-planner.ts). The counter bump above and the two-commit sequencing
+      // (node_aborted first, then the pause against a re-read version) stay here.
+      const loopPlan = planAbortLoop({ consecutiveAborts, ceiling: abortLoopCeiling, nodeId: currentNode });
+      if (loopPlan.warn !== undefined) {
+        opts.store.appendObservabilityEvents(runId, [loopPlan.warn]);
+      }
+      if (loopPlan.pause !== undefined) {
+        return commitParkOrTerminal(
+          {
+            store: opts.store,
+            runId,
+            occ,
+            nodeId: currentNode,
+            iteration,
+            // version may have shifted after the abort append; re-read.
+            expectedVersion: opts.store.getState(runId)?.version ?? state.version,
+          },
+          [loopPlan.pause],
         );
-        return { kind: "terminal" };
       }
       return { kind: "continue" };
     } else {
@@ -1521,10 +1520,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     });
 
     if (plan.kind === "malformed") {
-      await tryAppendFact(opts.store, runId, state.version, [
-        { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "fanout_malformed" } },
-      ]);
-      return { kind: "terminal" };
+      return commitParkOrTerminal(
+        { store: opts.store, runId, occ, nodeId: parallelNode, iteration, expectedVersion: state.version },
+        [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "fanout_malformed" } }],
+      );
     }
 
     // This turn's operator fold (budget raise / resume) — applied on the FIRST
@@ -1555,28 +1554,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // observed at 1,600+ pause/resume cycles). This holds even when the park
     // is the turn's FIRST commit, which is why the fold rides it here rather
     // than a later one.
-    const commitParkOrTerminal = async (facts: FactEvent[]): Promise<DispatchOutcome> => {
-      const res = await commitFanoutFact(facts, takeFold());
-      if (!res.ok && res.reason === "occ") {
-        const { halted } = await onOccConflict(
-          facts[0]?.type ?? "fact.unknown",
-          parallelNode,
+    const commitFanoutDisposition = (facts: FactEvent[]): Promise<DispatchOutcome> =>
+      commitParkOrTerminal(
+        {
+          store: opts.store,
+          runId,
+          occ,
+          nodeId: parallelNode,
           iteration,
-          state.version,
-        );
-        if (halted) {
-          pendingFanoutDisposition = undefined;
-          return { kind: "terminal" };
-        }
-        pendingFanoutDisposition = facts;
-        return { kind: "continue" };
-      }
-      pendingFanoutDisposition = undefined;
-      return { kind: "terminal" };
-    };
+          expectedVersion: state.version,
+          commit: (f) => commitFanoutFact(f, takeFold()),
+          onPark: (f) => {
+            pendingFanoutDisposition = f;
+          },
+        },
+        facts,
+      );
 
     // Land last turn's lost disposition before seeding/dispatching anything.
-    if (pendingFanoutDisposition !== undefined) return commitParkOrTerminal(pendingFanoutDisposition);
+    if (pendingFanoutDisposition !== undefined) return commitFanoutDisposition(pendingFanoutDisposition);
 
     // The parallel node's per-node cost/token cap sums over its fan-out closure
     // (branches + their non-fanout descendants up to the join — the shared
@@ -1719,7 +1715,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // through the join into the successor's dispatch.
     if (plan.kind === "join") {
       const drainedBarrier = fanoutBudgetDisposition({ fresh: true });
-      if (drainedBarrier !== undefined) return commitParkOrTerminal([drainedBarrier]);
+      if (drainedBarrier !== undefined) return commitFanoutDisposition([drainedBarrier]);
       // A deferred pre-claim pause (a steer+pause pair stashed at run_started)
       // must land HERE: the fan-out join is this path's success continuation, the
       // twin of the linear planner's node_started→run_paused swap. Emit
@@ -1858,19 +1854,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // downgrades a halt, first-of-each-kind wins. (Twin halt/pause slots filled
     // by two paths made precedence depend on which path saw the breach.)
     let disposition: FactEvent | undefined;
-    const noteDisposition = (f: FactEvent): void => {
-      // `fact.run_terminated` here is always the errored (halt) disposition —
-      // terminal beats a resumable pause, first terminal wins.
-      if (f.type === "fact.run_terminated") {
-        if (disposition?.type !== "fact.run_terminated") disposition = f;
-      } else if (disposition === undefined) {
-        disposition = f;
-      }
-    };
     const captureDisposition = (): void => {
       if (disposition?.type === "fact.run_terminated") return;
       const disp = fanoutBudgetDisposition();
-      if (disp !== undefined) noteDisposition(disp);
+      if (disp !== undefined) disposition = noteDisposition(disposition, disp);
     };
 
     // Each sub-node dispatch consumes the same loop budget as a linear handler
@@ -1887,7 +1874,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const pool = new Map<string, Promise<{ nodeId: string; outcome: BranchOutcome }>>();
     const dispatch = (nodeId: string): void => {
       if (dispatches >= effectiveMaxLoops) {
-        noteDisposition({
+        disposition = noteDisposition(disposition, {
           type: "fact.run_paused",
           payload: { reason: "max_loops", currentLimit: effectiveMaxLoops, dispatches },
         });
@@ -1952,14 +1939,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         if (outcome.kind === "skipped") continue;
 
         // A leaked handler is unrecoverable — halt the whole run. Through
-        // commitParkOrTerminal: an OCC-lost halt here (orphaned recorder
+        // commitFanoutDisposition: an OCC-lost halt here (orphaned recorder
         // streams advancing the version) must re-commit next turn, not
         // silently strand the run `running` with no executor.
         if (outcome.kind === "leak") {
           leakBudget.recordLeak(runId, outcome.nodeId);
           abortInflightPool();
           await drainInflightPool();
-          return commitParkOrTerminal([
+          return commitFanoutDisposition([
             { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
             { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
           ]);
@@ -2014,7 +2001,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             // would strand the in-flight siblings — fail closed instead.
             branchTerminal = true;
           } else if (f.type === "fact.run_terminated" || f.type === "fact.run_paused") {
-            noteDisposition(f);
+            disposition = noteDisposition(disposition, f);
           } else if (f.type !== "fact.node_started") {
             branchFacts.push(f);
           }
@@ -2030,10 +2017,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // No successor either — a synthesized `exit` node exists in the graph,
           // so the missing-node guard alone wouldn't stop its dispatch_started.
           successor = undefined;
-          noteDisposition({
-            type: "fact.run_terminated",
-            payload: { status: "errored", reason: "error", detail: `fanout_branch_terminal:${outcome.nodeId}` },
-          });
+          disposition = noteDisposition(disposition, planBranchTerminal(outcome.nodeId));
         }
         if (successor !== undefined) {
           // A back-edge successor's retry-count bump rides THIS commit's
@@ -2090,20 +2074,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
 
     // Disposition. A captured run-level breach (halt or pause) parks the run.
-    if (disposition !== undefined) return commitParkOrTerminal([disposition]);
+    if (disposition !== undefined) return commitFanoutDisposition([disposition]);
     // Per-branch abort-loop: a branch that aborted `abortLoopCeiling` turns in a
-    // row parks the run regardless of sibling success. `branchAborts` holds
-    // exactly the branches still aborted this turn — a success deletes its entry.
-    for (const [nodeId, streak] of branchAborts) {
-      if (streak >= abortLoopCeiling) {
-        return commitParkOrTerminal([
-          {
-            type: "fact.run_paused",
-            payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak },
-          },
-        ]);
-      }
-    }
+    // row parks the run regardless of sibling success (fanout-planner.ts).
+    // `branchAborts` holds exactly the branches still aborted this turn — a
+    // success deletes its entry.
+    const branchLoopPause = planBranchAbortLoop(branchAborts, abortLoopCeiling);
+    if (branchLoopPause !== undefined) return commitFanoutDisposition([branchLoopPause]);
     // Aborts below the ceiling: re-drive the still-active (aborted) nodes next turn.
     if (branchAborts.size > 0) return { kind: "continue" };
 
@@ -2111,7 +2088,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // — the per-commit gate already caught in-region breaches), then let the
     // next turn advance current_node to the join (active is now empty).
     const barrier = fanoutBudgetDisposition({ fresh: true });
-    if (barrier !== undefined) return commitParkOrTerminal([barrier]);
+    if (barrier !== undefined) return commitFanoutDisposition([barrier]);
     return { kind: "continue" }; // frontier drained — next turn joins
   };
 
@@ -2145,17 +2122,6 @@ export interface LeakBudget {
 /** A node's allowed/denied tool scope from its graph attrs — hard-filters
  * `ctx.tools` at HandlerContext construction so a handler can't reach a tool the
  * node didn't declare. Shared by the linear + fan-out dispatch paths. */
-// The event-payload cap is 4KB; bound the appended parse error so a
-// pathological message can never make the halt append itself fail.
-const PARSE_ERROR_DETAIL_MAX = 300;
-
-function workflowParseFailedDetail(errorMessage: string | undefined): string {
-  if (errorMessage == null || errorMessage === "") return "workflow_parse_failed";
-  const bounded =
-    errorMessage.length > PARSE_ERROR_DETAIL_MAX ? `${errorMessage.slice(0, PARSE_ERROR_DETAIL_MAX)}…` : errorMessage;
-  return `workflow_parse_failed: ${bounded}`;
-}
-
 function readToolScope(nodeAttrs: { allowed_tools?: unknown; denied_tools?: unknown } | undefined): {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];

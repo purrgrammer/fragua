@@ -295,8 +295,8 @@ Daemon-emitted facts on a schedule fire:
 
 The daemon's executor is split into a **pure decision core** and an **effectful driver**, and the seam between them is a rule, not an accident.
 
-- **Decision core** — `planTransition` (`packages/daemon/src/transition-planner.ts`) for a successful turn, `planAbort` (`packages/daemon/src/abort-planner.ts`) for the abort arm. Each takes a plain input record and returns a plan. It performs **no I/O**: no store reads or writes, no clock (`now` is a parameter, not a `Date.now()` call), no randomness (`random` is an injected `() => number`), no subprocess, no network.
-- **Driver** — `runOne` / `runFanout` and their helpers in `packages/daemon/src/executor.ts`. The driver owns **all** effects: it applies the plan to the store under the OCC discipline (I3), runs the worktree / subprocess / provider effects, and handles timers and the run's `AbortSignal`.
+- **Decision core** — `planTransition` (`packages/daemon/src/transition-planner.ts`) for a successful turn, `planAbort` (`packages/daemon/src/abort-planner.ts`) for the abort arm, `planPreDispatch` / `planLeakHalt` (`packages/daemon/src/predispatch-planner.ts`) for the decisions that fire *before* or *instead of* a handler dispatch (the contract-version gate, the unparseable-workflow refusal, a worktree-provision failure, the `max_loops` ceiling, a leaked handler), and the fan-out run-level disposition helpers (`noteDisposition` / `planBranchTerminal` / `planBranchAbortLoop` in `packages/daemon/src/fanout-planner.ts`). Each takes a plain input record and returns a plan. It performs **no I/O**: no store reads or writes, no clock (`now` / `leakedAt` is a parameter, not a `Date.now()` call), no randomness (`random` is an injected `() => number`), no subprocess, no network.
+- **Driver** — `runOne` / `runFanout` and their helpers in `packages/daemon/src/executor.ts`. The driver owns **all** effects: it applies the plan to the store under the OCC discipline (I3) — every run-parking / terminal fact through the single shared `commitParkOrTerminal` (`packages/daemon/src/occ-append.ts`), so a lost OCC race re-drives or escalates to `occ_exhausted` rather than stranding the run `running` (ARCH §1.6) — runs the worktree / subprocess / provider effects, and handles timers and the run's `AbortSignal`.
 
 The decision core may order only a fixed **plan vocabulary** — the shape of `TransitionPlan` / `AbortPlan`:
 
@@ -307,8 +307,9 @@ The decision core may order only a fixed **plan vocabulary** — the shape of `T
 | `advanceAppliedTo?: number` | The applied-intent watermark advance — how far the intent fold has been consumed. |
 | `observability: PlannedObservability[]` | Observability events drained into the run's buffer before the facts commit. |
 | `outcome` *(abort arm only)* | A commit-strategy tag — `halt \| pause \| timeout_retry \| abort_step` — the driver switches on to pick the commit sequence. |
+| `terminal` *(pre-dispatch arm only)* | Whether the plan ends the turn (the run parked or terminated). |
 
-`TransitionPlan` carries the first four; `AbortPlan` carries `facts`, `routingPatch`, `advanceAppliedTo`, and `outcome`.
+`TransitionPlan` carries the first four; `AbortPlan` carries `facts`, `routingPatch`, `advanceAppliedTo`, and `outcome`; `PreDispatchPlan` carries `facts`, an (unused-today) `routingPatch`, and `terminal`, and holds the invariant that it emits **at most one** run-parking fact per call.
 
 **Why it matters.** Keeping the decision core pure makes the control plane deterministic and replayable: the same input always yields the same plan, so every fact-list-rewrite rule (exactly-one-terminal, `node_completed` preserved under a budget halt, a retry pause swapping `node_started`, …) becomes a property over generated input (ARCH §10). And because the core only ever emits facts + a routing patch + a watermark + observability, an alternative executor implementation could be substituted behind the same store ABI — as long as it emits the same facts, the rest of the system (reducer, read plane, UI) can't tell the difference.
 

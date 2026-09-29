@@ -14,7 +14,7 @@ import { AUTO_RESUME_AT_KEY, getRetry, readGoalGateRetries, timeoutRetriesKey } 
 import type { FactEvent } from "@fragua/store";
 import type { UsageTotals } from "./executor-helpers.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
-import { computeAdvanceAppliedTo } from "./transition-planner.ts";
+import { computeAdvanceAppliedTo, type PlannedObservability } from "./transition-planner.ts";
 
 // Watchdog timeout-retry policy (system-initiated, NOT workflow-initiated — so
 // it doesn't bump `consecutiveAborts`). Per-node attempt counter lives at
@@ -169,4 +169,40 @@ export function planAbort(input: AbortPlanInput): AbortPlan {
   // 4. Plain workflow/operator abort → just node_aborted. The executor bumps
   //    consecutiveAborts and applies the abort-loop ceiling (a second commit).
   return withBase("abort_step");
+}
+
+export interface AbortLoopInput {
+  /** The run-wide consecutive-abort streak AFTER the driver bumped it. */
+  consecutiveAborts: number;
+  /** The abort-loop ceiling (`abortLoopCeiling`). */
+  ceiling: number;
+  /** The node the streak is running on (for the warn / pause payload). */
+  nodeId: string;
+}
+
+export interface AbortLoopPlan {
+  /** A one-shot trend warning emitted the abort BEFORE the ceiling. */
+  warn?: PlannedObservability;
+  /** The recoverable `abort_loop` pause once the streak hits the ceiling. */
+  pause?: FactEvent;
+}
+
+/** Decide the abort-loop trend warning / ceiling pause for a plain workflow or
+ * operator abort. Pure: the driver owns the counter bump (before this call) and
+ * the two-commit sequencing (`node_aborted` first, then the pause against a
+ * re-read version). The warn fires exactly one abort before the ceiling; the
+ * pause fires at or past it — the two are mutually exclusive per call. */
+export function planAbortLoop(input: AbortLoopInput): AbortLoopPlan {
+  const { consecutiveAborts, ceiling, nodeId } = input;
+  const plan: AbortLoopPlan = {};
+  if (consecutiveAborts === ceiling - 1) {
+    plan.warn = { type: "abort_loop_warning", payload: { nodeId, consecutiveAborts, ceiling } };
+  }
+  if (consecutiveAborts >= ceiling) {
+    plan.pause = {
+      type: "fact.run_paused",
+      payload: { reason: "abort_loop", nodeId, consecutiveAborts },
+    };
+  }
+  return plan;
 }

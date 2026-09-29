@@ -15,6 +15,18 @@
 import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
+/**
+ * Outcome of a single dispatch turn. `dispatchOne` (and `commitParkOrTerminal`)
+ * return this so the outer loop can decide whether to continue iterating or exit
+ * (the run reached a terminal / paused state, or another short-circuit).
+ */
+export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
+
+/** Outcome of a serialized commit. A tagged `false`: `occ` is a genuine OCC
+ * conflict (feed the conflict controller), `status` is the run leaving `running`
+ * under us (already parked — don't). */
+export type CommitResult = { ok: true } | { ok: false; reason: "occ" | "status" };
+
 export async function tryAppendFact(
   store: IEventWriter & IEventReader,
   runId: string,
@@ -125,4 +137,61 @@ export function makeOccController(deps: {
       occWarned = false;
     },
   };
+}
+
+export interface ParkOrTerminalDeps {
+  store: IEventWriter & IEventReader;
+  runId: string;
+  /** The per-`runOne` conflict controller (warn / halt escalation). */
+  occ: OccController;
+  /** Node id + iteration stamped onto the conflict / warn payloads. */
+  nodeId: string;
+  iteration: number;
+  /** Version the DEFAULT single-attempt commit checks against. */
+  expectedVersion: number;
+  /** Routing patch / applied-seq advance for the default commit. */
+  appendOpts?: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number };
+  /** The commit primitive. Defaults to a single `tryAppendFact` against
+   * `expectedVersion`, re-reading state to tell a status-stop from an OCC
+   * conflict. The fan-out lane passes its serialized `commitFanoutFact`, which
+   * already makes that distinction. */
+  commit?: (facts: FactEvent[]) => Promise<CommitResult>;
+  /** Park/clear hook. Called with the facts when an OCC conflict parks them for
+   * a re-commit next turn, and with `undefined` when the park is cleared (the
+   * commit landed, the run already left `running`, or the controller halted).
+   * The fan-out lane threads its `pendingFanoutDisposition` slot through it. */
+  onPark?: (facts: FactEvent[] | undefined) => void;
+}
+
+/** Commit a run-parking or terminal fact batch HONESTLY — the run never stays
+ * `running` with the fact silently lost on a lost OCC race (ARCH §1.6). On
+ * success the turn ends. On an OCC conflict we re-read: if the run already left
+ * `running`, someone else parked it (return terminal, append nothing); otherwise
+ * drive the shared conflict controller — halt `occ_exhausted` at the ceiling
+ * (terminal), else park the facts for a re-commit next turn (continue). Shared
+ * by the linear and fan-out paths so neither can strand the run. */
+export async function commitParkOrTerminal(deps: ParkOrTerminalDeps, facts: FactEvent[]): Promise<DispatchOutcome> {
+  const { store, runId, occ, nodeId, iteration, expectedVersion, onPark } = deps;
+  const commit =
+    deps.commit ??
+    (async (f: FactEvent[]): Promise<CommitResult> => {
+      const ok = await tryAppendFact(store, runId, expectedVersion, f, deps.appendOpts);
+      if (ok) return { ok: true };
+      const fresh = store.getState(runId);
+      if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
+      return { ok: false, reason: "occ" };
+    });
+
+  const res = await commit(facts);
+  if (res.ok || res.reason === "status") {
+    onPark?.(undefined);
+    return { kind: "terminal" };
+  }
+  const { halted } = await occ.onConflict(facts[0]?.type ?? "fact.unknown", nodeId, iteration, expectedVersion);
+  if (halted) {
+    onPark?.(undefined);
+    return { kind: "terminal" };
+  }
+  onPark?.(facts);
+  return { kind: "continue" };
 }

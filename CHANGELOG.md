@@ -107,6 +107,13 @@ guarantee.
 
 ### Fixed
 
+- **A halt or pause that lost an OCC race no longer leaves the run stranded in
+  `running`.** The pre-dispatch pauses and halts (engine-incompatible,
+  unparseable workflow, worktree-provision failure, `max_loops`, leaked handler,
+  abort-loop) now commit through the same park-or-terminal routine the fan-out
+  path already used: a conflicted commit re-drives the turn or escalates to
+  `occ_exhausted`, so the run always leaves `running` instead of sitting idle
+  with no executor until the next daemon restart.
 - **A crash-requeued run reports the same in-flight node whether read live or
   replayed.** Reconstructing a run's state from its event log (bundle import,
   `fragua show`) used to blank the current node for any run recovered from a
