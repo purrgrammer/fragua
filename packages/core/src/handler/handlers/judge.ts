@@ -138,7 +138,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
         longestQuestionBytes: Math.max(...questionSizes),
         requestTokenBudget: cfg.requestTokenBudget ?? limits.requestTokenBudget,
         stateTokenBudget: cfg.stateTokenBudget ?? limits.stateTokenBudget,
-        bytesPerToken: record.bytesPerToken,
+        bytesPerToken: limits.bytesPerToken,
       });
       if (!Array.isArray(chunks)) {
         return fail(

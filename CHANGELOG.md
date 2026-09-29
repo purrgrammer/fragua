@@ -17,8 +17,9 @@ guarantee.
   `127.0.0.1:11435` whose API is wire-identical. A local backend needs no API
   key and costs nothing. Further backends are `judge:<id>` rows in
   `provider_config` carrying the base URL, auth mode, default model, price, and
-  the request/state token budgets — per model as well as per provider, since
-  local model windows vary by two orders of magnitude. Thresholds do not
+  the request/state token budgets and the tokenizer's bytes-per-token ratio —
+  per model as well as per provider, since one backend serves several
+  tokenizers and local model windows vary by two orders of magnitude. Thresholds do not
   transfer between backends: `fragua judge calibrate` now prints one line per
   `provider/model`, takes `--provider` / `--model`, and says so when two models
   answered under one bound. Two new validator codes: **E055** (a `provider:`

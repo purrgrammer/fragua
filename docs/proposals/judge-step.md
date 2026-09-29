@@ -586,12 +586,27 @@ behind an API wire-identical to TypeSafe's `/v1/systemone` — same request, sam
 response, same choice / score / noul primitives. Nothing in `JudgeAnswer`
 widens to accommodate it.
 
-**Budgets are per model, not per provider.** Ollaya's context windows span 512
-(`laya:en`) to 32768 (`qwen3guard`) tokens, a 64× spread, against TypeSafe's 64k
-request / 32k state. The record carries a provider default and a per-model
-override table; a `for-each` judge's chunk planner reads whichever applies, and
-`bytes-per-token` is per record too, since it is a measured property of one
-tokenizer.
+**Budgets are per model, not per provider — and so is the tokenizer.** Ollaya's
+context windows span 512 (`laya:en`) to 32768 (`qwen3guard`) tokens, a 64×
+spread, against TypeSafe's 64k request / 32k state. The record carries a
+provider default and a per-model override table; a `for-each` judge's chunk
+planner reads whichever applies. `bytes-per-token` sits in the same table rather
+than only on the provider, because one backend serves several tokenizers —
+`laya:en` is ModernBERT, `laya:multilingual` is mmBERT — and the ratio is a
+property of a tokenizer over a kind of text, not of a vendor.
+
+Measured against Ollaya 0.7.5 rather than assumed:
+
+| | budget | measured |
+|---|---|---|
+| `laya:en` | 512-token window | 479 tokens answered at 2200 bytes; 2400 refused |
+| `laya:multilingual` | 1024-token window | 1011 tokens at 4800 bytes |
+| bytes/token | Jev measured 2.2 on diff text | **4.89** on English prose |
+
+The 2.2 that the `for-each` planner had baked in as a constant would have sized
+every local chunk at 45% of the window it could actually use. The provider
+defaults stay conservative — a model with no entry could be the smallest one —
+and a `judge:ollaya` row adds entries as they are measured.
 
 **Thresholds do not transfer between providers.** Every bound a workflow
 authors was read against one model's answers — that is why `model:` pins rather
@@ -613,6 +628,26 @@ for llm steps:
 judge:
   provider: ollaya
   model: laya
+```
+
+**Proved end to end**, not only in unit tests. A `judge_provider_probe`
+workflow with `provider: ollaya`, `model: laya:en` and a `decide.route` gate ran
+through `fragua ci` against a local Ollaya with **no credential row at all**:
+`judge.requested`/`judge.answered` carry `provider: "ollaya"`, the route was
+taken on a real distribution (`access` at p=0.9995, confidence 0.999), and
+`cost.recorded` landed with `kind: "judge"` and `cost_usd: 0` — a free call is
+still a counted call. 285 ms for two questions; `fragua providers test ollaya
+laya:en` answers in 53 ms against Jev's ~1 s.
+
+The two error mappings were checked against the **real** envelopes rather than
+hand-written fixtures. Both carry a top-level `code`, and both land as a node
+`fail` an `on: {fail:}` edge can route:
+
+```
+422 {"error":"state: part of state was dropped …","code":"STATE_TRUNCATED"}
+  → judge state does not fit "ollaya" model "laya:en" … lower `state-max-bytes:`
+404 {"error":"model \"no-such-model:latest\" not found …","code":"MODEL_NOT_FOUND"}
+  → judge provider "ollaya" does not serve model "no-such-model" … check `fragua providers test ollaya`
 ```
 
 **What is not validated:** whether the model exists on the provider. Ollaya's

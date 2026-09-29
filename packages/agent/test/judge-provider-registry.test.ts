@@ -3,6 +3,7 @@
 // registry, which would otherwise adopt them silently.
 
 import { describe, expect, test } from "bun:test";
+import { judgeLimitsFor } from "@fragua/core/handler";
 import { SqliteStore } from "@fragua/store";
 import { AuthStorage, loadJudgeProviders, ModelRegistry } from "../src/index.ts";
 
@@ -127,6 +128,25 @@ describe("the `judge:` prefix keeps judge rows out of the llm registry", () => {
       const registry = ModelRegistry.create(AuthStorage.fromStore(store), store);
       expect(registry.find("ollaya", "some-chat")).toBeDefined();
       expect(loadJudgeProviders(store).providers["ollaya"]!.defaultModel).toBe("kev");
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("per-model tokenizer ratios", () => {
+  test("a model's bytes-per-token overrides the provider's, and a row can correct one number", () => {
+    const store = new SqliteStore();
+    try {
+      // One field only: the model's other measured limits must survive.
+      seed(store, "judge:ollaya", { models: { "laya:en": { "bytes-per-token": 5.2 } } });
+      const o = loadJudgeProviders(store).providers["ollaya"]!;
+      expect(o.models!["laya:en"]!.bytesPerToken).toBe(5.2);
+      expect(o.models!["laya:en"]!.stateTokenBudget).toBe(440);
+      // A sibling model keeps its own ratio.
+      expect(o.models!["laya:multilingual"]!.bytesPerToken).toBe(4.4);
+      // And a model with no entry falls back to the provider default.
+      expect(judgeLimitsFor(o, "unlisted").bytesPerToken).toBe(o.bytesPerToken);
     } finally {
       store.close();
     }

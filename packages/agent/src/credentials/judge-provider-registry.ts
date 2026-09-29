@@ -10,7 +10,7 @@
 // is one key for one host, and the existing `typesafe` row keeps working
 // untouched.
 
-import { JUDGE_BUILTIN_PROVIDERS, type JudgeProviderRecord } from "@fragua/core/handler";
+import { JUDGE_BUILTIN_PROVIDERS, type JudgeModelLimits, type JudgeProviderRecord } from "@fragua/core/handler";
 import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -22,6 +22,9 @@ const ModelLimitsSchema = Type.Object(
     "request-tokens": Type.Optional(Type.Integer({ minimum: 1 })),
     "state-tokens": Type.Optional(Type.Integer({ minimum: 1 })),
     "state-max-bytes": Type.Optional(Type.Integer({ minimum: 1 })),
+    // Per model, not only per provider: one backend can serve several
+    // tokenizers, and the ratio differs by more than 2x between kinds of text.
+    "bytes-per-token": Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -61,14 +64,16 @@ function overlay(id: string, base: JudgeProviderRecord | undefined, cfg: JudgePr
   };
   const defaultModel = cfg["default-model"] ?? base?.defaultModel;
   if (defaultModel !== undefined) record.defaultModel = defaultModel;
-  const merged: Record<string, { requestTokenBudget?: number; stateTokenBudget?: number; stateMaxBytes?: number }> = {
-    ...(base?.models ?? {}),
-  };
+  const merged: Record<string, JudgeModelLimits> = { ...(base?.models ?? {}) };
   for (const [model, lim] of Object.entries(models ?? {})) {
+    // Field by field over the built-in entry, so a row correcting one measured
+    // number does not silently drop that model's other limits.
     merged[model] = {
+      ...merged[model],
       ...(lim["request-tokens"] !== undefined ? { requestTokenBudget: lim["request-tokens"] } : {}),
       ...(lim["state-tokens"] !== undefined ? { stateTokenBudget: lim["state-tokens"] } : {}),
       ...(lim["state-max-bytes"] !== undefined ? { stateMaxBytes: lim["state-max-bytes"] } : {}),
+      ...(lim["bytes-per-token"] !== undefined ? { bytesPerToken: lim["bytes-per-token"] } : {}),
     };
   }
   if (Object.keys(merged).length > 0) record.models = merged;
