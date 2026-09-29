@@ -477,21 +477,24 @@ describe("judge handler — failure modes", () => {
     }
   });
 
-  test("422 / not-credentialed → error halt with the provider detail", async () => {
-    const cases: Array<[unknown, RegExp]> = [
-      [
-        new JudgeProviderError("Input should be a valid list", "typesafe", 422),
-        /rejected by "typesafe" \(422\).*valid list/,
-      ],
-      [new JudgeNotCredentialedError("typesafe"), /not credentialed/],
-    ];
-    for (const [err, re] of cases) {
-      const cap = fresh();
-      const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
-      const result = await spec.handler(stubCtx(cap, { judge: throwingJudge(err) }));
-      expect(result).toMatchObject({ kind: "halt", reason: "error" });
-      if (result.kind === "halt") expect(result.detail).toMatch(re);
-    }
+  test("a 422 is a node fail carrying the provider detail; no credential is a halt", async () => {
+    // 422 moved from halt to fail once a second backend showed the same
+    // oversized-state condition arriving under two different codes: it is data
+    // the author can address, and only a fail gives `on: {fail}` something to
+    // route. A missing credential stays a halt — no edge fixes that.
+    const cap = fresh();
+    const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
+    const rejected = await spec.handler(
+      stubCtx(cap, { judge: throwingJudge(new JudgeProviderError("Input should be a valid list", "typesafe", 422)) }),
+    );
+    expect(rejected).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((rejected as { failureReason: string }).failureReason).toMatch(/rejected by "typesafe" \(422\).*valid list/);
+
+    const uncredentialed = await spec.handler(
+      stubCtx(fresh(), { judge: throwingJudge(new JudgeNotCredentialedError("typesafe")) }),
+    );
+    expect(uncredentialed).toMatchObject({ kind: "halt", reason: "error" });
+    if (uncredentialed.kind === "halt") expect(uncredentialed.detail).toMatch(/not credentialed/);
   });
 
   test("abort mid-call → error halt 'judge aborted'", async () => {
@@ -734,17 +737,44 @@ describe("judge handler — provider records", () => {
     expect((res as { failureReason: string }).failureReason).toMatch(/state-max-bytes/);
   });
 
-  test("a 422 with no code keeps halting — it is a request-shape bug", async () => {
+  test("a 422 reporting a size limit under ANOTHER code still points at state-max-bytes", async () => {
+    // Measured: one runtime answers `STATE_TRUNCATED` on one model and
+    // `INVALID_REQUEST` on another for the same oversized state.
     const c = fresh();
     const judge: JudgeClient = {
       defaultProvider: "typesafe",
       resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
       async ask() {
-        throw new JudgeProviderError("bad question", "ollaya", 422);
+        throw new JudgeProviderError(
+          'question "ok": the row is 8202 tokens (8192 of them the state); the model\'s limit is 8192',
+          "ollaya",
+          422,
+          undefined,
+          "INVALID_REQUEST",
+        );
+      },
+    };
+    const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "kev", state: "x", questions: { ok: OK_Q } });
+    const res = await h.handler(stubCtx(c, { judge }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/state-max-bytes/);
+  });
+
+  test("a 422 that is not about size still fails the node, carrying the message", async () => {
+    // A halt would leave an `on: {fail}` edge nothing to route, and a genuine
+    // shape bug is caught by E047 / E048 long before dispatch.
+    const c = fresh();
+    const judge: JudgeClient = {
+      defaultProvider: "typesafe",
+      resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
+      async ask() {
+        throw new JudgeProviderError("something else entirely", "ollaya", 422);
       },
     };
     const h = makeJudgeHandler({ nodeId: "j", provider: "ollaya", model: "laya", state: "x", questions: { ok: OK_Q } });
-    expect(await h.handler(stubCtx(c, { judge }))).toMatchObject({ kind: "halt", reason: "error" });
+    const res = await h.handler(stubCtx(c, { judge }));
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/something else entirely/);
   });
 
   test("MODEL_NOT_FOUND is a node fail naming the model and the test command", async () => {

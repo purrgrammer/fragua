@@ -103,13 +103,14 @@ built-in with the one number a measurement corrected, field by field, without
 dropping that model's other limits.
 
 `models` matters. Ollaya's context windows span 512 to 32768 tokens across its
-library, and a model that exceeds its window is **refused** (`422
-STATE_TRUNCATED`) rather than answered on a truncated state. `bytes-per-token`
-belongs there too: one backend serves several tokenizers, and the ratio is a
-property of a tokenizer over a kind of text. Measured on Ollaya 0.7.5,
-English prose runs ~4.9 bytes/token where Jev's diff text measured 2.2 — so a
-`for-each` judge's chunk planner sizes against whichever entry applies, not a
-global constant.
+library, and a state over a model's window is **refused** rather than answered
+on a truncated one. `bytes-per-token` belongs there too: one backend serves
+several tokenizers, and the ratio is a property of a tokenizer over a *kind of
+text*, not of a vendor. Measured on Ollaya 0.7.5, `kev:0.8b` runs 3.56
+bytes/token on diff text and 6.00 on English prose — the same tokenizer, 1.7x
+apart — where Jev's diff text measured 2.2. Judge states are mostly diffs and
+file excerpts, so entries should carry the lower, code-shaped figure: the chunk
+planner must under-estimate the window, never over-estimate it.
 
 ## Credentials
 

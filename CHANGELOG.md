@@ -98,9 +98,12 @@ guarantee.
 
 - **`provider:` on a judge step no longer does nothing.** It parsed, validated,
   and was then dropped before the handler saw it.
-- **An oversized state on a backend that refuses to truncate fails the node
-  instead of halting the run.** A `422 STATE_TRUNCATED` now points at
-  `state-max-bytes:`; an unknown model reports `MODEL_NOT_FOUND` as a node
+- **A judge state the provider refuses now fails the node instead of halting
+  the run.** Every `422` is a node failure an `on: {fail}` edge can route,
+  carrying the provider's own message and naming `state-max-bytes:` when the
+  provider says it was a size problem — one runtime reports the same oversized
+  state under two different codes depending on the model, so the outcome cannot
+  hinge on the code. An unknown model reports `MODEL_NOT_FOUND` as a node
   failure rather than a provider pause. Judge calls also share the retry
   classification the rest of fragua uses, so a backend that is briefly
   unavailable (503) is retried.

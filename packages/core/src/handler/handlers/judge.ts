@@ -218,17 +218,25 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
                 `check \`fragua providers test ${err.provider}\``,
             );
           }
-          if (err.httpStatus === 422 && err.code === "STATE_TRUNCATED") {
-            // The provider refused to answer a state it would have had to cut.
-            // Same class as TypeSafe's 400: the author fixes it with a smaller
-            // `state-max-bytes:`, a narrower state, or an `on: {fail}` edge.
-            return fail(
-              `judge state does not fit "${err.provider}" model "${model}" — ${err.message}; ` +
-                `lower \`state-max-bytes:\` or narrow the state`,
-            );
-          }
           if (err.httpStatus === 422) {
-            return halt(`judge request rejected by "${err.provider}" (${err.httpStatus}) — ${err.message}`);
+            // A 422 is data, not a shape bug: a malformed question is caught by
+            // E047 / E048 before a run ever dispatches, so what actually reaches
+            // the provider is a state that did not fit. Measured: one runtime
+            // reports that condition as `STATE_TRUNCATED` on one model and
+            // `INVALID_REQUEST` ("the row is 8202 tokens; the model's limit is
+            // 8192") on another, so branching on the code alone mis-routes half
+            // of them. Fail the node either way — an `on: {fail}` edge can route
+            // it and a smaller `state-max-bytes:` fixes it, where a halt leaves
+            // the operator nothing. The hint is sharpened when the provider says
+            // it was a size problem; the message is always carried verbatim.
+            const sized =
+              err.code === "STATE_TRUNCATED" || /\b(token|limit|context|too (long|large)|size)\b/i.test(err.message);
+            return fail(
+              sized
+                ? `judge state does not fit "${err.provider}" model "${model}" — ${err.message}; ` +
+                    `lower \`state-max-bytes:\` or narrow the state`
+                : `judge request rejected by "${err.provider}" (422) — ${err.message}`,
+            );
           }
           if (err.httpStatus === 200)
             return halt(`judge provider "${err.provider}" returned a malformed response — ${err.message}`);

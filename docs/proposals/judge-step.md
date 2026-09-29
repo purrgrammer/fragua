@@ -597,16 +597,33 @@ property of a tokenizer over a kind of text, not of a vendor.
 
 Measured against Ollaya 0.7.5 rather than assumed:
 
-| | budget | measured |
-|---|---|---|
-| `laya:en` | 512-token window | 479 tokens answered at 2200 bytes; 2400 refused |
-| `laya:multilingual` | 1024-token window | 1011 tokens at 4800 bytes |
-| bytes/token | Jev measured 2.2 on diff text | **4.89** on English prose |
+| model | window | measured ceiling | bytes/token |
+|---|---|---|---|
+| `laya:en` | 512 | 479 tokens at 2200 bytes; 2400 refused | 4.89 (prose) |
+| `laya:multilingual` | 1024 | 1011 tokens at 4800 bytes | 4.88 (prose) |
+| `kev:0.8b` | 8192 | 8161 tokens; refused above 29 KB of diff | **3.56 diff / 6.00 prose** |
 
-The 2.2 that the `for-each` planner had baked in as a constant would have sized
-every local chunk at 45% of the window it could actually use. The provider
-defaults stay conservative — a model with no entry could be the smallest one —
-and a `judge:ollaya` row adds entries as they are measured.
+The 2.2 the `for-each` planner had baked in as a constant would have sized every
+local chunk at 45% of the window it could actually use.
+
+**The ratio is not even constant within one model.** `kev:0.8b` measures 3.56
+bytes/token on diff text and 6.00 on English prose — the same tokenizer, 1.7x
+apart by *kind* of text. Judge states are mostly diffs and file excerpts, so
+entries carry the lower, code-shaped figure: the planner must under-estimate the
+window, never over-estimate it. Planning `kev` with its prose figure would build
+a request 68% over what it accepts.
+
+The provider defaults stay conservative — a model with no entry could be the
+smallest one — and a `judge:ollaya` row adds entries as they are measured.
+
+**What this means for the shipped gates.** Across 103 recorded judge calls the
+state sent ranges from under 1 KB to 55 KB. An 8192-token window covers 90% of
+them (93/103); `laya:multilingual` covers 43% and `laya:en` 25%. The two that
+stay out of reach at every local size are `review/classify` (median 24.7 KB, max
+53.9 KB) and `pr_review/scope` (median 51.5 KB) — both single-shot classifiers
+reading a whole diff, so unlike the `for-each` lenses they cannot chunk. A local
+backend is a real option for the lens judges and the small gates; it is not one
+for those two without narrowing what they read.
 
 **Thresholds do not transfer between providers.** Every bound a workflow
 authors was read against one model's answers — that is why `model:` pins rather
@@ -639,16 +656,27 @@ taken on a real distribution (`access` at p=0.9995, confidence 0.999), and
 still a counted call. 285 ms for two questions; `fragua providers test ollaya
 laya:en` answers in 53 ms against Jev's ~1 s.
 
-The two error mappings were checked against the **real** envelopes rather than
-hand-written fixtures. Both carry a top-level `code`, and both land as a node
-`fail` an `on: {fail:}` edge can route:
+The error mappings were checked against the **real** envelopes rather than
+hand-written fixtures, and that changed one of them. All carry a top-level
+`code`, and all land as a node `fail` an `on: {fail:}` edge can route:
 
 ```
-422 {"error":"state: part of state was dropped …","code":"STATE_TRUNCATED"}
-  → judge state does not fit "ollaya" model "laya:en" … lower `state-max-bytes:`
-404 {"error":"model \"no-such-model:latest\" not found …","code":"MODEL_NOT_FOUND"}
+422 {"error":"state: part of state was dropped …","code":"STATE_TRUNCATED"}     (laya)
+422 {"error":"the row is 8202 tokens … the model's limit is 8192",
+     "code":"INVALID_REQUEST"}                                                  (kev)
+  → judge state does not fit "ollaya" model "…" … lower `state-max-bytes:`
+404 {"error":"model \\"no-such-model:latest\\" not found …","code":"MODEL_NOT_FOUND"}
   → judge provider "ollaya" does not serve model "no-such-model" … check `fragua providers test ollaya`
 ```
+
+**One runtime reports the same oversized state under two codes**, depending on
+the model. The original design halted a 422 that was not `STATE_TRUNCATED`, on
+the reasoning that it meant a request shape E048 should have caught — so on
+`kev` an oversized state would have halted the run rather than failing the node.
+A 422 is now always a node fail. A genuine shape bug is caught by E047 / E048
+long before dispatch, so what actually reaches the provider is data; and only a
+fail gives an `on: {fail}` edge something to route, where a halt leaves the
+operator nothing.
 
 **What is not validated:** whether the model exists on the provider. Ollaya's
 list changes under `ollaya pull` mid-session, so a static check guarantees false
@@ -726,8 +754,7 @@ tool step's shell.
 | 200 | `transition` |
 | 401 / 403 | `transition{outcomeStatus:"fail", non-retryable}` — same class as an llm auth failure |
 | 400 (TypeSafe) | `fail` — that provider's data-dependent rejection of an oversized state |
-| 422 + `STATE_TRUNCATED` | `fail`, naming `state-max-bytes:` and the model's window — the provider refused to answer a truncated state, which is addressable by the author or an `on: {fail}` edge |
-| 422, any other code | `halt{reason:"error", detail: <API detail>}` — a request shape E048 should have caught; surfacing the API's own message makes the validator gap visible |
+| 422 | `fail`, carrying the provider's message; sharpened to name `state-max-bytes:` when the provider says it was a size problem. One runtime uses two different codes for the same oversized state, so the outcome cannot hinge on the code |
 | `MODEL_NOT_FOUND` | `fail`, non-retryable, naming the model and provider |
 | retryable (408 / 429 / 500–504 / 529) | in-client full-jitter backoff (3 attempts, `Retry-After` honoured); on exhaustion `pause_provider{httpStatus, provider, errorMessage, retryAfterMs?}` |
 | network / abort | `pause_provider{httpStatus:null}` / propagate the abort |

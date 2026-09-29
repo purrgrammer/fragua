@@ -21,7 +21,12 @@ import {
  * independent ways: how much it can hold (the budgets) and how its tokenizer
  * cuts text (`bytesPerToken`). One provider can serve several tokenizers —
  * `laya:en` is ModernBERT, `laya:multilingual` is mmBERT — so the ratio is not
- * a provider-wide constant any more than the window is. */
+ * a provider-wide constant any more than the window is.
+ *
+ * The ratio is an approximation even per model: `kev:0.8b` measures 3.56
+ * bytes/token on diff text and 6.00 on English prose. Judge states are mostly
+ * diffs and file excerpts, so entries here carry the lower, code-shaped figure
+ * — the planner must under-estimate the window, never over-estimate it. */
 export interface JudgeModelLimits {
   requestTokenBudget?: number;
   stateTokenBudget?: number;
@@ -96,6 +101,12 @@ const OLLAYA: JudgeProviderRecord = {
       stateMaxBytes: 4 * 1024,
       bytesPerToken: 4.4,
     },
+    // 8192-token window, measured: 8161 tokens accepted, refused above 29 KB of
+    // diff text. The ratio is 3.56 on diff/code and 6.00 on English prose — the
+    // same tokenizer, 1.7x apart by KIND of text. Judge states are mostly diffs
+    // and file excerpts, so the lower number is the one that binds; using the
+    // prose figure would plan a chunk 68% over what the model accepts.
+    "kev:0.8b": { requestTokenBudget: 7800, stateTokenBudget: 7400, stateMaxBytes: 26 * 1024, bytesPerToken: 3.4 },
   },
 };
 
