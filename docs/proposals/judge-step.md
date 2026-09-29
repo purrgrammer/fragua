@@ -602,6 +602,7 @@ Measured against Ollaya 0.7.5 rather than assumed:
 | `laya:en` | 512 | 479 tokens at 2200 bytes; 2400 refused | 4.89 (prose) |
 | `laya:multilingual` | 1024 | 1011 tokens at 4800 bytes | 4.88 (prose) |
 | `kev:0.8b` | 8192 | 8161 tokens; refused above 29 KB of diff | **3.56 diff / 6.00 prose** |
+| `winnow:e4b` | 8192 | 5946 tokens; refused above 17 KB of diff | **2.91 diff / 6.00 prose** |
 
 The 2.2 the `for-each` planner had baked in as a constant would have sized every
 local chunk at 45% of the window it could actually use.
@@ -616,14 +617,24 @@ a request 68% over what it accepts.
 The provider defaults stay conservative — a model with no entry could be the
 smallest one — and a `judge:ollaya` row adds entries as they are measured.
 
+**A bigger model is not a wider one.** `winnow:e4b` and `kev:0.8b` both
+advertise 8192 tokens, but winnow refuses above ~5950 and cuts code more finely,
+so at ten times kev's size on disk it holds 17 KB of diff where kev holds 29 KB.
+The advertised window says little; only a measurement against the kind of text
+the gate actually sends does.
+
 **What this means for the shipped gates.** Across 103 recorded judge calls the
-state sent ranges from under 1 KB to 55 KB. An 8192-token window covers 90% of
-them (93/103); `laya:multilingual` covers 43% and `laya:en` 25%. The two that
-stay out of reach at every local size are `review/classify` (median 24.7 KB, max
-53.9 KB) and `pr_review/scope` (median 51.5 KB) — both single-shot classifiers
-reading a whole diff, so unlike the `for-each` lenses they cannot chunk. A local
-backend is a real option for the lens judges and the small gates; it is not one
-for those two without narrowing what they read.
+state sent ranges from under 1 KB to 55 KB. Against `kev:0.8b`'s measured 29 KB,
+**every lens judge, every `verify`, every `verdict` and `work/triage` fits** —
+`review/quality_judge` peaks at 14.9 KB, `review/integration_judge` at 12.3 KB,
+`work/triage` at 13.2 KB. Exactly two gates do not: `review/classify` (6 of 13
+calls over, max 53.9 KB) and `pr_review/scope` (4 of 7 over, max 52.9 KB). Both
+are single-shot classifiers reading a whole diff, so unlike the `for-each`
+lenses they cannot chunk their way under a ceiling.
+
+So a local backend is a real option for the review lenses today, and not one for
+the two front-door classifiers without narrowing what they read. That is a
+finding about our workflows, not a limit of the seam.
 
 **Thresholds do not transfer between providers.** Every bound a workflow
 authors was read against one model's answers — that is why `model:` pins rather

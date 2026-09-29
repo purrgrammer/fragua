@@ -107,6 +107,11 @@ const OLLAYA: JudgeProviderRecord = {
     // and file excerpts, so the lower number is the one that binds; using the
     // prose figure would plan a chunk 68% over what the model accepts.
     "kev:0.8b": { requestTokenBudget: 7800, stateTokenBudget: 7400, stateMaxBytes: 26 * 1024, bytesPerToken: 3.4 },
+    // Advertises 8192 but refuses above ~5950 in practice, and cuts code more
+    // finely (2.91 bytes/token on diff, 6.00 on prose) — so despite being ten
+    // times kev's size on disk it holds 17 KB of diff where kev holds 29 KB.
+    // Bigger is not wider: measure before choosing.
+    "winnow:e4b": { requestTokenBudget: 5700, stateTokenBudget: 5400, stateMaxBytes: 15 * 1024, bytesPerToken: 2.8 },
   },
 };
 
