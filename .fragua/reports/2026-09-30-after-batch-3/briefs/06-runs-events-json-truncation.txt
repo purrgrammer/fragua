@@ -1,0 +1,12 @@
+Make `fragua runs events <id> --json` and `fragua runs messages <id> --json` emit complete, parseable JSON regardless of run size, and give the operator a way to ask for the whole log.
+
+Problem (observed operating the CLI on real runs with tens of thousands of streaming events): `bun run --silent fragua runs events <id> --json | jq .` fails with `parse error: Unfinished JSON term at EOF` and `runs messages <id> --json` fails the same way (`Unfinished string at EOF`). The output is cut mid-document. Likely causes to check in `packages/cli/src/commands/operator.ts` (the `events` and `messages` verbs) and the shared writer: the process exits before stdout drains (a `process.exit` after `console.log` / `Bun.write` of a multi-MB string), or the output is capped by a default `--limit` / tail window and the JSON array is closed incorrectly when truncated. Also, the `--limit` flag is not accepted by `runs events` today (`--help` shows no such option), so there is no way to request the full log.
+
+Build:
+1. Find the truncation cause with a run that has more than 20k events (create one in a test by appending synthetic observability events to an ephemeral store) and fix it: await the stdout write to completion before exiting, and never close the array early.
+2. Add `--limit <n>` and `--all` to `runs events` (default stays the current tail window) and `--all` to `runs messages`; document the default window in the human output's footer ("showing last N of M; --all for everything").
+3. Add `--type <glob>` to `runs events` so an operator can ask for `fact.*` only, which is the common forensic query and keeps the payload small.
+4. Tests in `packages/cli/test/`: `runs events --json --all` on a 25k-event ephemeral run round-trips through `JSON.parse`; `--type 'fact.*'` returns only fact events; `runs messages --json` on a run with a 200 KB assistant message parses.
+5. Docs: `docs/cli.md` for the new flags; the `operate` skill's `references/forensics.md` mentions `--type 'fact.*'` as the first forensic read.
+
+Constraints: no change to the human (non-JSON) renderer beyond the footer line; store-client only (no HTTP); never point a test at `~/.fragua`.
