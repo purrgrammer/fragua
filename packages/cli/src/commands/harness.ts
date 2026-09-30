@@ -9,7 +9,8 @@
 //   - Executor daemon runs as a `fragua daemon start --db <path>` subprocess
 //     so we don't have to re-implement its 200-line setup. The subprocess
 //     inherits stdio for visibility.
-//   - Both share `~/.fragua/fragua.db` (override with --db). SQLite WAL
+//   - Both share `$FRAGUA_HOME/fragua.db` (default `~/.fragua/fragua.db`,
+//     override with --db). SQLite WAL
 //     handles concurrent connections.
 //
 // Lifecycle:
@@ -29,8 +30,8 @@
 //      HTTP server.
 
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { getFraguaHome } from "@fragua/agent";
 import { DAEMON_LOCK_TTL_MS, hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { startUpdateNotice } from "../update-notice.ts";
@@ -103,7 +104,7 @@ export interface SupervisorConfig {
 }
 
 export interface HarnessCommandOptions {
-  /** Store path. Default `~/.fragua/fragua.db`. */
+  /** Store path. Default `$FRAGUA_HOME/fragua.db` (i.e. `~/.fragua/fragua.db`). */
   dbPath?: string;
   /** TCP port for the HTTP server. When omitted, `startServer` resolves
    * via `web.port` from `~/.fragua/config.yaml`, then `DEFAULT_WEB_PORT`
@@ -117,8 +118,15 @@ export interface HarnessCommandOptions {
   spawn?: SpawnDaemon;
 }
 
+/** Resolve the harness store path: `--db`, else `$FRAGUA_HOME/fragua.db`. Routed
+ * through `getFraguaHome()` so the harness binds the same store `run`/`providers`/
+ * `db`/`doctor` open under a `$FRAGUA_HOME` override. */
+export function resolveHarnessDbPath(dbPath?: string): string {
+  return dbPath ? resolve(dbPath) : resolve(getFraguaHome(), "fragua.db");
+}
+
 export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<number> {
-  const dbPath = opts.dbPath ? resolve(opts.dbPath) : resolve(homedir(), ".fragua/fragua.db");
+  const dbPath = resolveHarnessDbPath(opts.dbPath);
   mkdirSync(dirname(dbPath), { recursive: true });
 
   console.log(chalk.green("fragua harness starting"));
