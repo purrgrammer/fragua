@@ -24,6 +24,14 @@ export interface ExecutionEnvironment {
   projectCwd(): string;
   /** Read a text file. Path is resolved against cwd() when relative. */
   readFile(path: string): Promise<string>;
+  /** Read a file's raw bytes. Path is resolved against cwd() with the
+   * realpath jail applied to the same path used for the read — so a
+   * symlink swapped in after a separate existence check cannot redirect
+   * the read outside cwd, and a non-local backend serves the bytes from
+   * its own filesystem rather than the daemon's. Used by the `read` tool
+   * to sniff image magic bytes. Optional: an environment that only serves
+   * text falls back to encoding {@link readFile}. */
+  readFileBytes?(path: string): Promise<Uint8Array>;
   /** Write a text file (atomic replace). */
   writeFile(path: string, contents: string): Promise<void>;
   /** Check if a file exists. */

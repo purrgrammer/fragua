@@ -9,6 +9,7 @@ function fullEnv(): ExecutionEnvironment {
     cwd: () => "/a",
     projectCwd: () => "/a",
     readFile: async (p) => files.get(p) ?? "",
+    readFileBytes: async (p) => new TextEncoder().encode(files.get(p) ?? ""),
     writeFile: async (p, c) => {
       files.set(p, c);
     },
@@ -27,6 +28,12 @@ describe("makeReadOnlyEnv", () => {
     expect(await ro.exists("/a/b.txt")).toBe(true);
     expect(await ro.listDir("/a")).toEqual([]);
     expect(await ro.glob("**/*")).toEqual([]);
+  });
+
+  test("read-only env forwards readFileBytes", async () => {
+    const ro = makeReadOnlyEnv(fullEnv());
+    const bytes = await ro.readFileBytes!("/a/b.txt");
+    expect(Buffer.from(bytes).toString("utf8")).toBe("hello");
   });
 
   test("writeFile throws ReadOnlyEnvError", async () => {

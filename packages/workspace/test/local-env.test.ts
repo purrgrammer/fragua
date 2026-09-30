@@ -218,6 +218,23 @@ describe("LocalEnvironment", () => {
         await rm(outside, { recursive: true, force: true });
       }
     });
+
+    test("resolvePath-backed reads return bytes for an in-cwd file via readFileBytes", async () => {
+      await env.writeFile("ok.txt", "bytes here");
+      const bytes = await env.readFileBytes("ok.txt");
+      expect(Buffer.from(bytes).toString("utf8")).toBe("bytes here");
+    });
+
+    test("readFileBytes throws PathEscapeError on a symlink inside cwd targeting outside", async () => {
+      const outside = await mkdtemp(join(tmpdir(), "fragua-escape-bytes-"));
+      try {
+        await fsWriteFile(join(outside, "secret.txt"), "leaked");
+        await symlink(join(outside, "secret.txt"), join(scratch, "shortcut"));
+        await expect(env.readFileBytes("shortcut")).rejects.toBeInstanceOf(PathEscapeError);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("envAllowNames (deny-by-default)", () => {
