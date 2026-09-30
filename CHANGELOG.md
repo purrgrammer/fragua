@@ -79,9 +79,14 @@ guarantee.
   `max-retries: N` to cap a check→fix cycle cleanly. The counter resets on the
   step's next success.
 - **Internal discipline lints are AST-based rather than regex source scans.** The
-  transaction-purity, routing-index, inline-import, handler-I/O, and
-  browser-safety checks now parse the TypeScript AST, so a forbidden call can no
-  longer slip past by renaming a binding or routing through a helper.
+  transaction-purity, routing-index, inline-import, handler-I/O, browser-safety,
+  store sub-interface split, intent-plane write, read-plane fs, and handler
+  external-side-effect checks now parse the TypeScript AST, so a forbidden call
+  can no longer slip past by renaming a binding, aliasing an import, using a
+  computed member access, or routing through a helper. The transaction-purity
+  check follows the import graph into the `*-queries.ts` modules a write
+  transaction routes its inserts through, and the handler external-side-effect
+  check follows a handler's imports into helper modules outside `handlers/`.
 - **A run's title and its schedule's audit trail now land with the write they
   belong to.** An operator-supplied run title (`fragua run --title`, the API
   `title`, a schedule's title) is folded into the enqueue event instead of a

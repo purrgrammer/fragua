@@ -1,24 +1,29 @@
 // Intent-plane discipline (intent-plane.md §3.1): the plane
-// (@fragua/core/intent-plane) is the ONLY place allowed to call the three
-// store-write methods it owns — `appendIntent`, `enqueueRun`, `saveWorkflow`.
-// Adapters (HTTP routes, the daemon dispatcher, the CLI store-client) must
-// go through `plane.commit` / `commitEnqueue` / `commitSaveWorkflow`. This
-// scan fails the build if a store-write call appears in an adapter, so "one
-// audit surface for writes" is enforced, not merely asserted in prose.
-// The plane's own internals (packages/core/src/intent-plane) are exempt by
-// construction: core is not in SCAN_DIRS.
+// (@fragua/core/intent-plane) is the ONLY place allowed to call the
+// store-write methods it owns — `appendIntent`, `enqueueRun`, `saveWorkflow`,
+// `setRunTitle`, and the schedule CRUD mutators. Adapters (HTTP routes, the
+// daemon dispatcher, the CLI store-client) must go through `plane.commit` /
+// `commitEnqueue` / `commitSaveWorkflow`. This scan fails the build if a
+// store-write call appears in an adapter, so "one audit surface for writes" is
+// enforced, not merely asserted in prose. The plane's own internals
+// (packages/core/src/intent-plane) are exempt by construction: core is not in
+// SCAN_DIRS.
 //
-// Shape: packages/core/test/handler/discipline.test.ts, store/test/lint.test.ts.
+// This is an AST walk (not a regex over source text), so a computed member
+// access — `store["enqueueRun"]()` — is caught the same as `store.enqueueRun()`.
+// Shape mirrors packages/server/test/inline-import-discipline.test.ts.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { lineOf, parseSource, walk } from "@fragua/test-utils";
+import ts from "typescript";
 
 // Store-write methods that must only be reached through the intent plane
 // (`commit*`). Beyond the original three, this now covers `setRunTitle` and the
 // schedule CRUD mutators — both were adapter-side eventless / non-transactional
 // writes before they were folded into the plane's atomic commits.
-const WRITE_METHODS = [
+const WRITE_METHODS = new Set<string>([
   "appendIntent",
   "enqueueRun",
   "saveWorkflow",
@@ -27,7 +32,7 @@ const WRITE_METHODS = [
   "pauseSchedule",
   "resumeSchedule",
   "deleteSchedule",
-] as const;
+]);
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
 
 /** Sanctioned direct callers of otherwise-plane-only writes:
@@ -61,6 +66,33 @@ function walkTs(dir: string): string[] {
   return out;
 }
 
+/** The write-method name a call's callee names, whether reached through a
+ * property access (`store.enqueueRun(...)`) or a computed element access with a
+ * string-literal key (`store["enqueueRun"](...)`). */
+function writeMethodOfCall(node: ts.CallExpression): string | undefined {
+  const callee = node.expression;
+  if (ts.isPropertyAccessExpression(callee) && WRITE_METHODS.has(callee.name.text)) return callee.name.text;
+  if (ts.isElementAccessExpression(callee)) {
+    const arg = callee.argumentExpression;
+    if (ts.isStringLiteralLike(arg) && WRITE_METHODS.has(arg.text)) return arg.text;
+  }
+  return undefined;
+}
+
+function scan(sf: ts.SourceFile): { method: string; line: number }[] {
+  const out: { method: string; line: number }[] = [];
+  walk(sf, (n) => {
+    if (!ts.isCallExpression(n)) return;
+    const method = writeMethodOfCall(n);
+    if (method !== undefined) out.push({ method, line: lineOf(sf, n) });
+  });
+  return out;
+}
+
+function scanString(src: string): { method: string; line: number }[] {
+  return scan(ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+}
+
 const hits: { rel: string; method: string; line: number }[] = [];
 for (const dir of SCAN_DIRS) {
   for (const file of walkTs(dir)) {
@@ -69,13 +101,7 @@ for (const dir of SCAN_DIRS) {
       .split("\\")
       .join("/");
     if (EXEMPT_FILES.has(rel)) continue;
-    readFileSync(file, "utf8")
-      .split("\n")
-      .forEach((text, i) => {
-        for (const m of WRITE_METHODS) {
-          if (new RegExp(`\\.${m}\\(`).test(text)) hits.push({ rel, method: m, line: i + 1 });
-        }
-      });
+    for (const h of scan(parseSource(file))) hits.push({ rel, method: h.method, line: h.line });
   }
 }
 
@@ -84,5 +110,14 @@ describe("intent-plane discipline — store writes only inside the plane", () =>
     // If this fails: route the write through plane.commit / commitEnqueue /
     // commitSaveWorkflow instead of calling the store method directly.
     expect(hits).toEqual([]);
+  });
+
+  test("flags computed store['enqueueRun']() access", () => {
+    expect(scanString(`store["enqueueRun"](params);\n`).map((h) => h.method)).toContain("enqueueRun");
+  });
+
+  test("honours EXEMPT_FILES and dotted commit* passthrough", () => {
+    expect(EXEMPT_FILES.has("packages/daemon/src/auto-titler.ts")).toBe(true);
+    expect(scanString(`plane.commit(x); plane.commitEnqueue(y); plane.commitSaveWorkflow(z);\n`)).toEqual([]);
   });
 });

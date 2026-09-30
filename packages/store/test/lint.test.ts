@@ -10,20 +10,23 @@
 // the caller pre-serializes and validates before the transaction opens.
 //
 // This is an AST scan (not a regex over source text): it walks the callback body
-// AND, to full transitive depth, the bodies of any function declared in the SAME
-// file that the callback calls — so routing a `JSON.stringify` through a chain of
-// private helpers no longer escapes the rule the way the old substring scan (and
-// the earlier one-level inliner) let it.
+// AND, to full transitive depth, the bodies of any function the callback calls —
+// both same-file helpers AND functions imported over a RELATIVE import (the
+// `*-queries.ts` modules a `writeTxn` body routes its inserts through). So
+// routing a `JSON.stringify` through a chain of private helpers, or through a
+// cross-file query function, no longer escapes the rule the way the old
+// same-file-only inliner let it.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   callbackBodiesOf,
   collectAwaits,
   collectCalls,
   lineOf,
   parseSource,
+  resolveImportedFunctionBody,
   sameFileFunctionBodies,
 } from "@fragua/test-utils";
 import ts from "typescript";
@@ -110,22 +113,51 @@ function scanBody(body: ts.Node, sf: ts.SourceFile, file: string): Offender[] {
   return offenders;
 }
 
-/** Scan a transaction scope and every same-file helper it reaches, to full
- * transitive depth. Each same-file function called synchronously runs under the
- * same lock, so its body is scanned too; a `seen` set makes the walk cycle-safe
- * and O(helpers). */
-function scanScope(rootBody: ts.Node, sf: ts.SourceFile, file: string, helpers: Map<string, ts.Node>): Offender[] {
+interface Frame {
+  body: ts.Node;
+  sf: ts.SourceFile;
+  file: string;
+}
+
+/** Scan a transaction scope and every function it reaches, to full transitive
+ * depth. A synchronously-called function runs under the same write lock, so its
+ * body is scanned too — whether it is a same-file helper OR a function imported
+ * over a relative import (the `*-queries.ts` modules). A `seen` set keyed by
+ * `file::name` makes the cross-file walk cycle-safe; `sameFileFunctionBodies` is
+ * memoised per module. */
+function scanScope(rootBody: ts.Node, rootSf: ts.SourceFile, rootFile: string): Offender[] {
   const offenders: Offender[] = [];
   const seen = new Set<string>();
-  const stack: ts.Node[] = [rootBody];
+  const helpersCache = new Map<string, Map<string, ts.Node>>();
+  const helpersFor = (file: string, sf: ts.SourceFile): Map<string, ts.Node> => {
+    let h = helpersCache.get(file);
+    if (h === undefined) {
+      h = sameFileFunctionBodies(sf);
+      helpersCache.set(file, h);
+    }
+    return h;
+  };
+  const stack: Frame[] = [{ body: rootBody, sf: rootSf, file: rootFile }];
   while (stack.length > 0) {
-    const body = stack.pop()!;
+    const { body, sf, file } = stack.pop()!;
     offenders.push(...scanBody(body, sf, file));
+    const dir = dirname(file);
+    const helpers = helpersFor(file, sf);
     for (const call of collectCalls(body, sf, true)) {
+      const sameKey = `${file}::${call.name}`;
       const helperBody = helpers.get(call.name);
-      if (helperBody !== undefined && !seen.has(call.name)) {
-        seen.add(call.name);
-        stack.push(helperBody);
+      if (helperBody !== undefined && !seen.has(sameKey)) {
+        seen.add(sameKey);
+        stack.push({ body: helperBody, sf, file });
+        continue;
+      }
+      const imported = resolveImportedFunctionBody(sf, dir, call.name);
+      if (imported !== undefined) {
+        const crossKey = `${imported.sf.fileName}::${call.name}`;
+        if (!seen.has(crossKey)) {
+          seen.add(crossKey);
+          stack.push({ body: imported.body, sf: imported.sf, file: imported.sf.fileName });
+        }
       }
     }
   }
@@ -134,9 +166,8 @@ function scanScope(rootBody: ts.Node, sf: ts.SourceFile, file: string, helpers: 
 
 function scanFile(file: string): Offender[] {
   const sf = parseSource(file);
-  const helpers = sameFileFunctionBodies(sf);
   const offenders: Offender[] = [];
-  for (const body of collectTxnScopeBodies(sf)) offenders.push(...scanScope(body, sf, file, helpers));
+  for (const body of collectTxnScopeBodies(sf)) offenders.push(...scanScope(body, sf, file));
   return offenders;
 }
 
@@ -158,9 +189,8 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
 
   const scanSynthetic = (src: string): Offender[] => {
     const sf = ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    const helpers = sameFileFunctionBodies(sf);
     const out: Offender[] = [];
-    for (const body of collectTxnScopeBodies(sf)) out.push(...scanScope(body, sf, "synthetic.ts", helpers));
+    for (const body of collectTxnScopeBodies(sf)) out.push(...scanScope(body, sf, "synthetic.ts"));
     return out;
   };
 
@@ -169,6 +199,11 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
     const kinds = scanSynthetic(src).map((o) => o.kind);
     expect(kinds).toContain("JSON.parse");
     expect(kinds).toContain("fetch");
+  });
+
+  test("catches JSON.stringify reached through a cross-file queries function", () => {
+    const caller = join(__dirname, "fixtures", "txn-crossfile", "caller.ts");
+    expect(scanFile(caller).map((o) => o.kind)).toContain("JSON.stringify");
   });
 
   test("catches JSON.stringify reached through a same-file helper", () => {
