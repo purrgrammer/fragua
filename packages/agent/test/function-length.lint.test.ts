@@ -156,5 +156,11 @@ describe("function-length discipline", () => {
     expect(files).toContain("backend.ts");
     expect(files).toContain("system-prompt.ts");
     expect(files).toContain("credentials/model-registry.ts");
+    // The backend split modules are scanned too, so an over-length function in
+    // any of them fails the ceiling rather than hiding in a fresh file.
+    expect(files).toContain("tool-assembly.ts");
+    expect(files).toContain("exit-tools.ts");
+    expect(files).toContain("provider-errors.ts");
+    expect(files).toContain("transcript.ts");
   });
 });
