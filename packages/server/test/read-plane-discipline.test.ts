@@ -19,13 +19,24 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { allowMarked, collectCalls, lineOf, parseSource, walk } from "@fragua/test-utils";
 import ts from "typescript";
 
-const SRC_STORE_DIR = join(import.meta.dir, "..", "src", "store");
-const SCANNED_FILES = ["routes.ts", "runs-routes.ts", "sse.ts"].map((f) => join(SRC_STORE_DIR, f));
+const SRC_DIR = join(import.meta.dir, "..", "src");
+const SCANNED_FILES = [
+  join(SRC_DIR, "store", "routes.ts"),
+  join(SRC_DIR, "store", "runs-routes.ts"),
+  join(SRC_DIR, "store", "sse.ts"),
+  join(SRC_DIR, "routes", "run-files.ts"),
+  join(SRC_DIR, "routes", "projects.ts"),
+];
 const ALLOW_MARKER = "read-discipline-allow:";
+
+/** The deps-record identifiers a run-read route body destructures / reads its
+ * store from. The store routes carry `deps`; the run-file / project routes
+ * carry `opts`. */
+const STORE_BASES = new Set(["deps", "opts"]);
 
 /** Strip `as`/`satisfies`/parenthesized/`!` wrappers to reach the underlying
  * expression — `deps.store as unknown as { … }` unwraps to `deps.store`. */
@@ -42,28 +53,37 @@ function unwrap(expr: ts.Expression): ts.Expression {
   return e;
 }
 
-/** Is this expression the `deps.store` property access? */
+/** Is this expression a `<base>.store` property access, for a `base` in
+ * {@link STORE_BASES} (`deps.store` / `opts.store`)? */
 function isDepsStore(expr: ts.Expression): boolean {
   const e = unwrap(expr);
   return (
     ts.isPropertyAccessExpression(e) &&
     e.name.text === "store" &&
     ts.isIdentifier(e.expression) &&
-    e.expression.text === "deps"
+    STORE_BASES.has(e.expression.text)
   );
 }
 
-/** Names of same-file consts aliased to `deps.store` (`const store = deps.store as …`). */
+/** Names of same-file consts aliased to a `<base>.store` binding, whether by a
+ * plain assignment (`const store = deps.store as …`) or by destructuring
+ * (`const { store } = opts`). */
 function storeAliases(sf: ts.SourceFile): Set<string> {
   const aliases = new Set<string>();
   walk(sf, (n) => {
-    if (
-      ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
-      n.initializer !== undefined &&
-      isDepsStore(n.initializer)
-    ) {
+    if (!ts.isVariableDeclaration(n) || n.initializer === undefined) return;
+    if (ts.isIdentifier(n.name) && isDepsStore(n.initializer)) {
       aliases.add(n.name.text);
+      return;
+    }
+    const init = unwrap(n.initializer);
+    if (ts.isObjectBindingPattern(n.name) && ts.isIdentifier(init) && STORE_BASES.has(init.text)) {
+      for (const el of n.name.elements) {
+        const source = el.propertyName ?? el.name;
+        if (ts.isIdentifier(source) && source.text === "store" && ts.isIdentifier(el.name)) {
+          aliases.add(el.name.text);
+        }
+      }
     }
   });
   return aliases;
@@ -97,14 +117,15 @@ function scanString(src: string): Offense[] {
 describe("read-plane discipline — no raw deps.store reads in run-read route bodies", () => {
   test("scans the run-read route files", () => {
     expect(SCANNED_FILES.every((f) => existsSync(f))).toBe(true);
-    expect(SCANNED_FILES).toContain(join(SRC_STORE_DIR, "routes.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "store", "routes.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "run-files.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "projects.ts"));
   });
 
   test("no raw deps.store reader call outside the read plane and the allow marker", () => {
     const offenders: string[] = [];
     for (const file of SCANNED_FILES) {
-      for (const o of scan(parseSource(file)))
-        offenders.push(`${file.slice(SRC_STORE_DIR.length + 1)}:${o.line} → ${o.callee}`);
+      for (const o of scan(parseSource(file))) offenders.push(`${relative(SRC_DIR, file)}:${o.line} → ${o.callee}`);
     }
     if (offenders.length > 0)
       throw new Error(`read-plane discipline violations:\n${offenders.map((o) => `  ${o}`).join("\n")}`);

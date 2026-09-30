@@ -66,6 +66,14 @@ export interface RunControlState {
   baseGitSha: string | null;
 }
 
+/** The run's diff baseline: the resolved project root and the honest diff
+ *  base commit, or a `null` field when either is unresolvable. Backs the
+ *  `/runs/:id/changes` + `/diff` git reads. */
+export interface DiffContext {
+  cwd: string | null;
+  base: string | null;
+}
+
 /** One row of the identity projection over `run_state.project_id`. */
 export type ProjectRow = ReturnType<IEventReader["listProjects"]>[number];
 
@@ -148,6 +156,11 @@ export interface ReadPlane {
    *  Backs the accept/discard gate, the SSE close-check, and the HITL
    *  status precheck. */
   controlState(runId: string): RunControlState | null;
+  /** The run's diff baseline — resolved project root plus the honest diff
+   *  base commit (`diffBaseSha` ⊕ `baseGitSha` ⊕ the `fact.run_started`
+   *  payload's `baseGitSha`), or `null` when the run is absent. Backs the
+   *  `/runs/:id/changes` + `/diff` git reads. */
+  diffContext(runId: string): DiffContext | null;
   /** Identity projection: one row per distinct `run_state.project_id`,
    *  most-recent activity first. Backs `GET /projects`. */
   projects(): ProjectRow[];
@@ -348,6 +361,12 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
         baseGitSha: state.baseGitSha,
       };
     },
+    diffContext(runId) {
+      const state = store.getState(runId);
+      if (state == null) return null;
+      const base = state.diffBaseSha ?? pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
+      return { cwd: state.cwd, base };
+    },
     projects() {
       return store.listProjects();
     },
@@ -358,4 +377,18 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       return requireAnalytics().getGlobalModelBreakdown(opts);
     },
   };
+}
+
+/** Prefer the projection's `baseGitSha` and fall back to walking events for
+ *  `fact.run_started.payload.baseGitSha` (set by the executor from the
+ *  worktree env). Returns `null` when neither is present — no diff baseline
+ *  to render. */
+function pickBaseGitSha(projected: string | null, events: StoredEvent[]): string | null {
+  if (projected != null && projected.length > 0) return projected;
+  for (const ev of events) {
+    if (ev.type !== "fact.run_started") continue;
+    const sha = (ev.payload as { baseGitSha?: unknown }).baseGitSha;
+    if (typeof sha === "string" && sha.length > 0) return sha;
+  }
+  return null;
 }

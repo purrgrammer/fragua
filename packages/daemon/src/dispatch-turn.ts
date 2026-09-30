@@ -41,13 +41,13 @@ import {
   deriveResumeOf,
   errorMessage,
   nodeRetryCount,
-  passField,
   readBudgetOverrides,
   readBudgetWarned,
   routingString,
 } from "./executor-helpers.ts";
 import { runFanout } from "./fanout.ts";
 import { invokeHandler } from "./invoke-handler.ts";
+import { planDispatchStarted, planOperatorPause, planRunStarted } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, commitWithOcc, type DispatchOutcome, occAppendOnce } from "./occ-append.ts";
 import { planLeakHalt, planPreDispatch } from "./predispatch-planner.ts";
 import { cancelToFacts } from "./result-to-facts.ts";
@@ -215,7 +215,7 @@ async function commitPause(deps: RunDeps, runState: RunState, decision: ProceedD
       successOutcome: { kind: "terminal" },
       statusOutcome: { kind: "terminal" },
     },
-    [{ type: "fact.run_paused", payload: { reason: "operator", nodeId: runState.currentNode ?? "" } }],
+    planOperatorPause({ nodeId: runState.currentNode ?? "" }).facts,
   );
 }
 
@@ -278,18 +278,13 @@ async function startRun(
   const start = routingString(runState.routing, "start_node") ?? "start";
   const baseGitSha = runState.baseGitSha ?? opts.provisioner?.baseGitSha(deps.runId) ?? undefined;
   const baseGitRef = runState.baseGitRef ?? opts.provisioner?.baseGitRef(deps.runId) ?? undefined;
-  const startFacts: FactEvent[] = [
-    {
-      type: "fact.run_started",
-      payload: {
-        workflowSha: runState.workflowSha,
-        contractVersion: runState.contractVersion,
-        startNode: start,
-        ...(baseGitSha != null ? { baseGitSha } : {}),
-        ...(baseGitRef != null ? { baseGitRef } : {}),
-      },
-    },
-  ];
+  const startFacts: FactEvent[] = planRunStarted({
+    workflowSha: runState.workflowSha,
+    contractVersion: runState.contractVersion,
+    startNode: start,
+    ...(baseGitSha != null ? { baseGitSha } : {}),
+    ...(baseGitRef != null ? { baseGitRef } : {}),
+  }).facts;
   const startGraph = graphFor(deps, ts, runState.workflowSha);
   const startRoutingPatch: Record<string, unknown> = { ...decision.routingDelta };
   if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "")
@@ -363,17 +358,12 @@ async function commitDispatchMarker(
         deps.occ.onResolved(currentNode, dispatchIteration);
       },
     },
-    [
-      {
-        type: "fact.dispatch_started",
-        payload: {
-          nodeId: currentNode,
-          iteration: dispatchIteration,
-          ...passField(dispatchPass),
-          resumeOf: deriveResumeOf(opts.store, deps.runId),
-        },
-      },
-    ],
+    planDispatchStarted({
+      nodeId: currentNode,
+      iteration: dispatchIteration,
+      pass: dispatchPass,
+      resumeOf: deriveResumeOf(opts.store, deps.runId),
+    }).facts,
   );
 }
 

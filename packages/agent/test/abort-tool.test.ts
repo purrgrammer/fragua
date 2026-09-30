@@ -29,7 +29,12 @@ describe("findAbortToolCall", () => {
 
   test("returns the reason for an assistant `abort` tool-call block", () => {
     const r = findAbortToolCall([assistant(toolCall("abort", { reason: "missing $ARGUMENTS" }))]);
-    expect(r).toEqual({ reason: "missing $ARGUMENTS" });
+    expect(r).toEqual({ reason: "missing $ARGUMENTS", isolated: true });
+  });
+
+  test("reports isolated=false when abort shares a batch with another tool", () => {
+    const r = findAbortToolCall([assistant(toolCall("abort", { reason: "blocked" }), toolCall("read", { path: "x" }))]);
+    expect(r).toEqual({ reason: "blocked", isolated: false });
   });
 
   test("returns null for plain text and for other tool calls", () => {
@@ -145,6 +150,50 @@ describe("PiLlmBackend abort tool wiring", () => {
       expect(outcome.non_retryable).toBe(true);
       expect(outcome.failure_reason).toBe("target file does not exist");
     } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-isolated abort call fails the node non-retryably", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-abort-isolation-"));
+    const faux = registerFauxProvider();
+    try {
+      const model = faux.getModel();
+      // abort() shares its assistant response with read(). The mixed batch
+      // means the loop runs one more turn; the abort scan sees isolated=false.
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall("abort", { reason: "blocked by missing input" }, { id: "tc1" }),
+            fauxToolCall("read", { path: "AGENTS.md" }, { id: "tc2" }),
+          ],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage([fauxText("done")], { stopReason: "stop" }),
+      ]);
+
+      const env = new LocalEnvironment({ cwd: scratch });
+      const backend = new PiLlmBackend({
+        registry: coreRegistry(),
+        env,
+        resolveModel: () => model,
+        defaultModel: { provider: model.provider, model: model.id },
+        skills: [],
+      });
+
+      const outcome = await backend.run({
+        node: { id: "n1", type: "llm", attrs: {} },
+        prompt: "do the thing",
+        thread_id: undefined,
+        signal: new AbortController().signal,
+        run_id: "test-abort-isolation",
+        workflow_sha: "sha",
+      });
+      expect(outcome.status).toBe("fail");
+      expect(outcome.non_retryable).toBe(true);
+      expect(outcome.failure_reason).toContain("shared an assistant response");
+    } finally {
+      faux.unregister();
       await rm(scratch, { recursive: true, force: true });
     }
   });

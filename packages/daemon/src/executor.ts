@@ -22,6 +22,7 @@ import { dispatchOne } from "./dispatch-turn.ts";
 import type { RunDeps } from "./dispatch-wiring.ts";
 import { errorMessage, sleep } from "./executor-helpers.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
+import { planCrashHalt } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { create as createTurnState } from "./run-turn-state.ts";
@@ -237,16 +238,9 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
     const state = opts.store.getState(runId);
     if (state != null && state.status === "running") {
       const nodeId = state.currentNode ?? "<no-node>";
-      const errorFacts: FactEvent[] = [
-        {
-          type: "fact.run_terminated",
-          payload: {
-            status: "errored",
-            reason: "error",
-            detail: `executor crashed at ${nodeId}: ${errorMessage(err)}`,
-          },
-        },
-      ];
+      const errorFacts: FactEvent[] = planCrashHalt({
+        detail: `executor crashed at ${nodeId}: ${errorMessage(err)}`,
+      }).facts;
       const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
       for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
         const fresh = opts.store.getState(runId);

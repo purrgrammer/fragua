@@ -31,7 +31,7 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { IEventReader, StoredEvent } from "@fragua/store";
+import type { ReadPlane } from "@fragua/core/read-plane";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 
@@ -48,7 +48,7 @@ const GIT_TIMEOUT_MS = 5_000;
 const MAX_CHANGES = 5_000;
 
 export interface RunFilesRouteOptions {
-  store: IEventReader;
+  readPlane: Pick<ReadPlane, "controlState" | "diffContext">;
   reader: ProjectTreeReader;
 }
 
@@ -61,11 +61,11 @@ export interface RunChange {
 
 export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
   const app = new Hono();
-  const { store, reader } = opts;
+  const { readPlane, reader } = opts;
 
   app.get("/runs/:runId/tree", async (c) => {
     const runId = c.req.param("runId");
-    const lookup = await resolveRunWorktree(store, runId);
+    const lookup = await resolveRunWorktree(readPlane, runId);
     if (lookup.kind === "not_found") return c.json({ error: "not_found" }, 404);
     if (lookup.kind === "disposed") return c.json({ error: "worktree_disposed" }, 410);
     const entries = await reader.list(lookup.worktreePath);
@@ -74,7 +74,7 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
 
   app.get("/runs/:runId/blob", async (c) => {
     const runId = c.req.param("runId");
-    const lookup = await resolveRunWorktree(store, runId);
+    const lookup = await resolveRunWorktree(readPlane, runId);
     if (lookup.kind === "not_found") return c.json({ error: "not_found" }, 404);
     if (lookup.kind === "disposed") return c.json({ error: "worktree_disposed" }, 410);
 
@@ -106,34 +106,31 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
 
   app.get("/runs/:runId/changes", async (c) => {
     const runId = c.req.param("runId");
-    const state = store.getState(runId);
-    if (state == null) return c.json({ error: "not_found" }, 404);
-    if (state.cwd == null) return c.json([]);
+    const ctx = readPlane.diffContext(runId);
+    if (ctx == null) return c.json({ error: "not_found" }, 404);
+    if (ctx.cwd == null) return c.json([]);
+    if (ctx.base == null) return c.json([]);
 
-    const base = state.diffBaseSha ?? pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
-    if (base == null) return c.json([]);
-
-    const tip = await resolveSnapshotTip(state.cwd, runId);
+    const tip = await resolveSnapshotTip(ctx.cwd, runId);
     if (tip == null) return c.json([]);
 
-    const changes = await diffNumstatNameStatus(state.cwd, base, tip);
+    const changes = await diffNumstatNameStatus(ctx.cwd, ctx.base, tip);
     return c.json(changes.slice(0, MAX_CHANGES));
   });
 
   app.get("/runs/:runId/diff", async (c) => {
     const runId = c.req.param("runId");
-    const state = store.getState(runId);
-    if (state == null) return c.json({ error: "not_found" }, 404);
+    const ctx = readPlane.diffContext(runId);
+    if (ctx == null) return c.json({ error: "not_found" }, 404);
 
-    const base = state.diffBaseSha ?? pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
-    if (base == null || state.cwd == null) {
+    if (ctx.base == null || ctx.cwd == null) {
       return c.json({ error: "base_missing" }, 410);
     }
 
-    const tip = await resolveSnapshotTip(state.cwd, runId);
+    const tip = await resolveSnapshotTip(ctx.cwd, runId);
     if (tip == null) return c.json({ error: "snapshot_missing" }, 410);
 
-    const diff = await runGitCapture(state.cwd, ["diff", `${base}..${tip}`]);
+    const diff = await runGitCapture(ctx.cwd, ["diff", `${ctx.base}..${tip}`]);
     return new Response(diff, {
       status: 200,
       headers: { "content-type": "text/x-diff; charset=utf-8" },
@@ -145,8 +142,8 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
 
 type WorktreeLookup = { kind: "ok"; cwd: string; worktreePath: string } | { kind: "not_found" } | { kind: "disposed" };
 
-async function resolveRunWorktree(store: IEventReader, runId: string): Promise<WorktreeLookup> {
-  const state = store.getState(runId);
+async function resolveRunWorktree(readPlane: Pick<ReadPlane, "controlState">, runId: string): Promise<WorktreeLookup> {
+  const state = readPlane.controlState(runId);
   if (state == null) return { kind: "not_found" };
   if (state.cwd == null) return { kind: "disposed" };
   const worktreePath = join(state.cwd, ".fragua", "worktrees", runId);
@@ -167,21 +164,6 @@ function isPreflightSafe(p: string): boolean {
     if (seg === "..") return false;
   }
   return true;
-}
-
-/** Prefer the projection's `baseGitSha` (cheap, already there) and
- *  fall back to walking events for `fact.run_started.payload.baseGitSha`
- *  (set by the executor from `WorktreeEnvironment.baseGitSha`,
- *  worktree-env.ts:158). Returns null when neither is present —
- *  there's no diff baseline to render. */
-function pickBaseGitSha(projected: string | null, events: StoredEvent[]): string | null {
-  if (projected != null && projected.length > 0) return projected;
-  for (const ev of events) {
-    if (ev.type !== "fact.run_started") continue;
-    const sha = (ev.payload as { baseGitSha?: unknown }).baseGitSha;
-    if (typeof sha === "string" && sha.length > 0) return sha;
-  }
-  return null;
 }
 
 /** `git rev-parse refs/heads/fragua/runs/<runId>` from the run's project

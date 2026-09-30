@@ -298,8 +298,8 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       return result satisfies HandlerResult;
     }
 
-    // Hard-halt outcomes from the llm agent boundary
-    // (`route_not_picked` / `route_call_not_isolated`). The backend
+    // Hard-halt outcomes from the llm agent boundary (`route_not_picked` —
+    // a routing node that ended without an exit). The backend
     // never constructs a
     // `HandlerResult.halt` itself; it signals via `outcome.halt_reason`
     // and we translate here so the executor's `case "halt"` path emits

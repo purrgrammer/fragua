@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { projectsRoutes } from "../../src/routes/projects.ts";
@@ -63,7 +64,7 @@ async function setup(): Promise<Fixture> {
     },
   };
 
-  const app = projectsRoutes({ store, reader });
+  const app = projectsRoutes({ readPlane: makeReadPlane({ store }), reader });
   return { store, cwd, projId: PROJECT_ID, app };
 }
 
@@ -98,6 +99,16 @@ describe("GET /projects/:id/tree", () => {
     expect(body.some((e) => e.type === "dir")).toBe(true);
     expect(body.some((e) => e.type === "file")).toBe(true);
     expect(body.some((e) => e.path === "hello.txt" && e.type === "file")).toBe(true);
+  });
+
+  test("tree route resolves cwd through the read plane", async () => {
+    const known = await get(`/projects/${fx.projId}/tree`);
+    expect(known.status).toBe(200);
+    expect(Array.isArray(await known.json())).toBe(true);
+
+    const unknown = await get(`/projects/unknown-project-id/tree`);
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: string }).error).toBe("not_found");
   });
 
   test("4xx when the project_id is garbage (unknown → refused)", async () => {

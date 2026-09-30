@@ -931,6 +931,12 @@ export class PiLlmBackend implements LlmBackend {
       // transcript evidence, and routing it as a provider pause would
       // resurrect a run the agent declared unworkable.
       const abortedEarlier = findAbortToolCall(agent.state.messages.slice(hydratedCount));
+      if (abortedEarlier && !abortedEarlier.isolated) {
+        return fail(
+          "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+          { non_retryable: true },
+        );
+      }
       if (abortedEarlier) {
         return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
       }
@@ -984,6 +990,15 @@ export class PiLlmBackend implements LlmBackend {
     const lastAssistant = lastAssistantMessage(agent.state.messages);
     const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
     const aborted = findAbortToolCall(agent.state.messages.slice(hydratedCount));
+    // Isolation (mirrors the route / emit_output exits, D3): the `abort` tool
+    // terminates the turn, so a tool sharing its batch runs blind. Force it
+    // onto a response of its own.
+    if (aborted && !aborted.isolated) {
+      return fail(
+        "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+        { non_retryable: true },
+      );
+    }
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
     // Route-tool resolution. Only considered when the node opted into
@@ -995,7 +1010,10 @@ export class PiLlmBackend implements LlmBackend {
         return failHalt("route_not_picked", "agent ended turn without calling route()");
       }
       if (!routeCall.isolated) {
-        return failHalt("route_call_not_isolated", "route() shared an assistant response with other tool calls");
+        return fail(
+          "route() shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+          { non_retryable: true },
+        );
       }
       return ok({ notes, route: routeCall.route });
     }
@@ -1319,16 +1337,24 @@ function lastAssistantMessage(
  */
 export function findAbortToolCall(
   messages: ReadonlyArray<{ role: string; content?: unknown }>,
-): { reason: string } | null {
+): { reason: string; isolated: boolean } | null {
   for (const message of messages) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     const blocks = message.content as Array<{ type: string; name?: string; arguments?: Record<string, unknown> }>;
+    let abortBlock: { arguments?: Record<string, unknown> } | undefined;
+    let otherToolCalls = 0;
     for (const block of blocks) {
-      if (block.type !== "toolCall" || block.name !== "abort") continue;
-      const rawReason = typeof block.arguments?.["reason"] === "string" ? block.arguments["reason"] : "";
-      const reason = rawReason.replace(/\s+/g, " ").trim().slice(0, 400);
-      return { reason: reason.length > 0 ? reason : "agent aborted without a reason" };
+      if (block.type !== "toolCall") continue;
+      if (block.name === "abort" && abortBlock === undefined) {
+        abortBlock = block;
+        continue;
+      }
+      otherToolCalls += 1;
     }
+    if (abortBlock === undefined) continue;
+    const rawReason = typeof abortBlock.arguments?.["reason"] === "string" ? abortBlock.arguments["reason"] : "";
+    const reason = rawReason.replace(/\s+/g, " ").trim().slice(0, 400);
+    return { reason: reason.length > 0 ? reason : "agent aborted without a reason", isolated: otherToolCalls === 0 };
   }
   return null;
 }

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
 import type { ProjectTreeEntry, ProjectTreeReader, ReadBlobResult } from "../../src/ports.ts";
 import { runFilesRoutes } from "../../src/routes/run-files.ts";
@@ -60,7 +61,7 @@ async function setup(opts: { withWorktreeDir?: boolean } = {}): Promise<Fixture>
   store.enqueueRun({ runId, workflowSha: "wf_run_files", cwd });
 
   const reader = stubReader();
-  const app = runFilesRoutes({ store, reader });
+  const app = runFilesRoutes({ readPlane: makeReadPlane({ store }), reader });
   return { store, cwd, runId, app, reader };
 }
 
@@ -208,7 +209,7 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
   );
 
   const reader = stubReader();
-  const app = runFilesRoutes({ store, reader });
+  const app = runFilesRoutes({ readPlane: makeReadPlane({ store }), reader });
   return { cwd, runId, baseSha, store, app };
 }
 
@@ -251,6 +252,23 @@ describe("GET /runs/:runId/changes", () => {
     // removed the per-test fixture above.
     fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
   });
+
+  test("changes route returns rows through the read plane", async () => {
+    const g = await setupGitRun({ withTip: true, runId: "r-changes-rp", slug: "changes-rp" });
+    const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/changes`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ path: string; status: string; additions: number; deletions: number }>;
+    expect(body.length).toBeGreaterThan(0);
+    for (const row of body) {
+      expect(typeof row.path).toBe("string");
+      expect(["added", "modified", "deleted", "renamed"]).toContain(row.status);
+      expect(Number.isInteger(row.additions)).toBe(true);
+      expect(Number.isInteger(row.deletions)).toBe(true);
+    }
+    g.store.close();
+    await rm(g.cwd, { recursive: true, force: true });
+    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
+  });
 });
 
 describe("GET /runs/:runId/diff", () => {
@@ -286,6 +304,21 @@ describe("GET /runs/:runId/diff", () => {
     g.store.close();
     await rm(g.cwd, { recursive: true, force: true });
     fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
+  });
+
+  test("diff route returns text/x-diff through the read plane", async () => {
+    const g = await setupGitRun({ withTip: true, runId: "r-diff-rp", slug: "diff-rp" });
+    const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/diff`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/x-diff/);
+    g.store.close();
+    await rm(g.cwd, { recursive: true, force: true });
+    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
+
+    fx = await setup();
+    const missing = await get(`/runs/${fx.runId}/diff`);
+    expect(missing.status).toBe(410);
+    expect(((await missing.json()) as { error: string }).error).toBe("base_missing");
   });
 });
 

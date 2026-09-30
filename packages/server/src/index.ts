@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import { type IEventStore, newRunId } from "@fragua/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
@@ -114,12 +115,13 @@ function buildApiApp(opts: ServerOptions): Hono {
   const snapshotReader: RunSnapshotReader = ports.runSnapshotReader ?? createRunSnapshotReader();
 
   const api = new Hono();
+  const readPlane = makeReadPlane({ store: opts.store, analytics: opts.store });
   api.use("*", createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined) }));
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
-  api.route("/", projectsRoutes({ store: opts.store, reader: projectTreeReader }));
+  api.route("/", projectsRoutes({ readPlane, reader: projectTreeReader }));
   api.route("/", runSnapshotsRoutes({ store: opts.store, reader: snapshotReader }));
-  api.route("/", runFilesRoutes({ store: opts.store, reader: projectTreeReader }));
+  api.route("/", runFilesRoutes({ readPlane, reader: projectTreeReader }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
   api.route("/", analyticsRoutes({ store: opts.store, workflowReader }));
   api.route(

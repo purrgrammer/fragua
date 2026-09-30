@@ -2,7 +2,7 @@
 // GET /projects/:id/blob?path=\u2026  \u2014 raw text content of one file.
 //
 // `:id` is the project IDENTITY (`run_state.project_id`). The routes
-// resolve it to a local cwd via `store.listProjects()` (the same
+// resolve it to a local cwd via `readPlane.projects()` (the same
 // enumeration `GET /projects` uses) and then read files there. A project
 // that is known but has no local checkout (imported-only \u2014 NULL cwdHint)
 // degrades to `not_found`, which the web renders as "not checked out
@@ -12,28 +12,28 @@
 // All filesystem work happens in the injected `ProjectTreeReader`. The
 // routes only do lookup and response shaping.
 
-import type { IEventReader } from "@fragua/store";
+import type { ReadPlane } from "@fragua/core/read-plane";
 import { Hono } from "hono";
 import type { ProjectTreeReader } from "../ports.ts";
 
 export interface ProjectsRouteOptions {
-  store: Pick<IEventReader, "listProjects">;
+  readPlane: Pick<ReadPlane, "projects">;
   reader: ProjectTreeReader;
 }
 
 export function projectsRoutes(opts: ProjectsRouteOptions): Hono {
   const app = new Hono();
-  const { store, reader } = opts;
+  const { readPlane, reader } = opts;
 
   app.get("/projects/:id/tree", async (c) => {
-    const cwd = resolveProjectCwd(store, c.req.param("id"));
+    const cwd = resolveProjectCwd(readPlane, c.req.param("id"));
     if (cwd.kind !== "ok") return c.json({ error: cwd.kind }, statusFor(cwd.kind));
     const entries = await reader.list(cwd.cwd);
     return c.json(entries);
   });
 
   app.get("/projects/:id/blob", async (c) => {
-    const cwd = resolveProjectCwd(store, c.req.param("id"));
+    const cwd = resolveProjectCwd(readPlane, c.req.param("id"));
     if (cwd.kind !== "ok") return c.json({ error: cwd.kind }, statusFor(cwd.kind));
 
     const path = c.req.query("path");
@@ -72,9 +72,9 @@ type ProjectLookup = { kind: "ok"; cwd: string } | { kind: "invalid_id" } | { ki
 /** Resolve a `project_id` to a local cwd via the project enumeration.
  *  Unknown id → not_found; known but no local checkout (imported-only,
  *  NULL cwdHint) → not_found so the web shows "not checked out here". */
-function resolveProjectCwd(store: Pick<IEventReader, "listProjects">, id: string | undefined): ProjectLookup {
+function resolveProjectCwd(readPlane: Pick<ReadPlane, "projects">, id: string | undefined): ProjectLookup {
   if (typeof id !== "string" || id.length === 0) return { kind: "invalid_id" };
-  const project = store.listProjects().find((row) => row.projectId === id);
+  const project = readPlane.projects().find((row) => row.projectId === id);
   if (project == null || project.cwdHint == null) return { kind: "not_found" };
   return { kind: "ok", cwd: project.cwdHint };
 }
