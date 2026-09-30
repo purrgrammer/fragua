@@ -504,6 +504,90 @@ steps:
     expect(body.error).toMatch(/missing/);
   });
 
+  test("provider_unavailable rejection leaves no workflow row", async () => {
+    const source = "name: prov-rej\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
+    workflowReader.set("prov-rej", source, { cwd: "/projects/alpha" });
+    const app = createRoutes({ store, workflowReader, preflightProviders: () => ({ ok: false, detail: "no keys" }) });
+    const res = await app.fetch(
+      new Request("http://test/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/projects/alpha", workflowName: "prov-rej", workflowScope: "local" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("provider_unavailable");
+    expect(store.getWorkflow(sha256Hex(source))).toBeNull();
+  });
+
+  test("queue_full rejection leaves no workflow row and preserves Retry-After", async () => {
+    const source = "name: qf-rej\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
+    workflowReader.set("qf-rej", source, { cwd: "/projects/alpha" });
+    const app = createRoutes({ store, workflowReader, maxQueuedRuns: 1 });
+    const post = (body: unknown): Promise<Response> =>
+      Promise.resolve(
+        app.fetch(
+          new Request("http://test/runs", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+        ),
+      );
+    expect((await post({ workflowSha: "wf" })).status).toBe(200);
+    const overflow = await post({ cwd: "/projects/alpha", workflowName: "qf-rej", workflowScope: "local" });
+    expect(overflow.status).toBe(429);
+    expect(overflow.headers.get("Retry-After")).toBe("30");
+    expect(((await overflow.json()) as { code: string }).code).toBe("queue_full");
+    expect(store.getWorkflow(sha256Hex(source))).toBeNull();
+  });
+
+  test("invalid_inputs rejection leaves no workflow row", async () => {
+    const source = `name: inp-rej
+inputs:
+  ticket:
+    type: string
+    required: true
+steps:
+  work: {type: llm, prompt: "fix \${{ inputs.ticket }}", next: exit}
+`;
+    workflowReader.set("inp-rej", source, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", { cwd: "/projects/alpha", workflowName: "inp-rej", workflowScope: "local" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_inputs");
+    expect(store.getWorkflow(sha256Hex(source))).toBeNull();
+  });
+
+  test("successful by-name enqueue persists exactly one workflow row", async () => {
+    const source = "name: ok-persist\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
+    workflowReader.set("ok-persist", source, { cwd: "/projects/alpha" });
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "ok-persist",
+      workflowScope: "local",
+    });
+    expect(res.status).toBe(200);
+    const wf = store.getWorkflow(sha256Hex(source));
+    expect(wf).not.toBeNull();
+    expect(wf!.name).toBe("ok-persist");
+  });
+
+  test("by-name enqueue is idempotent on re-upload", async () => {
+    const source = "name: idem\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
+    const sha = sha256Hex(source);
+    workflowReader.set("idem", source, { cwd: "/projects/alpha" });
+    const body = { cwd: "/projects/alpha", workflowName: "idem", workflowScope: "local" };
+    const first = await req("POST", "/runs", body);
+    const second = await req("POST", "/runs", body);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const s1 = store.getState(((await first.json()) as { runId: string }).runId);
+    const s2 = store.getState(((await second.json()) as { runId: string }).runId);
+    expect(s1!.workflowSha).toBe(sha);
+    expect(s2!.workflowSha).toBe(sha);
+    expect(store.getWorkflow(sha)).not.toBeNull();
+  });
+
   test("simple flow: workflow_reader_unavailable when the server has no reader configured", async () => {
     // Bare server (no workflowReader injected) — same as a CI primitive
     // that wires only POST /workflows + POST /runs with sha. The simple

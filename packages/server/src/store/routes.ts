@@ -342,6 +342,10 @@ export function createRoutes(deps: ServerDeps): Hono {
     let workflowSha: string;
     let resolvedWorkflowName: string | undefined;
     let resolvedGraph: ReturnType<typeof parseWorkflow> | undefined;
+    // Staged (not yet committed) by-name workflow save. The save is deferred
+    // until preflight + backpressure + input-binding validation all pass, so a
+    // rejected enqueue never leaves an unreferenced, un-GC'd workflow row.
+    let pendingSave: { sha: string; name: string; source: string; ir: string; irVersion: number } | undefined;
     if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
       workflowSha = body.workflowSha;
       if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
@@ -393,13 +397,13 @@ export function createRoutes(deps: ServerDeps): Hono {
       resolvedGraph = mint.graph;
       // read-discipline-allow: workflow-existence guard by sha; the read plane has no workflow accessor.
       if (deps.store.getWorkflow(workflowSha) == null) {
-        plane.commitSaveWorkflow({
+        pendingSave = {
           sha: workflowSha,
           name: resolvedWorkflowName ?? workflowSha,
           source: detail.source,
           ir: mint.ir,
           irVersion: mint.irVersion,
-        });
+        };
       }
     }
 
@@ -451,6 +455,7 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!enq.ok) {
       return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
     }
+    if (pendingSave !== undefined) plane.commitSaveWorkflow(pendingSave);
     try {
       plane.commitEnqueue(enq.params);
     } catch (err) {
