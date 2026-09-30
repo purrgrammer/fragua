@@ -350,3 +350,33 @@ describe("makeJudgeClient — routing over provider records", () => {
     expect(second.code).toBeUndefined();
   });
 });
+
+describe("redaction of short credentials", () => {
+  /** Drive redaction through the client: a 401 body is what gets persisted. */
+  async function errorFor(key: string, body: string): Promise<string> {
+    const { fetch: f } = fetchSeq([new Response(body, { status: 401 })]);
+    const client = makeJudgeClient({ getApiKey: async () => key, fetch: f, sleep: noSleep });
+    const err = (await client.ask(REQ, signal()).catch((e: unknown) => e)) as JudgeProviderError;
+    return err.message;
+  }
+
+  test("a short key is still redacted — optional auth makes one reachable", async () => {
+    // A local backend takes any non-empty key, so a two-character one is a real
+    // possibility where no hosted provider would allow it.
+    expect(await errorFor("xy", "bad credential xy supplied")).toContain("[redacted]");
+    expect(await errorFor("xy", "bad credential xy supplied")).not.toMatch(/credential xy /);
+  });
+
+  test("but it does not eat the diagnostic it appears inside", async () => {
+    // The failure the exact-match guard exists to prevent: an earlier, broader
+    // pass turned `api_key_expired_for_org` into `[redacted]` and cost the
+    // operator the message redaction is meant to keep readable.
+    const msg = await errorFor("or", "api_key_expired_for_org: rotate the key");
+    expect(msg).toContain("api_key_expired_for_org");
+  });
+
+  test("a long key is still substring-matched, boundaries or not", async () => {
+    const key = "sk-abcdef123456";
+    expect(await errorFor(key, `token ${key}suffix rejected`)).not.toContain(key);
+  });
+});

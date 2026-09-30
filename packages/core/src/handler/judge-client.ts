@@ -132,9 +132,27 @@ export function makeJudgeClient(opts: JudgeClientOpts): JudgeClient {
  * pass included `api|key|tok`, which ate ordinary diagnostics whole
  * (`api_key_expired_for_org` → `[redacted]`) and cost the operator the very
  * message this is meant to keep readable. */
+/** Below this, an exact substring replace does more harm than good — see the
+ * `api_key_expired_for_org` case in the note above. Short keys are still
+ * redacted, at word boundaries. */
+const SUBSTRING_SAFE_KEY_CHARS = 8;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function redactSecrets(text: string, apiKey: string): string {
   let out = text;
-  if (apiKey.length >= 8) out = out.split(apiKey).join("[redacted]");
+  if (apiKey.length >= SUBSTRING_SAFE_KEY_CHARS) {
+    out = out.split(apiKey).join("[redacted]");
+  } else if (apiKey.length > 0) {
+    // A key too short to substring-match safely still has to go. Anchor it at
+    // word boundaries instead: a bare `x` in the provider's message is
+    // redacted, while `x` inside `max_tokens_exceeded` is left alone. Optional
+    // auth made this reachable — a local backend accepts any non-empty key, so
+    // an operator can set one of two characters where no hosted provider would.
+    out = out.replace(new RegExp(`\\b${escapeRegExp(apiKey)}\\b`, "g"), "[redacted]");
+  }
   out = out.replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer [redacted]");
   out = out.replace(/\b(sk|pk|ghp|gho|ghu|ghs|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{12,}/gi, "[redacted]");
   return out;
