@@ -2,15 +2,18 @@
 //
 // Every store write runs inside a `this.writeTxn(() => ...)` (or a raw
 // `db.transaction(() => ...)`) callback whose body executes under the SQLite
-// write lock. Inside that body we MUST NOT `await` (blocks the lock), serialize
-// or parse JSON (allocates on the hot path under the lock), reach the network
-// (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` — the caller
-// pre-serializes and validates before the transaction opens.
+// write lock. A `SAVEPOINT`-wrapped closure (the startup sweep's per-run
+// `sweepRun(runId, () => ...)`) runs under the same lock, so its callback is a
+// transaction scope too. Inside any such body we MUST NOT `await` (blocks the
+// lock), serialize or parse JSON (allocates on the hot path under the lock),
+// reach the network (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` —
+// the caller pre-serializes and validates before the transaction opens.
 //
 // This is an AST scan (not a regex over source text): it walks the callback body
-// AND, one level deep, the bodies of any function declared in the SAME file that
-// the callback calls — so routing a `JSON.stringify` through a private helper no
-// longer escapes the rule the way the old substring scan let it.
+// AND, to full transitive depth, the bodies of any function declared in the SAME
+// file that the callback calls — so routing a `JSON.stringify` through a chain of
+// private helpers no longer escapes the rule the way the old substring scan (and
+// the earlier one-level inliner) let it.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
@@ -52,6 +55,49 @@ function collectSources(root: string): string[] {
   return out;
 }
 
+/** A `SAVEPOINT …` opener: a call whose first argument is a string literal
+ * beginning with `SAVEPOINT` (e.g. `db.exec("SAVEPOINT sweep_run")`). */
+function isSavepointOpener(node: ts.CallExpression): boolean {
+  const arg = node.arguments[0];
+  return arg !== undefined && ts.isStringLiteral(arg) && arg.text.startsWith("SAVEPOINT");
+}
+
+/** Names of same-file functions whose body opens a `SAVEPOINT` — their
+ * callback arguments run under the write lock (the sweep's `sweepRun`). */
+function savepointWrapperNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const [name, body] of sameFileFunctionBodies(sf)) {
+    for (const call of collectCalls(body, sf, false)) {
+      if (isSavepointOpener(call.node)) {
+        names.add(name);
+        break;
+      }
+    }
+  }
+  return names;
+}
+
+/** Bodies of function-expression arguments passed (in ANY position) to a call of
+ * one of `names` — `sweepRun(runId, () => { ... })` hands its closure as the
+ * SECOND argument, which `callbackBodiesOf` (first-arg only) would miss. */
+function savepointCallbackBodies(sf: ts.SourceFile, names: Set<string>): ts.Node[] {
+  const out: ts.Node[] = [];
+  if (names.size === 0) return out;
+  for (const call of collectCalls(sf, sf)) {
+    if (!names.has(call.name)) continue;
+    for (const arg of call.node.arguments) {
+      if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) out.push(arg.body);
+    }
+  }
+  return out;
+}
+
+/** Every transaction scope in the file: `writeTxn`/`transaction` callbacks plus
+ * `SAVEPOINT`-wrapper callbacks. */
+function collectTxnScopeBodies(sf: ts.SourceFile): ts.Node[] {
+  return [...callbackBodiesOf(sf, TXN_CALLEES), ...savepointCallbackBodies(sf, savepointWrapperNames(sf))];
+}
+
 /** Scan one node (a transaction body or an inlined helper body) for the banned
  * constructs, excluding nested deferred functions. */
 function scanBody(body: ts.Node, sf: ts.SourceFile, file: string): Offender[] {
@@ -64,23 +110,33 @@ function scanBody(body: ts.Node, sf: ts.SourceFile, file: string): Offender[] {
   return offenders;
 }
 
-function scanFile(file: string): Offender[] {
-  const sf = parseSource(file);
-  const helpers = sameFileFunctionBodies(sf);
+/** Scan a transaction scope and every same-file helper it reaches, to full
+ * transitive depth. Each same-file function called synchronously runs under the
+ * same lock, so its body is scanned too; a `seen` set makes the walk cycle-safe
+ * and O(helpers). */
+function scanScope(rootBody: ts.Node, sf: ts.SourceFile, file: string, helpers: Map<string, ts.Node>): Offender[] {
   const offenders: Offender[] = [];
-  for (const body of callbackBodiesOf(sf, TXN_CALLEES)) {
+  const seen = new Set<string>();
+  const stack: ts.Node[] = [rootBody];
+  while (stack.length > 0) {
+    const body = stack.pop()!;
     offenders.push(...scanBody(body, sf, file));
-    // One level of same-file helper inlining: a function declared in this file
-    // and called directly in the txn body runs under the same lock.
-    const seen = new Set<string>();
     for (const call of collectCalls(body, sf, true)) {
       const helperBody = helpers.get(call.name);
       if (helperBody !== undefined && !seen.has(call.name)) {
         seen.add(call.name);
-        offenders.push(...scanBody(helperBody, sf, file));
+        stack.push(helperBody);
       }
     }
   }
+  return offenders;
+}
+
+function scanFile(file: string): Offender[] {
+  const sf = parseSource(file);
+  const helpers = sameFileFunctionBodies(sf);
+  const offenders: Offender[] = [];
+  for (const body of collectTxnScopeBodies(sf)) offenders.push(...scanScope(body, sf, file, helpers));
   return offenders;
 }
 
@@ -104,17 +160,7 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
     const sf = ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const helpers = sameFileFunctionBodies(sf);
     const out: Offender[] = [];
-    for (const body of callbackBodiesOf(sf, TXN_CALLEES)) {
-      out.push(...scanBody(body, sf, "synthetic.ts"));
-      const seen = new Set<string>();
-      for (const call of collectCalls(body, sf, true)) {
-        const helperBody = helpers.get(call.name);
-        if (helperBody !== undefined && !seen.has(call.name)) {
-          seen.add(call.name);
-          out.push(...scanBody(helperBody, sf, "synthetic.ts"));
-        }
-      }
-    }
+    for (const body of collectTxnScopeBodies(sf)) out.push(...scanScope(body, sf, "synthetic.ts", helpers));
     return out;
   };
 
@@ -139,12 +185,34 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
     expect(scanSynthetic(src)).toHaveLength(0);
   });
 
-  test("does not inline a second level of helper", () => {
-    // `a` calls `b`; only `a`'s own body is scanned when the txn calls `a`.
+  test("catches JSON.stringify reached through two levels of same-file helpers", () => {
+    // `a` calls `b`; full-depth following scans `b` even though the txn calls `a`.
     const src = `
       function b() { return JSON.stringify(z); }
       function a() { return b(); }
       this.writeTxn(() => { a(); });
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches JSON.stringify inside a sweepRun SAVEPOINT closure", () => {
+    const src = `
+      const sweepRun = (id, mutate) => { db.exec("SAVEPOINT sweep_run"); mutate(); db.exec("RELEASE sweep_run"); };
+      sweepRun("r", () => { insert(JSON.stringify(p)); });
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("does not flag a JSON.stringify in the sweepRun wrapper's own catch (outside the savepoint)", () => {
+    // The wrapper's catch runs after RELEASE/ROLLBACK — outside the lock; only
+    // the callback the wrapper invokes is a transaction scope.
+    const src = `
+      const sweepRun = (id, mutate) => {
+        db.exec("SAVEPOINT sweep_run");
+        try { mutate(); db.exec("RELEASE sweep_run"); }
+        catch (err) { log(JSON.stringify({ id, err })); }
+      };
+      sweepRun("r", () => { db.query("q").run(); });
     `;
     expect(scanSynthetic(src)).toHaveLength(0);
   });

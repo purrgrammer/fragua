@@ -164,6 +164,7 @@ export function runStateToDetail(
   detail.projectName = state.projectName;
   if (state.cwd != null) {
     const candidate = join(state.cwd, ".fragua", "worktrees", state.runId);
+    // read-discipline-allow: worktree-path probe has no store/event backing.
     if (existsSync(candidate)) detail.worktreePath = candidate;
   }
 

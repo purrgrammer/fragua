@@ -24,7 +24,7 @@
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback or a same-file helper it calls |
+| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback, a `SAVEPOINT`-wrapped closure (the startup sweep's `sweepRun`), or any same-file helper reachable from one to full transitive depth |
 | **I2** | No handler state outside the projection | HandlerContext API; pure-function handler signature |
 | **I3** | Intents always-appendable; facts OCC-checked | Two distinct store methods (`appendIntent`, `appendFact`) |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract | HandlerContext carries signal; pre-wired LLM/HTTP clients auto-propagate |
@@ -281,7 +281,7 @@ The single-transaction mutation surface (shares the SQLite writer connection, ru
 
 ### 4.2 IEventReader
 
-Read-only run-level reads — run state + enumeration (`getState`, `listRunIds`, `listRunSummaryRows`, `runStateCounts`), the event log (per-run, by-type, snapshot-scrubber feed, the three global-feed cursor variants, unapplied intents), messages (full + the narrow wire shape + thread listing), per-run cost/step aggregates, the outputs index, raw blob reads, scoped artifact reads, and the workflow catalog + emergent-paths project/cwd listings. Includes the daemon's wake-pending sweep helpers (`getWakeCandidates`, `getNextPendingIntent`, `findOrphanSideEffects`, `getInboxActionCandidates`, `getGcEligibleSnapshotRuns`) so the daemon never reaches for `db` directly. See `packages/store/src/types.ts`.
+Read-only run-level reads — run state + enumeration (`getState`, `listRunIds`, `listRunSummaryRows`, `runStateCounts`), the event log (per-run, by-type, snapshot-scrubber feed, the three global-feed cursor variants, unapplied intents), messages (full + the narrow wire shape + thread listing), per-run cost/step aggregates, the outputs index, raw blob reads, scoped artifact reads, and the workflow catalog + emergent-paths project/cwd listings. Includes the daemon's wake-pending sweep helpers (`getWakeCandidates`, `getNextPendingIntent`, `findOrphanSideEffects`, `getInboxActionCandidates`, `getGcEligibleSnapshotRuns`) so the daemon never reaches for `db` directly. See `packages/store/src/types.ts`. HTTP run-read clients don't consume this surface directly: the run-read route handlers project through the shared read plane (`@fragua/core/read-plane`), and a read-discipline lint (`packages/server/test/read-plane-discipline.test.ts`) fails the build on a raw `deps.store.<reader>()` call inside a run-read route body unless it carries the `read-discipline-allow:` marker — so the read plane is the enforced seam, not a convention.
 
 ### 4.3 IAnalyticsReader
 
@@ -353,8 +353,9 @@ Handlers never compute `argsHash` themselves. The framework owns canonicalisatio
 ### Enforced at review
 The discipline lints are AST scans (not regex over source text), so a forbidden call can't slip past by renaming or by routing through a helper:
 - Handler discipline (`packages/core/test/handler/discipline.test.ts`): no `node:*`/`undici` import, `fetch`/`globalThis.fetch`, `Bun.*`, or `process.env` inside `handlers/` — I/O routes through `ctx`. A biome `noRestrictedImports` rule bans `node:fs`/`node:child_process`/`undici` there as a pre-commit backstop.
-- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback or a same-file helper it calls.
+- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback, a `SAVEPOINT`-wrapped closure (the startup sweep's `sweepRun`), or any same-file helper reachable from one — followed to full transitive depth, not one level.
 - Browser safety (same file): no `node:`/`bun:`/`@fragua/store` value import transitively reachable from `packages/core/src/index.ts`.
+- Read discipline: run-read route handlers project through the read plane, not raw store reads — `packages/server/test/read-plane-discipline.test.ts` fails on a `deps.store.<reader>()` (or aliased-`store`) call in a run-read route body; `packages/core/test/read-plane/discipline.test.ts` fails on a `node:fs` sync call (`existsSync`/`statSync`/`readFileSync`) inside `packages/core/src/read-plane/`. Both honour the `read-discipline-allow:` marker.
 - SQL location (`packages/store/test/sql-location.lint.test.ts`): table DML/DQL lives only in `*-queries.ts` (a named maintenance allowlist aside).
 - Inline imports (`packages/server/test/inline-import-discipline.test.ts`): no dynamic `import()`/`require()` in production source across `packages/*/src` + `cli/bin`.
 - Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for llm-style handlers that self-bound via cost/tokens), include replay property test for external tools.
