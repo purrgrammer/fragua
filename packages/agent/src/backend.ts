@@ -32,7 +32,14 @@ import {
 } from "@fragua/core";
 import { makeHttpClient } from "@fragua/core/handler";
 import type { SteerDelivery } from "@fragua/types";
-import type { ExecutionEnvironment, FraguaToolContext, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
+import type {
+  AnyTool,
+  ExecutionEnvironment,
+  FraguaToolContext,
+  McpConnector,
+  Skill,
+  ToolRegistry,
+} from "@fragua/workspace";
 import {
   filterCatalogueForRun,
   filterSkillsForNode,
@@ -194,6 +201,450 @@ export class PiLlmBackend implements LlmBackend {
     this.messageStore.hydrate(sessions);
   }
 
+  /** Resolve the effective tool set (registry select + allowlist gates) and
+   * force-include `abort`. Returns an early `outcome` for every misconfig gate,
+   * or the gated tool set plus the MCP-servers metadata later phases need. */
+  private selectAndGateTools(input: LlmInput):
+    | { outcome: Outcome }
+    | {
+        finalTools: AnyTool[];
+        declaredMcpServers: string[];
+        mcpOnlyAllowlist: boolean;
+        allow: string[] | undefined;
+        deny: string[] | undefined;
+      } {
+    const selectOpts: { allow?: string[]; deny?: string[] } = {};
+    const allow = input.node.attrs.allowed_tools as string[] | undefined;
+    const deny = input.node.attrs.denied_tools as string[] | undefined;
+    if (allow) selectOpts.allow = allow;
+    if (deny) selectOpts.deny = deny;
+    const selectedTools = this.registry.select(selectOpts);
+    // Fail loudly when the node asked for tools but the registry produced
+    // none. Silent empty-tools is the worst kind of misconfig — the model
+    // happily generates `<tool_call>` XML as plain text and the run looks
+    // like it succeeded while nothing actually ran. Caller should populate
+    // the registry (e.g. `registry.registerAll(CORE_TOOLS)`) before
+    // constructing the backend. Gated on `selectedTools` (not the
+    // post-skill-merge `finalTools` below) so the diagnostic still fires
+    // when the registry is genuinely empty — a registry that holds only
+    // the force-included `skill` is still misconfigured.
+    // An `mcp__<srv>__*` allow entry names a tool materialised later (additive,
+    // per mcp-servers), not a registry tool — exclude it from the gate ONLY when
+    // its server is declared in `mcp-servers` (so it can actually resolve). An
+    // `mcp__*` entry for an undeclared server, or with no `mcp-servers:` at all,
+    // can never resolve and must still trip the gate.
+    const declaredMcpServers = (input.node.attrs.mcp_servers as string[] | undefined) ?? [];
+    const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
+    const willMaterialise = (name: string): boolean =>
+      isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
+    const gateAllow = allow?.filter((a) => !willMaterialise(a));
+    // An `mcp__*` allow entry lands in `gateAllow` only when its server ISN'T in
+    // `mcp-servers:` (a declared server's tools are exempted via `willMaterialise`),
+    // so it can NEVER resolve. Trip on that regardless of whether a core tool was
+    // also selected — otherwise `['read', 'mcp__missing__x']` would silently run
+    // with just `read`, dropping the typo'd MCP entry with no signal.
+    const mcpUndeclared = gateAllow?.filter((a) => isMcpToolName(a)) ?? [];
+    if (mcpUndeclared.length > 0) {
+      return {
+        outcome: fail(
+          `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
+          { non_retryable: true },
+        ),
+      };
+    }
+    if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
+      // The offending entries are `gateAllow`, not the whole `allow` list.
+      const registered = this.registry.list().map((t) => t.name);
+      return {
+        outcome: fail(
+          `allowed_tools=[${gateAllow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
+            "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
+        ),
+      };
+    }
+    // `allowed_tools` names ONLY `mcp__*` tools and no core tool was selected — so
+    // the step's entire toolset hinges on MCP materialisation. Used by two gates
+    // below (no connector wired vs connector present but nothing materialised).
+    const mcpOnlyAllowlist =
+      allow !== undefined && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0;
+    // `willMaterialise` exempts `mcp__*` allow entries from the gate above so it
+    // doesn't fire before materialisation — but with no connector wired they can
+    // NEVER materialise, and the post-materialisation re-check below lives inside
+    // the connector-guarded block, so an mcp-only allowlist would slip through to
+    // a tool-less run. Catch that here. (A connector-present-but-servers-fail case
+    // is caught after materialise; a connector present with no `mcp-servers:` makes
+    // `willMaterialise` false, so the standard gate above already fires.)
+    if (!this.mcpConnector && mcpOnlyAllowlist) {
+      return {
+        outcome: fail(
+          `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but no MCP connector is configured to materialise them.`,
+          { non_retryable: true },
+        ),
+      };
+    }
+    // Force-include the built-in `abort` tool. Even when the node pins
+    // `allowed_tools` (excluding it) or lists it under `denied_tools`, it
+    // must remain available — a universal affordance. Skipped only when the
+    // registry doesn't carry it (tests with a hand-rolled registry).
+    const abortTool = this.registry.get("abort");
+    let finalTools = selectedTools;
+    if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
+    return { finalTools, declaredMcpServers, mcpOnlyAllowlist, allow, deny };
+  }
+
+  /** Resolve the run's execution env and slice the skill catalogue down to what
+   * this run + node can see. Returns an early `outcome` when no env is wired. */
+  private resolveEnvAndSkills(input: LlmInput):
+    | { outcome: Outcome }
+    | {
+        effectiveEnv: ExecutionEnvironment;
+        effectiveSkills: readonly Skill[];
+        skillsCatalog: string;
+        runProjectCwd: string;
+      } {
+    // Prefer per-call env (wired via HandlerContext → LlmInput by the executor
+    // when a WorktreeProvisioner is active). Falls back to the construction-time
+    // env for tests + callers that still pass a shared LocalEnvironment.
+    const effectiveEnv = input.env ?? this.env;
+    if (!effectiveEnv) {
+      return {
+        outcome: fail(
+          "PiLlmBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
+        ),
+      };
+    }
+    // Slice the discovery superset down to what this run can see: user-scope
+    // records plus project-scope records whose `project_cwd` matches
+    // `env.projectCwd()`, project-scope shadowing user-scope by name.
+    const runProjectCwd = effectiveEnv.projectCwd();
+    const runCwdSkills = reanchorSkillsToRunTree(
+      filterCatalogueForRun(this.skills, runProjectCwd),
+      runProjectCwd,
+      effectiveEnv.cwd(),
+    );
+    const nodeSkills = input.node.attrs.skills as string[] | undefined;
+    const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {};
+    if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
+    if (input.node.attrs.skills_disabled === true) skillFilter.skills_disabled = true;
+    const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
+    const skillsCatalog = renderSkillsCatalog(effectiveSkills);
+    return { effectiveEnv, effectiveSkills, skillsCatalog, runProjectCwd };
+  }
+
+  /** Materialise MCP-server tools for the node and merge them into `finalTools`,
+   * subject to `denied_tools` / an mcp-only `allowed_tools`. Registers teardown
+   * on `disposers`. Returns an early `outcome` when an mcp-only allowlist
+   * materialised nothing. A no-connector / no-servers node is a pass-through. */
+  private async materializeMcpTools(args: {
+    input: LlmInput;
+    finalTools: AnyTool[];
+    declaredMcpServers: string[];
+    mcpOnlyAllowlist: boolean;
+    allow: string[] | undefined;
+    runProjectCwd: string;
+    disposers: Array<() => Promise<void>>;
+  }): Promise<{ outcome: Outcome } | { finalTools: AnyTool[] }> {
+    const { input, declaredMcpServers, mcpOnlyAllowlist, allow, runProjectCwd, disposers } = args;
+    let finalTools = args.finalTools;
+    if (!this.mcpConnector || declaredMcpServers.length === 0) return { finalTools };
+    const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
+    if (input.signal) materializeOpts.signal = input.signal;
+    const toolset = await this.mcpConnector.materialize(declaredMcpServers, materializeOpts);
+    disposers.push(() => toolset.dispose());
+    const denied = new Set((input.node.attrs.denied_tools as string[] | undefined)?.map(normalizeMcpToolRef) ?? []);
+    const mcpAllow = allow?.filter((a) => isMcpToolName(a)).map(normalizeMcpToolRef);
+    const mcpAllowSet = mcpAllow && mcpAllow.length > 0 ? new Set(mcpAllow) : undefined;
+    const mcpTools = toolset.tools.filter(
+      (t) => !denied.has(t.name) && (mcpAllowSet === undefined || mcpAllowSet.has(t.name)),
+    );
+    finalTools = [...finalTools, ...mcpTools];
+    if (input.emit) {
+      for (const e of toolset.errors) {
+        // A collision means the server IS live (its other tools materialised) —
+        // don't word it as "skipped", which sends operators to debug connectivity.
+        const message =
+          e.kind === "collision"
+            ? `mcp tool from "${e.server}" dropped: ${e.message}`
+            : `mcp server "${e.server}" skipped: ${e.message}`;
+        await input.emit("agent.warning", { message });
+      }
+      if (mcpTools.length > 0) {
+        await input.emit("agent.info", {
+          message: `mcp: ${mcpTools.length} tool(s) from [${declaredMcpServers.join(", ")}]`,
+        });
+      }
+    }
+    // Re-check the empty-tools gate now that materialisation has run: an
+    // mcp-only allowlist that resolved nothing would run tool-less but
+    // "successful" — the silent-empty-tools footgun. Fail loudly instead.
+    if (mcpOnlyAllowlist && mcpTools.length === 0) {
+      const available = toolset.tools.map((t) => t.name);
+      return {
+        outcome: fail(
+          available.length > 0
+            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${declaredMcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
+            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${declaredMcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
+          { non_retryable: true },
+        ),
+      };
+    }
+    return { finalTools };
+  }
+
+  /** Build the pi-agent tool array from the resolved `finalTools`: attach the
+   * per-run fragua context, then append the single terminating exit tool
+   * (`route` XOR `emit_output`), then canonicalise order for cache stability. */
+  private assembleAgentTools(args: {
+    input: LlmInput;
+    finalTools: AnyTool[];
+    effectiveEnv: ExecutionEnvironment;
+    nodeRoutes: string[] | undefined;
+    outputsDecl: OutputsDecl | undefined;
+  }): { tools: AgentTool[]; fraguaContext: FraguaToolContext & { skillCatalog?: readonly Skill[] } } {
+    const { input, finalTools, effectiveEnv, nodeRoutes, outputsDecl } = args;
+    // Per-run fragua context. `skillCatalog` is patched in after the system
+    // prompt resolves; tools captured by `toAgentTool` close over this same
+    // object reference, so the later patch is visible to every tool call.
+    const fraguaEmit = input.emit;
+    const fraguaContext: FraguaToolContext & { skillCatalog?: readonly Skill[] } = {
+      runId: input.run_id,
+      nodeId: input.node.id,
+      iteration: input.iteration?.n ?? 0,
+      http: makeHttpClient({ signal: input.signal }),
+      emit: fraguaEmit
+        ? (type, payload) => {
+            void fraguaEmit(type as EventType, payload);
+          }
+        : () => {},
+      ...(input.judge !== undefined ? { judge: input.judge } : {}),
+    };
+    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
+    // Exit-tool synthesis — a node exits via exactly ONE terminating tool:
+    // routes → the ephemeral per-call `route` enum, outputs → `emit_output`,
+    // neither → the loop ends when the agent stops emitting calls. Mutually
+    // exclusive (parser-enforced); force-included regardless of allow/deny.
+    const hasRoutes = Array.isArray(nodeRoutes) && nodeRoutes.length > 0;
+    if (hasRoutes) {
+      tools.push(buildRouteTool(nodeRoutes as string[]));
+    } else if (outputsDecl !== undefined) {
+      tools.push(buildEmitOutputTool(outputsDecl));
+    }
+    // Canonical tool order: definitions head the provider's prompt-cache prefix,
+    // so sorting by name makes the segment a pure function of the effective tool
+    // SET regardless of how the tools were assembled.
+    tools.sort(byName);
+    return { tools, fraguaContext };
+  }
+
+  /** Load context files, build the per-call system prompt, and expose the run's
+   * skill catalogue on `fraguaContext` for the `skill` tool's name lookup. */
+  private async buildSystemPromptForCall(args: {
+    input: LlmInput;
+    effectiveEnv: ExecutionEnvironment;
+    skillsCatalog: string;
+    effectiveSkills: readonly Skill[];
+    fraguaContext: { skillCatalog?: readonly Skill[] };
+  }): Promise<{ systemPrompt: string; contextFileRecords: Awaited<ReturnType<typeof loadContextFiles>>["files"] }> {
+    const { input, effectiveEnv, skillsCatalog, effectiveSkills, fraguaContext } = args;
+    const contextFiles = applyDefaultContextFiles([]);
+    const {
+      text: contextBlock,
+      warnings,
+      files: contextFileRecords,
+    } = await loadContextFiles(effectiveEnv, contextFiles);
+    if (input.emit) {
+      for (const msg of warnings) await input.emit("agent.warning", { message: msg });
+    }
+    const perNodeSystemPrompt = input.node.attrs.system_prompt;
+    // Derive the per-call RunEnvironment so every llm call sees an
+    // `<environment>` block; the construction-time `this.runEnv` is only a
+    // fallback for the bootstrap line.
+    const derivedRunEnv = deriveRunEnv(effectiveEnv);
+    const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? this.runEnv?.bootstrapCommand;
+    const effectiveRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
+    const systemPrompt = buildSystemPrompt({
+      global: this.systemPrompt,
+      perNode: perNodeSystemPrompt,
+      contextBlock,
+      skillsCatalog,
+      runEnv: effectiveRunEnv,
+    });
+    Object.assign(fraguaContext, { skillCatalog: effectiveSkills });
+    return { systemPrompt, contextFileRecords };
+  }
+
+  /** Pull the prior shared-thread transcript, emit a resume marker when this
+   * (run, thread) was last written by a prior process, and sanitise any unpaired
+   * trailing toolCall before pi-ai sees it. Returns the hydrate slice + the
+   * thread policy the caller needs to persist afterwards. */
+  private async hydrateThreadMessages(args: {
+    input: LlmInput;
+    effectiveEnv: ExecutionEnvironment;
+    fraguaContext: FraguaToolContext;
+  }): Promise<{
+    hydrateMessages: AgentMessage[];
+    storedForThread: AgentMessage[];
+    threadId: string | undefined;
+    persist: boolean;
+  }> {
+    const { input, effectiveEnv, fraguaContext } = args;
+    const threadId = input.thread_id;
+    const hasThread = !!threadId;
+    const hydrate = shouldHydrateFromStore(hasThread);
+    const persist = shouldPersistToStore(hasThread);
+    // `input.priorMessages` is the executor's messages-table load — the single
+    // source of truth across daemon restarts. The in-process MessageStore is a
+    // write-through cache so a same-process call that omits it stays consistent.
+    const externalPrior = Array.isArray(input.priorMessages) ? (input.priorMessages as AgentMessage[]) : undefined;
+    const storedForThread: AgentMessage[] = threadId
+      ? (externalPrior ?? this.messageStore.get(input.run_id, threadId))
+      : [];
+    if (externalPrior !== undefined && threadId) {
+      this.messageStore.set(input.run_id, threadId, storedForThread);
+    }
+    // Resume detection — purely observational; hydration is byte-identical
+    // across restarts, so this only lets us log a rehydrate marker.
+    const resumed =
+      threadId != null &&
+      externalPrior !== undefined &&
+      storedForThread.length > 0 &&
+      !this.inProcessWrites.has(sessionKey(input.run_id, threadId));
+    if (resumed && input.emit && threadId) {
+      await input.emit("agent.info", {
+        event: "thread_rehydrated",
+        thread_id: threadId,
+        message_count: storedForThread.length,
+      });
+    }
+    let hydrateMessages: AgentMessage[] = hydrate && threadId ? storedForThread : [];
+    // Pair any unpaired toolCall left at the tail of the rehydrated transcript
+    // before pi-ai sees it — a crash mid-tool-execute leaves an unpaired
+    // tool_use the anthropic API rejects. No-op on an empty / clean tail.
+    if (hydrateMessages.length > 0) {
+      hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
+        toolRegistry: this.registry,
+        env: effectiveEnv,
+        fraguaContext,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
+    return { hydrateMessages, storedForThread, threadId, persist };
+  }
+
+  /** Build the summary seed prepended to the user prompt when a node opted into
+   * `summary=low|medium|high`; otherwise the prompt is unchanged. */
+  private async buildEffectivePrompt(args: { input: LlmInput; storedForThread: AgentMessage[] }): Promise<string> {
+    const { input, storedForThread } = args;
+    const graphGoal = typeof input.goal === "string" && input.goal.length > 0 ? input.goal : undefined;
+    // Summariser events land under synthetic node ids; wire emit so a summary
+    // call's events carry the right node_id on their envelope.
+    const syntheticEmit = input.emit
+      ? async (type: EventType, data: Record<string, unknown>, _node_id: string) => {
+          await input.emit?.(type, data);
+        }
+      : undefined;
+    const { seed, warnings: summaryWarnings } = await buildSummarySeed({
+      summary: input.summary,
+      graphGoal,
+      runId: input.run_id,
+      priorMessages: storedForThread,
+      ...(this.summariser !== undefined ? { summariser: this.summariser } : {}),
+      callerNodeId: input.node.id,
+      ...(input.iteration !== undefined ? { iteration: input.iteration } : {}),
+      workflow_sha: input.workflow_sha,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(syntheticEmit !== undefined ? { emit: syntheticEmit } : {}),
+    });
+    if (input.emit) {
+      for (const msg of summaryWarnings) await input.emit("agent.warning", { message: msg });
+    }
+    return seed.length > 0 ? `${seed}\n\n${input.prompt}` : input.prompt;
+  }
+
+  /** Drive `agent.prompt`, wiring the executor's abort signal to `agent.abort()`
+   * and racing the awaited prompt against a short teardown grace so a wedged
+   * provider fetch lands as an abort rather than a leaked-timeout halt. One
+   * corrective re-prompt is issued when a required `emit_output` exit was
+   * skipped. Cleans up the steer registration + listeners on every exit path. */
+  private async executePromptLoop(args: {
+    agent: Agent;
+    input: LlmInput;
+    runId: string;
+    effectivePrompt: string;
+    hasRoutes: boolean;
+    outputsDecl: OutputsDecl | undefined;
+    hydratedCount: number;
+    unsubscribe: () => void;
+  }): Promise<void> {
+    const { agent, input, runId, effectivePrompt, hasRoutes, outputsDecl, hydratedCount, unsubscribe } = args;
+    // Register this agent as the run's steer target and drain any buffered steer.
+    this.steering.beginRun(runId, agent, { nodeId: input.node.id, iteration: input.iteration?.n ?? 0 });
+    // Wire the executor's abort signal to agent.abort() so control.cancel stops
+    // the in-flight stream / tool loop instead of running to completion.
+    const abortListener = () => agent.abort();
+    if (input.signal) {
+      input.signal.addEventListener("abort", abortListener, { once: true });
+    }
+    let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    const promptDone = (async () => {
+      await agent.prompt(effectivePrompt);
+      await agent.waitForIdle();
+      // One corrective re-prompt when a required `emit_output` exit was skipped —
+      // absorbing a single transient miss. A second miss falls through to the
+      // non-retryable failure below. Routing nodes + deliberate aborts + dead
+      // provider turns are excluded.
+      if (
+        outputsDecl !== undefined &&
+        !hasRoutes &&
+        !input.signal?.aborted &&
+        lastAssistantMessage(agent.state.messages) !== undefined &&
+        findEmitOutputCall(agent.state.messages.slice(hydratedCount)) == null &&
+        findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
+      ) {
+        await agent.prompt(EMIT_OUTPUT_REMINDER);
+        await agent.waitForIdle();
+      }
+    })();
+    // Already-aborted case: agent.abort() called before agent.prompt() existed is
+    // a no-op, so queue it after prompt()'s synchronous prologue creates the
+    // controller — otherwise the stream bills real tokens for the grace window.
+    if (input.signal?.aborted) {
+      queueMicrotask(() => agent.abort());
+    }
+    let armListener: (() => void) | undefined;
+    const abortRace = input.signal
+      ? new Promise<never>((_, reject) => {
+          const arm = () => {
+            abortGraceTimer = setTimeout(() => {
+              const err = new Error("stream aborted (signal teardown grace exceeded)");
+              err.name = "AbortError";
+              reject(err);
+            }, ABORT_TEARDOWN_GRACE_MS);
+          };
+          if (input.signal!.aborted) arm();
+          else {
+            armListener = arm;
+            input.signal!.addEventListener("abort", arm, { once: true });
+          }
+        })
+      : undefined;
+
+    try {
+      if (abortRace) await Promise.race([promptDone, abortRace]);
+      else await promptDone;
+    } finally {
+      if (abortGraceTimer !== undefined) clearTimeout(abortGraceTimer);
+      this.steering.endRun(runId, agent);
+      unsubscribe();
+      if (input.signal) {
+        input.signal.removeEventListener("abort", abortListener);
+        // The `arm` once-listener never fires on a clean run — left registered it
+        // pins this run scope to the signal's lifetime.
+        if (armListener !== undefined) input.signal.removeEventListener("abort", armListener);
+      }
+    }
+  }
+
   async run(input: LlmInput): Promise<Outcome> {
     // Cleanup callbacks registered during the run (currently MCP connection
     // teardown). Runs on every exit path so a lazily-connected server is never
@@ -232,394 +683,72 @@ export class PiLlmBackend implements LlmBackend {
       return fail(`model "${provider}/${modelId}" has no valid API binding (api="${String(model.api)}").`);
     }
 
-    const selectOpts: { allow?: string[]; deny?: string[] } = {};
-    const allow = input.node.attrs.allowed_tools as string[] | undefined;
-    const deny = input.node.attrs.denied_tools as string[] | undefined;
-    if (allow) selectOpts.allow = allow;
-    if (deny) selectOpts.deny = deny;
-    const selectedTools = this.registry.select(selectOpts);
-    // Fail loudly when the node asked for tools but the registry produced
-    // none. Silent empty-tools is the worst kind of misconfig — the model
-    // happily generates `<tool_call>` XML as plain text and the run looks
-    // like it succeeded while nothing actually ran. Caller should populate
-    // the registry (e.g. `registry.registerAll(CORE_TOOLS)`) before
-    // constructing the backend. Gated on `selectedTools` (not the
-    // post-skill-merge `finalTools` below) so the diagnostic still fires
-    // when the registry is genuinely empty — a registry that holds only
-    // the force-included `skill` is still misconfigured.
-    // An `mcp__<srv>__*` allow entry names a tool materialised later (additive,
-    // per mcp-servers), not a registry tool — exclude it from the gate ONLY when
-    // its server is declared in `mcp-servers` (so it can actually resolve). An
-    // `mcp__*` entry for an undeclared server, or with no `mcp-servers:` at all,
-    // can never resolve and must still trip the gate.
-    const declaredMcpServers = (input.node.attrs.mcp_servers as string[] | undefined) ?? [];
-    const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
-    const willMaterialise = (name: string): boolean =>
-      isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
-    const gateAllow = allow?.filter((a) => !willMaterialise(a));
-    // An `mcp__*` allow entry lands in `gateAllow` only when its server ISN'T in
-    // `mcp-servers:` (a declared server's tools are exempted via `willMaterialise`),
-    // so it can NEVER resolve. Trip on that regardless of whether a core tool was
-    // also selected — otherwise `['read', 'mcp__missing__x']` would silently run
-    // with just `read`, dropping the typo'd MCP entry with no signal.
-    const mcpUndeclared = gateAllow?.filter((a) => isMcpToolName(a)) ?? [];
-    if (mcpUndeclared.length > 0) {
-      return fail(
-        `allowed_tools names MCP tools [${mcpUndeclared.join(", ")}] whose server is not listed in mcp-servers: — add the server to mcp-servers, or fix the tool name.`,
-        { non_retryable: true },
-      );
-    }
-    if (gateAllow && gateAllow.length > 0 && selectedTools.length === 0) {
-      // The offending entries are `gateAllow`, not the whole `allow` list.
-      const registered = this.registry.list().map((t) => t.name);
-      return fail(
-        `allowed_tools=[${gateAllow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
-          "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
-      );
-    }
-    // `allowed_tools` names ONLY `mcp__*` tools and no core tool was selected — so
-    // the step's entire toolset hinges on MCP materialisation. Used by two gates
-    // below (no connector wired vs connector present but nothing materialised).
-    const mcpOnlyAllowlist =
-      allow !== undefined && allow.length > 0 && allow.every(isMcpToolName) && selectedTools.length === 0;
-    // `willMaterialise` exempts `mcp__*` allow entries from the gate above so it
-    // doesn't fire before materialisation — but with no connector wired they can
-    // NEVER materialise, and the post-materialisation re-check below lives inside
-    // the connector-guarded block, so an mcp-only allowlist would slip through to
-    // a tool-less run. Catch that here. (A connector-present-but-servers-fail case
-    // is caught after materialise; a connector present with no `mcp-servers:` makes
-    // `willMaterialise` false, so the standard gate above already fires.)
-    if (!this.mcpConnector && mcpOnlyAllowlist) {
-      return fail(
-        `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but no MCP connector is configured to materialise them.`,
-        { non_retryable: true },
-      );
-    }
+    const gated = this.selectAndGateTools(input);
+    if ("outcome" in gated) return gated.outcome;
+    const { declaredMcpServers, mcpOnlyAllowlist, allow, deny } = gated;
+    let finalTools = gated.finalTools;
 
-    // Force-include the built-in `abort` tool. Even when the node pins
-    // `allowed_tools` (excluding it) or lists it under `denied_tools`, it
-    // must remain available — a universal affordance ("always available,
-    // zero .yaml migration"). The system prompt and tool description
-    // advertise it; if it weren't actually wired the model would call it
-    // and get a hard-to-diagnose unknown-tool error. Skipped only when the
-    // registry doesn't carry it (tests with a hand-rolled registry);
-    // workflow `allowed_tools` / `denied_tools` cannot exclude it.
-    //
-    // The `skill` tool is force-included too, but conditionally — only
-    // once we know this node has a non-empty catalogue (see below). A
-    // `skill` tool with an empty catalogue can resolve no name, so wiring
-    // it is dead weight that misleads the model into calling it.
-    const abortTool = this.registry.get("abort");
-    let finalTools = selectedTools;
-    if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
+    const envSkills = this.resolveEnvAndSkills(input);
+    if ("outcome" in envSkills) return envSkills.outcome;
+    const { effectiveEnv, effectiveSkills, skillsCatalog, runProjectCwd } = envSkills;
 
-    // Prefer per-call env (wired via HandlerContext → LlmInput by
-    // the executor when a WorktreeProvisioner is active). Falls back
-    // to the construction-time env for tests + callers that still pass
-    // a shared LocalEnvironment. Resolved here ahead of the catalogue
-    // filter — `env.projectCwd()` is what slices the discovery superset
-    // down to this run's project.
-    const effectiveEnv = input.env ?? this.env;
-    if (!effectiveEnv) {
-      return fail(
-        "PiLlmBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
-      );
-    }
-
-    // Slice the discovery superset down to what this run can see: user-
-    // scope records plus project-scope records whose `project_cwd`
-    // matches `env.projectCwd()`, with project-scope shadowing user-
-    // scope by name within the slice. Without this, a run in project A
-    // would see project B's project-scope skills.
-    const runProjectCwd = effectiveEnv.projectCwd();
-    const runCwdSkills = reanchorSkillsToRunTree(
-      filterCatalogueForRun(this.skills, runProjectCwd),
-      runProjectCwd,
-      effectiveEnv.cwd(),
-    );
-
-    // Resolve the skill catalog for this call. Filter by node attrs, render
-    // the catalog block for the system prompt. The catalog drives both
-    // the system-prompt advertisement and the `skill` tool's name lookup
-    // (via fraguaContext.skillCatalog patched onto the closure below).
-    const nodeSkills = input.node.attrs.skills as string[] | undefined;
-    const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {};
-    if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
-    if (input.node.attrs.skills_disabled === true) skillFilter.skills_disabled = true;
-    const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
-    const skillsCatalog = renderSkillsCatalog(effectiveSkills);
-
-    // Reconcile the `skill` tool against this node's effective catalogue.
-    // `skill` ships in CORE_TOOLS, so a catch-all `select({})` already
-    // carries it — the gate below both force-includes it when the
-    // catalogue is non-empty (so `allowed_tools` / `denied_tools` can't
-    // exclude it, same terms as `abort`) and strips it when the catalogue
-    // is empty. `skills_disabled` / an empty `skills:` intersection / a
-    // project with no skills at all all collapse `effectiveSkills` to
-    // empty — a `skill` tool then resolves no name, so wiring it is dead
-    // weight that misleads the model into calling it.
+    // Reconcile the `skill` tool against this node's effective catalogue:
+    // force-include it when the catalogue is non-empty (same terms as `abort`),
+    // strip it when empty (a `skill` tool with no catalogue resolves no name).
     if (effectiveSkills.length > 0) {
       const skillTool = this.registry.get("skill");
       if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     } else {
       finalTools = finalTools.filter((t) => t.name !== "skill");
     }
-
     // The `judge` tool is only real when the run carries a System One client;
-    // without one it would answer every call with "not available". Strip it
-    // rather than advertise a dead tool.
+    // strip it rather than advertise a dead tool.
     if (input.judge === undefined) finalTools = finalTools.filter((t) => t.name !== "judge");
 
-    // Materialise MCP-server tools for this node. Declaring a server in
-    // `mcp-servers` exposes ALL of its tools. `allowed_tools` narrows the MCP set
-    // ONLY when it names specific `mcp__*` tools — then only those materialise;
-    // an `allowed_tools` that lists only core tools leaves the MCP set untouched
-    // (you narrowed core, not MCP). `denied_tools` always subtracts. A server
-    // that can't connect is skipped with an `agent.warning` — never fatal.
-    // Teardown is registered on `disposers` so the connection is released on
-    // every exit path.
-    if (this.mcpConnector && declaredMcpServers.length > 0) {
-      const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
-      if (input.signal) materializeOpts.signal = input.signal;
-      const toolset = await this.mcpConnector.materialize(declaredMcpServers, materializeOpts);
-      disposers.push(() => toolset.dispose());
-      const denied = new Set((input.node.attrs.denied_tools as string[] | undefined)?.map(normalizeMcpToolRef) ?? []);
-      const mcpAllow = allow?.filter((a) => isMcpToolName(a)).map(normalizeMcpToolRef);
-      const mcpAllowSet = mcpAllow && mcpAllow.length > 0 ? new Set(mcpAllow) : undefined;
-      const mcpTools = toolset.tools.filter(
-        (t) => !denied.has(t.name) && (mcpAllowSet === undefined || mcpAllowSet.has(t.name)),
-      );
-      finalTools = [...finalTools, ...mcpTools];
-      if (input.emit) {
-        for (const e of toolset.errors) {
-          // A collision means the server IS live (its other tools materialised) —
-          // don't word it as "skipped", which sends operators to debug connectivity.
-          const message =
-            e.kind === "collision"
-              ? `mcp tool from "${e.server}" dropped: ${e.message}`
-              : `mcp server "${e.server}" skipped: ${e.message}`;
-          await input.emit("agent.warning", { message });
-        }
-        if (mcpTools.length > 0) {
-          await input.emit("agent.info", {
-            message: `mcp: ${mcpTools.length} tool(s) from [${declaredMcpServers.join(", ")}]`,
-          });
-        }
-      }
-      // The empty-tools gate above exempts `mcp__*` allow entries so it doesn't
-      // fire before materialisation. Re-check here: if `allowed_tools` named ONLY
-      // MCP tools (so the step selected no core tools) and none materialised —
-      // every declared server failed to connect, or the named tools don't exist —
-      // the step would run tool-less but "successful", the exact silent-empty-tools
-      // footgun the gate exists to prevent. Fail loudly instead. Config error, so
-      // non-retryable; `dispose` still runs via the outer `finally`.
-      if (mcpOnlyAllowlist && mcpTools.length === 0) {
-        // Distinguish the two causes: if the server(s) materialised tools but the
-        // allowlist matched none, it's a tool-NAME mismatch, not connectivity —
-        // point the operator at the actual names instead of debugging creds.
-        const available = toolset.tools.map((t) => t.name);
-        return fail(
-          available.length > 0
-            ? `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none match the tools materialised from [${declaredMcpServers.join(", ")}] — available: [${available.join(", ")}]. Check the tool names.`
-            : `allowed_tools listed only MCP tools ([${allow?.join(", ")}]) but none materialised from mcp-servers [${declaredMcpServers.join(", ")}] — check .mcp.json server credentials and connectivity.`,
-          { non_retryable: true },
-        );
-      }
-    }
-    // Per-run fragua context. Built-in I/O tools ignore this field; the
-    // `skill` tool reads `skillCatalog` for its name lookup. Captured by
-    // closure on each `toAgentTool` call — a fresh `Agent({tools})` is
-    // built per `backend.run()`, so closure values are correct for that
-    // run.
-    const fraguaEmit = input.emit;
-    // `skillCatalog` isn't ready until after context-file loading below.
-    // Stage fraguaContext as a `let` and patch it in once resolved.
-    // Tools captured by `toAgentTool` close over the SAME object
-    // reference, so the patch is visible to every tool call.
-    const fraguaContext: FraguaToolContext & {
-      skillCatalog?: readonly Skill[];
-    } = {
-      runId: input.run_id,
-      nodeId: input.node.id,
-      iteration: input.iteration?.n ?? 0,
-      http: makeHttpClient({ signal: input.signal }),
-      emit: fraguaEmit
-        ? (type, payload) => {
-            void fraguaEmit(type as EventType, payload);
-          }
-        : () => {},
-      ...(input.judge !== undefined ? { judge: input.judge } : {}),
-    };
-    const tools: AgentTool[] = finalTools.map((t) => toAgentTool(t, effectiveEnv, fraguaContext));
+    const materialized = await this.materializeMcpTools({
+      input,
+      finalTools,
+      declaredMcpServers,
+      mcpOnlyAllowlist,
+      allow,
+      runProjectCwd,
+      disposers,
+    });
+    if ("outcome" in materialized) return materialized.outcome;
+    finalTools = materialized.finalTools;
 
-    // Exit-tool synthesis — a node exits via exactly ONE terminating tool:
-    //   routes → the ephemeral, per-call `route` tool whose `name` parameter is
-    //     an enum constrained to the declared routes (a bare `{type,enum}`,
-    //     provider-enforced — see buildRouteTool).
-    //   outputs → `emit_output`, whose schema is the node's outputs profile.
-    //   neither → the loop ends when the agent stops emitting calls.
-    // `outputs:` and `routes:` are mutually exclusive (parser-enforced), so at
-    // most one is synthesised. Both set `terminate: true` and are force-included
-    // regardless of allowed_tools / denied_tools (ground rule #12): the exit
-    // surface is structural. The chosen exit is recovered post-loop by scanning
-    // the transcript.
     const nodeRoutes = input.node.attrs.routes as string[] | undefined;
     const outputsDecl = (input.outputsDecl ?? input.node.attrs.outputs) as OutputsDecl | undefined;
     const hasRoutes = Array.isArray(nodeRoutes) && nodeRoutes.length > 0;
-    if (hasRoutes) {
-      tools.push(buildRouteTool(nodeRoutes as string[]));
-    } else if (outputsDecl !== undefined) {
-      tools.push(buildEmitOutputTool(outputsDecl));
-    }
+    const { tools, fraguaContext } = this.assembleAgentTools({
+      input,
+      finalTools,
+      effectiveEnv,
+      nodeRoutes,
+      outputsDecl,
+    });
 
-    // Canonical tool order. Tool definitions are the FIRST segment of the
-    // provider's prompt-cache prefix, so their byte order decides whether
-    // everything after them (system prompt, messages) can be reused at all.
-    // Assembled order is not stable on its own: `allowed_tools` is applied
-    // in the author's order, `abort` / `skill` are force-appended out of
-    // their registry position, and MCP tools arrive per server. Sorting by
-    // name makes the segment a pure function of the effective tool SET, so
-    // two runs that expose the same tools serialise identically no matter
-    // how they got there.
-    tools.sort(byName);
-
-    const contextFiles = applyDefaultContextFiles([]);
-    const {
-      text: contextBlock,
-      warnings,
-      files: contextFileRecords,
-    } = await loadContextFiles(effectiveEnv, contextFiles);
-    if (input.emit) {
-      for (const msg of warnings) await input.emit("agent.warning", { message: msg });
-    }
-    const perNodeSystemPrompt = input.node.attrs.system_prompt;
-    // Derive the per-call RunEnvironment from the resolved env.
-    // `deriveRunEnv` always returns a value, so every llm call sees an
-    // `<environment>` block in its system prompt regardless of env
-    // implementation. The construction-time `this.runEnv` is honoured
-    // only as a fallback for callers that wired it explicitly.
-    const derivedRunEnv = deriveRunEnv(effectiveEnv);
-    const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? this.runEnv?.bootstrapCommand;
-    const effectiveRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
-    const systemPrompt = buildSystemPrompt({
-      global: this.systemPrompt,
-      perNode: perNodeSystemPrompt,
-      contextBlock,
+    const { systemPrompt, contextFileRecords } = await this.buildSystemPromptForCall({
+      input,
+      effectiveEnv,
       skillsCatalog,
-      runEnv: effectiveRunEnv,
+      effectiveSkills,
+      fraguaContext,
     });
 
-    // Now that the system prompt is resolved, expose the run's skill
-    // catalogue so the `skill` tool can resolve names against it.
-    Object.assign(fraguaContext, { skillCatalog: effectiveSkills });
-
-    // Thread policy gates. A node with a resolved thread_id participates
-    // in the shared transcript: hydrate prior turns on dispatch, persist
-    // own transcript on completion. A node without a thread_id runs fresh.
-    const threadId = input.thread_id;
-    const hasThread = !!threadId;
-    const hydrate = shouldHydrateFromStore(hasThread);
-    const persist = shouldPersistToStore(hasThread);
-
-    // Pull the prior transcript. `input.priorMessages` is populated by
-    // the executor from the messages table when a prior transcript
-    // exists for (runId, threadId); it's the single source of truth
-    // across daemon restarts. The backend's in-process MessageStore is
-    // a write-through cache populated from this input so tests that
-    // skip priorMessages still see consistent behaviour inside one
-    // process.
-    const externalPrior = Array.isArray(input.priorMessages) ? (input.priorMessages as AgentMessage[]) : undefined;
-    const storedForThread: AgentMessage[] = threadId
-      ? (externalPrior ?? this.messageStore.get(input.run_id, threadId))
-      : [];
-    if (externalPrior !== undefined && threadId) {
-      // Keep the in-memory cache in sync so a subsequent same-process
-      // call that omits priorMessages still sees the right history.
-      this.messageStore.set(input.run_id, threadId, storedForThread);
-    }
-
-    // Resume detection — purely observational. Thread hydration is
-    // invariant across daemon restarts: rehydration from the messages
-    // table is byte-identical, so Anthropic / OpenAI-Completions / Google
-    // hit their content-addressed prompt caches on identical prefixes, and
-    // the OpenAI-Responses family's `prompt_cache_key` is derived from the
-    // stable `thread_id`. The flag lets us log "this thread was last
-    // written by a prior process" without changing any behaviour.
-    const resumed =
-      threadId != null &&
-      externalPrior !== undefined &&
-      storedForThread.length > 0 &&
-      !this.inProcessWrites.has(sessionKey(input.run_id, threadId));
-    const effectiveHydrate = hydrate;
-    if (resumed && input.emit && threadId) {
-      await input.emit("agent.info", {
-        event: "thread_rehydrated",
-        thread_id: threadId,
-        message_count: storedForThread.length,
-      });
-    }
-
-    let hydrateMessages: AgentMessage[] = effectiveHydrate && threadId ? storedForThread : [];
-
-    // Pair any unpaired toolCall left at the tail of the rehydrated
-    // transcript before pi-ai sees it. A daemon crash mid-tool-execute
-    // leaves `[..., assistant{toolCall}]` in the messages table; the
-    // anthropic API rejects an unpaired tool_use, so we either re-run
-    // the tool (agent / idempotentOnReplay reads) or synthesise an
-    // error toolResult. No-op when the trailing assistant has no
-    // toolCalls or the transcript is empty.
-    if (hydrateMessages.length > 0) {
-      hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
-        toolRegistry: this.registry,
-        env: effectiveEnv,
-        fraguaContext,
-        ...(input.signal !== undefined ? { signal: input.signal } : {}),
-      });
-    }
-
-    // Build the summary seed prepended to the user prompt when a node
-    // opted into `summary=low|medium|high`. Otherwise the seed is empty
-    // and the user prompt is unchanged.
-    const graphGoal = typeof input.goal === "string" && input.goal.length > 0 ? input.goal : undefined;
-    // Summariser events land under synthetic node ids (see
-    // @fragua/core/types/summariser.ts). `buildSummarySeed` wires the
-    // emit callback so `summary.started` / `summary.completed` /
-    // `cost.recorded` for a summary call carry the right node_id on
-    // their envelope — not the caller's.
-    const syntheticEmit = input.emit
-      ? async (type: EventType, data: Record<string, unknown>, _node_id: string) => {
-          await input.emit?.(type, data);
-        }
-      : undefined;
-    const { seed, warnings: summaryWarnings } = await buildSummarySeed({
-      summary: input.summary,
-      graphGoal,
-      runId: input.run_id,
-      priorMessages: storedForThread,
-      ...(this.summariser !== undefined ? { summariser: this.summariser } : {}),
-      callerNodeId: input.node.id,
-      ...(input.iteration !== undefined ? { iteration: input.iteration } : {}),
-      workflow_sha: input.workflow_sha,
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-      ...(syntheticEmit !== undefined ? { emit: syntheticEmit } : {}),
+    const { hydrateMessages, storedForThread, threadId, persist } = await this.hydrateThreadMessages({
+      input,
+      effectiveEnv,
+      fraguaContext,
     });
-    if (input.emit) {
-      for (const msg of summaryWarnings) await input.emit("agent.warning", { message: msg });
-    }
-    const effectivePrompt = seed.length > 0 ? `${seed}\n\n${input.prompt}` : input.prompt;
+    const effectivePrompt = await this.buildEffectivePrompt({ input, storedForThread });
 
-    // sessionId is a provider-cache hint (not a message restore). Pick
-    // the right bucket so cache hits work and a summary level doesn't
-    // clobber the raw-thread cache under the same thread_id.
+    // sessionId is a provider-cache hint (not a message restore).
     const sessionId = resolveSessionId({ threadId, summary: input.summary });
 
-    // Capture the last HTTP response status pi-ai received per LLM call.
-    // Pi-agent-core wires `onResponse` through to its `streamFn`, which in
-    // turn forwards to pi-ai's `StreamOptions.onResponse`. The status lets
-    // us classify a `stopReason="error"` end as a transport failure (4xx
-    // / 5xx) versus a content/tool failure, and route the run to `paused`
-    // (with reason `provider_error` or `payment_required` for 402) instead
-    // of an unrecoverable halt.
+    // Capture the last HTTP response status pi-ai received per LLM call, so a
+    // `stopReason="error"` end can be classified as a transport failure (4xx/5xx)
+    // versus a content/tool failure and routed to a resumable pause.
     let lastHttpStatus: number | null = null;
     let lastRetryAfterMs: number | undefined;
     const captureResponse = (response: { status: number; headers: Record<string, string> }) => {
@@ -627,24 +756,13 @@ export class PiLlmBackend implements LlmBackend {
       lastRetryAfterMs = parseRetryAfterMs(response.headers);
     };
 
-    // Reasoning/thinking level. pi-agent-core defaults `thinkingLevel` to
-    // "off" when unset, which leaves the model with no thinking channel — it
-    // then externalises chain-of-thought into whatever affordance it has (most
-    // visibly: narrating analysis as `bash` comments). We never want to inherit
-    // that default silently, so resolve it explicitly here from the node's
-    // `effort` (parsed to `reasoning_effort`) and the model's `reasoning`
-    // capability. `streamSimple` receives it as the `reasoning` option via
-    // pi-agent-core's `AgentState.thinkingLevel`.
+    // Reasoning/thinking level resolved explicitly (never inherit pi-agent-core's
+    // silent "off" default) from the node's `effort` + the model's capability.
     const thinkingLevel = resolveThinkingLevel(model, input.node.attrs as Record<string, unknown>);
 
-    // Boundary between the rehydrated shared-thread history and this turn's
-    // fresh messages. Every self-abort / route / emit scan below is scoped to
-    // the slice AFTER this index: on a shared `thread_id`, the hydrated prefix
-    // can carry an UPSTREAM node's `abort` toolCall (e.g. a goal gate that
-    // REJECTed to drive its §3.4 retarget). A whole-transcript, first-wins
-    // abort scan would re-detect that stale abort and stamp the retargeted
-    // node `fail`, terminating the run with a spurious `aborted_exit` instead
-    // of letting the loop iterate.
+    // Boundary between the rehydrated shared-thread history and this turn's fresh
+    // messages. Every self-abort / route / emit scan below is scoped to the slice
+    // AFTER this index so a hydrated upstream `abort` toolCall isn't re-detected.
     const hydratedCount = hydrateMessages.length;
 
     const agent = new Agent({
@@ -662,386 +780,62 @@ export class PiLlmBackend implements LlmBackend {
       ...(this.getApiKey !== undefined ? { getApiKey: this.getApiKey } : {}),
     });
 
-    // Persist the system prompt as a fragua `system` custom message
-    // (declaration-merged into pi-agent-core's CustomAgentMessages in
-    // @fragua/store) so the full text is recoverable from the messages
-    // table. Keeps `llm.start` under the 4KB event cap (§I7) — prior
-    // turns + a sizable system_prompt easily blow past it. The messages
-    // table is JSON + unbounded (§I9), so full content lives there.
-    // Filtered back out before feeding priorMessages to pi-agent-core —
-    // pi-ai carries the system prompt separately on each call.
+    // Persist the system prompt as a fragua `system` custom message so the full
+    // text is recoverable from the messages table while `llm.start` stays under
+    // the 4KB event cap (§I7).
     if (input.persistMessage && systemPrompt.length > 0) {
       input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() });
     }
 
-    // Emit the resolved LLM-call snapshot. See docs/SPEC.md §3.5 for the
-    // contract. Adding fields is additive — schema_version on the
-    // envelope only bumps on incompatible renames/removals.
-    //
-    // Large fields are NOT inlined:
-    //   - `system_prompt` → persisted as a role='system' message; the
-    //     envelope carries sha256 + byte length for verification.
-    //   - prior transcript snapshot → fully duplicated in the messages
-    //     table; dropping it avoids O(N²) blow-up on threaded nodes.
-    if (input.emit) {
-      const systemPromptBytes = Buffer.byteLength(systemPrompt, "utf8");
-      const llmStart: Record<string, unknown> = {
-        provider,
-        model: modelId,
-        prompt: effectivePrompt,
-        system_prompt_sha256: sha256Hex(systemPrompt),
-        system_prompt_bytes: systemPromptBytes,
-      };
-      if (threadId) llmStart["thread_id"] = threadId;
-      // The resolved thinking level — surfaced so "is thinking on?" is visible
-      // in the event feed, not silently inherited from an upstream default.
-      llmStart["thinking_level"] = thinkingLevel;
-      if (allow) llmStart["allowed_tools"] = allow;
-      if (deny) llmStart["denied_tools"] = deny;
-      if (input.iteration) llmStart["iteration"] = input.iteration;
-      const priorMessageCount = agent.state.messages.length;
-      if (priorMessageCount > 0) llmStart["prior_message_count"] = priorMessageCount;
-      const settings = captureSettings(input.node.attrs as Record<string, unknown>);
-      if (settings) llmStart["settings"] = settings;
-      if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
-      if (effectiveSkills.length > 0) llmStart["skills"] = effectiveSkills.map(toCatalogRecord);
-      // Budget snapshot: prefer the executor-supplied value (real cumulative
-      // from `run_state.metrics`); fall back to the zeroed shape derived from
-      // node attrs alone for callers that haven't been threaded yet (legacy
-      // tests). Zero-snapshot is harmless — the UI just renders 0/N until
-      // the first node_completed lands.
-      const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs as Record<string, unknown>);
-      if (budget) llmStart["budget"] = budget;
-      await input.emit("llm.start", llmStart);
-    }
-
-    const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
-      const bridged = bridgeAgentEvent(event);
-      if (bridged && input.emit) await input.emit(bridged.type, bridged.data);
-      if (event.type === "message_end") {
-        if (event.message.role === "assistant" && input.emit) {
-          await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
-        }
-        // Persist the fully-assembled AgentMessage to the messages
-        // table (§I9 — JSON, unbounded, stays out of the 4KB event
-        // envelope §I7). Full block structure round-trips: text,
-        // thinking (with thinkingSignature / redacted), toolCall (with
-        // thoughtSignature), toolResult (with toolCallId pairing).
-        //
-        // Skip empty-content error/abort envelopes — pi-agent-core
-        // synthesises an assistant message with `content: []` +
-        // `stopReason: "error" | "aborted"` + `errorMessage` for a
-        // provider transport failure or in-flight abort (see
-        // `handleRunFailure` in pi-agent-core/dist/agent.js). The
-        // row carries no tokens and no recoverable content; it's a
-        // pure failure marker. Persisting it bloats the `messages`
-        // table with N duplicates on every provider-error retry chain
-        // (the auto-resume path re-dispatches `resumeOf:"fresh"` and
-        // each fresh attempt that hits the same overloaded_error
-        // appends another empty assistant + system + user) and
-        // makes the conversation view look like the LLM is talking
-        // to itself. The corresponding `cost.recorded` event still
-        // fires above (with zeros), so cost accounting is unaffected.
-        if (input.persistMessage) {
-          const msg = event.message as AssistantMessage;
-          const isEmptyFailureEnvelope =
-            msg.role === "assistant" &&
-            (msg.stopReason === "error" || msg.stopReason === "aborted") &&
-            Array.isArray(msg.content) &&
-            msg.content.length === 0;
-          if (!isEmptyFailureEnvelope) input.persistMessage(event.message);
-        }
-      }
+    await emitLlmStart({
+      input,
+      provider,
+      modelId,
+      effectivePrompt,
+      systemPrompt,
+      threadId,
+      thinkingLevel,
+      allow,
+      deny,
+      priorMessageCount: agent.state.messages.length,
+      contextFileRecords,
+      effectiveSkills,
     });
 
-    // Register this agent as this run's steer target and drain any messages
-    // that landed while no agent was active for this run (e.g. a steer fired
-    // between nodes). `steer()` below calls agent.steer() directly when the
-    // run's agent is set.
+    const unsubscribe = agent.subscribe(buildMessageSubscriber(input));
     const runId = input.run_id;
-    this.steering.beginRun(runId, agent, { nodeId: input.node.id, iteration: input.iteration?.n ?? 0 });
+    await this.executePromptLoop({
+      agent,
+      input,
+      runId,
+      effectivePrompt,
+      hasRoutes,
+      outputsDecl,
+      hydratedCount,
+      unsubscribe,
+    });
 
-    // Wire the executor's abort signal to agent.abort() so control.cancel
-    // actually stops the in-flight LLM stream / tool loop. Without this the
-    // executor trips its AbortController but the Agent keeps running to
-    // completion, leaving the run streaming minutes after cancel landed.
-    //
-    // Escape hatch for wedged provider fetches: agent.abort() forwards the
-    // Agent's internal AbortController to streamSimple → provider SDK →
-    // fetch. A well-behaved SDK tears the socket down promptly. A misbehaving
-    // one (TCP wedge, lost signal wiring, slow upstream) leaves the awaited
-    // promise inside agent.prompt() suspended for minutes — long enough to
-    // blow past the executor's `maxMs + LEAK_GRACE_MS` window and trip
-    // `fact.handler_timeout_leaked`. Race the awaited prompt against
-    // `input.signal` plus a short cooperative-unwind grace; if the grace
-    // expires throw a synthetic AbortError so the executor's `wasAborted`
-    // path runs and the dispatch lands as `fact.node_aborted` instead of
-    // halting the run. The grace must stay tight enough that the wrapper
-    // exits inside the executor's 10s leak window.
-    const abortListener = () => agent.abort();
-    if (input.signal) {
-      // Always register the listener — addEventListener does NOT fire
-      // synchronously for an already-aborted signal, and the
-      // already-aborted branch below queues the abort against the
-      // live activeRun.
-      input.signal.addEventListener("abort", abortListener, { once: true });
-    }
-
-    let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
-    const promptDone = (async () => {
-      await agent.prompt(effectivePrompt);
-      await agent.waitForIdle();
-      // One corrective re-prompt when a required `emit_output` exit was skipped.
-      // A forgotten final tool call is the textbook transient; absorbing a single
-      // retry here — inside the abort race, so cancel/budget still preempt it —
-      // means one model hiccup no longer hard-fails the node. A model that skips
-      // it twice still falls through to the non-retryable miss below. Routing
-      // nodes exit via `route` (not emit_output) so they're excluded, a deliberate
-      // `abort` is left alone, and a dead-provider turn (no assistant message) is
-      // handled by the no-response path rather than burning a second call.
-      if (
-        outputsDecl !== undefined &&
-        !hasRoutes &&
-        !input.signal?.aborted &&
-        lastAssistantMessage(agent.state.messages) !== undefined &&
-        findEmitOutputCall(agent.state.messages.slice(hydratedCount)) == null &&
-        findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
-      ) {
-        await agent.prompt(EMIT_OUTPUT_REMINDER);
-        await agent.waitForIdle();
-      }
-    })();
-    // Already-aborted case: agent.abort() called before agent.prompt()
-    // existed is a no-op (no activeRun yet to abort). agent.prompt()
-    // synchronously creates activeRun inside its body before the
-    // first await, so a queueMicrotask scheduled AFTER promptDone's
-    // synchronous prologue hits the live controller. Without this
-    // the stream runs for the full ABORT_TEARDOWN_GRACE_MS (2s)
-    // window before the outer race rejects — real provider tokens
-    // get billed during those 2s. Covers the case where the
-    // executor's reactive budget gate already fired the abort by the
-    // time backend.run starts: the input.signal is aborted at entry.
-    if (input.signal?.aborted) {
-      queueMicrotask(() => agent.abort());
-    }
-    let armListener: (() => void) | undefined;
-    const abortRace = input.signal
-      ? new Promise<never>((_, reject) => {
-          const arm = () => {
-            abortGraceTimer = setTimeout(() => {
-              const err = new Error("stream aborted (signal teardown grace exceeded)");
-              err.name = "AbortError";
-              reject(err);
-            }, ABORT_TEARDOWN_GRACE_MS);
-          };
-          if (input.signal!.aborted) arm();
-          else {
-            armListener = arm;
-            input.signal!.addEventListener("abort", arm, { once: true });
-          }
-        })
-      : undefined;
-
-    try {
-      if (abortRace) await Promise.race([promptDone, abortRace]);
-      else await promptDone;
-    } finally {
-      if (abortGraceTimer !== undefined) clearTimeout(abortGraceTimer);
-      this.steering.endRun(runId, agent);
-      unsubscribe();
-      if (input.signal) {
-        input.signal.removeEventListener("abort", abortListener);
-        // The `arm` once-listener never fires on a clean run — left registered
-        // it pins this whole run scope (agent state, transcript) to the
-        // signal's lifetime, which on a deadline-armed signal outlives the
-        // dispatch by the full timeout.
-        if (armListener !== undefined) input.signal.removeEventListener("abort", armListener);
-      }
-    }
-
-    // Persist the final transcript on a shared thread so subsequent nodes
-    // with the same thread_id actually see it. Fresh nodes (no thread_id)
-    // never persist — there's no shared transcript to contribute to.
+    // Persist the final transcript on a shared thread so subsequent nodes with
+    // the same thread_id see it; stamp `inProcessWrites` so the next call isn't
+    // misread as a resume.
     if (persist && threadId) {
       this.messageStore.set(input.run_id, threadId, agent.state.messages);
     }
-    // Stamp `inProcessWrites` whenever a threaded node runs so the next
-    // call in this process isn't misread as a resume.
     if (threadId) {
       this.inProcessWrites.add(sessionKey(input.run_id, threadId));
     }
 
-    const last = agent.state.messages[agent.state.messages.length - 1];
-    if (!last) {
-      // No messages at all is the strongest signal that the very first
-      // call failed transport-level. Pause-not-halt so the run can
-      // resume after the operator fixes the upstream issue.
-      return failProvider("provider returned no response", {
-        httpStatus: lastHttpStatus,
-        provider,
-        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
-      });
-    }
+    const terminal = classifyTerminalMessage({
+      messages: agent.state.messages,
+      provider,
+      lastHttpStatus,
+      lastRetryAfterMs,
+      hydratedCount,
+      signalAborted: input.signal?.aborted ?? false,
+    });
+    if (terminal !== null) return terminal;
 
-    if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
-      if (last.stopReason === "error") {
-        // pi-ai's `onResponse` only fires once a stream begins. A
-        // provider that rejects pre-stream (e.g. Anthropic 400
-        // `invalid_request_error` on a malformed message history)
-        // never invokes it, so `lastHttpStatus` stays `null` even
-        // though the error envelope itself carries the status as the
-        // leading token of `errorMessage`. Recover it here so the
-        // `pause_provider` outcome reaches the daemon with the real
-        // status — otherwise the provider-retry classifier mistakes
-        // a manual 400 for a pre-response network failure and burns
-        // the whole auto-retry budget against a deterministic failure.
-        const extracted = effectiveProviderHttpStatus(
-          lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
-          last.errorMessage,
-        );
-        const httpIs4xx5xx = extracted !== null && extracted >= 400 && extracted < 600;
-        const noContent = !Array.isArray(last.content) || last.content.length === 0;
-        if (httpIs4xx5xx || noContent) {
-          return failProvider(last.errorMessage ?? `provider stream error (HTTP ${extracted ?? "n/a"})`, {
-            httpStatus: extracted,
-            provider,
-            ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
-          });
-        }
-      }
-      // Signal-driven abort (operator pause/cancel, supervisor timeout,
-      // shutdown drain): pi-ai stops gracefully and surfaces
-      // stopReason="aborted", but to the executor this is the same
-      // class as a tool handler throwing AbortError — the dispatch
-      // didn't choose to fail, an external signal stopped it. Rethrow
-      // so the executor's `wasAborted` path runs: emit
-      // `fact.node_aborted` (not a node_completed-into-terminal halt),
-      // leave the run running, and let the next dispatch's fold consume
-      // the pending pause/cancel intent through the normal R1/R4 rules.
-      // Without this rethrow, an operator-paused llm turn halts
-      // with `reason="aborted_exit"` instead of pausing.
-      if (last.stopReason === "aborted" && input.signal?.aborted) {
-        const err = new Error(last.errorMessage ?? "stream aborted");
-        err.name = "AbortError";
-        throw err;
-      }
-      // A deliberate self-abort can leave a trailing error envelope (the
-      // `abort` tool call landed, then a later turn's stream died). The
-      // abort still wins — `aborted_exit` is reserved for exactly this
-      // transcript evidence, and routing it as a provider pause would
-      // resurrect a run the agent declared unworkable.
-      const abortedEarlier = findAbortToolCall(agent.state.messages.slice(hydratedCount));
-      if (abortedEarlier && !abortedEarlier.isolated) {
-        return fail(
-          "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-          { non_retryable: true },
-        );
-      }
-      if (abortedEarlier) {
-        return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
-      }
-      // Unclassified failure envelope: no abort tool call, no 4xx/5xx
-      // status, content non-empty (partial stream, or pi-agent-core's
-      // handleRunFailure shape `[{type:"text", text:""}]`). FAIL OPEN to a
-      // resumable pause — the handler-bridge maps `provider_error` to
-      // `pause_provider` and the daemon emits
-      // `fact.run_paused{reason:"provider_error"}` with the message as
-      // detail. A plain `fail` here would route a transient transport
-      // failure into the no-fail-edge terminal halt (`aborted_exit`),
-      // which is reserved for a deliberate abort tool call.
-      const unclassifiedStatus = effectiveProviderHttpStatus(
-        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
-        last.errorMessage,
-      );
-      return failProvider(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
-        httpStatus: unclassifiedStatus,
-        provider,
-        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
-      });
-    }
-
-    // Empty assistant turn without an explicit error — the stream ended
-    // cleanly but produced nothing. Observed against real provider 402s
-    // where pi-ai's stream parsed an HTTP error body as a benign
-    // termination. Pause-not-halt; the operator's resume re-enters the
-    // same node with the rehydrated transcript intact.
-    if (last.role === "assistant" && (!Array.isArray(last.content) || last.content.length === 0)) {
-      return failProvider("provider returned an empty response", {
-        httpStatus: lastHttpStatus,
-        provider,
-        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
-      });
-    }
-
-    // Self-abort: an agent may decide its task is unreachable (missing target,
-    // contradictory constraints, external blocker) and call the built-in
-    // `abort` tool. It maps to a `fail` outcome (NOT a halt): an ordinary node
-    // with no fail-edge then halts (`aborted_exit`), while a `goal_gate` node
-    // drives its §3.4 retarget — this is the verify/review REJECT pattern,
-    // where `abort` re-runs the gate's `retry_target`, bounded by max-retries.
-    // `non_retryable` flags it for the retry-policy short-circuit (retryStep,
-    // for `retry`-status outcomes); it has no bearing on the goal-gate retarget.
-    //
-    // The `abort` tool sets `terminate: true`, so the loop stops after its
-    // batch and the genuinely-last message is the tool result — `notes` is
-    // taken from the last assistant message, and the abort scan walks the
-    // whole transcript so it still wins when emitted in a non-terminating
-    // batch alongside other tool calls.
-    const lastAssistant = lastAssistantMessage(agent.state.messages);
-    const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
-    const aborted = findAbortToolCall(agent.state.messages.slice(hydratedCount));
-    // Isolation (mirrors the route / emit_output exits, D3): the `abort` tool
-    // terminates the turn, so a tool sharing its batch runs blind. Force it
-    // onto a response of its own.
-    if (aborted && !aborted.isolated) {
-      return fail(
-        "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-        { non_retryable: true },
-      );
-    }
-    if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
-
-    // Route-tool resolution. Only considered when the node opted into
-    // routing via `routes=`. Abort wins above — a self-abort cancels
-    // the route concern entirely.
-    if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
-      const routeCall = findRouteToolCall(agent.state.messages.slice(hydratedCount));
-      if (routeCall == null) {
-        return failHalt("route_not_picked", "agent ended turn without calling route()");
-      }
-      if (!routeCall.isolated) {
-        return fail(
-          "route() shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-          { non_retryable: true },
-        );
-      }
-      return ok({ notes, route: routeCall.route });
-    }
-
-    // emit_output resolution for nodes that declare outputs: but no routes:.
-    if (outputsDecl !== undefined) {
-      const emitCall = findEmitOutputCall(agent.state.messages.slice(hydratedCount));
-      if (emitCall == null) {
-        return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
-      }
-      // Isolation (mirrors the route exit, D3): emit_output terminates the turn,
-      // so any tool call sharing its batch runs but its result is discarded — the
-      // output was committed blind to that side effect. Force the model to emit
-      // alone, on a response of its own.
-      if (!emitCall.isolated) {
-        return fail(
-          "emit_output shared an assistant response with other tool calls — emit it alone, with no other tools in the same turn",
-          { non_retryable: true },
-        );
-      }
-      const valErr = validateOutputsValue(outputsDecl, emitCall.value);
-      if (valErr !== null) {
-        return fail(`emit_output value failed validation: ${valErr}`, { non_retryable: true });
-      }
-      return ok({ notes, outputs: emitCall.value as OutputsValue });
-    }
-
-    return ok({ notes });
+    return resolveExitOutcome({ messages: agent.state.messages, hydratedCount, nodeRoutes, outputsDecl });
   }
 
   /** Inject a user message into the currently active agent for `runId`,
@@ -1071,6 +865,232 @@ export class PiLlmBackend implements LlmBackend {
       if (key.startsWith(prefix)) this.inProcessWrites.delete(key);
     }
   }
+}
+
+/** Build the per-run agent-event subscriber: bridge each event to the fragua
+ * event stream, record `cost.recorded` on assistant message ends, and persist
+ * the fully-assembled AgentMessage to the messages table (skipping empty
+ * error/abort failure envelopes, which would bloat the table on retry chains). */
+function buildMessageSubscriber(input: LlmInput): (event: AgentEvent) => Promise<void> {
+  return async (event: AgentEvent) => {
+    const bridged = bridgeAgentEvent(event);
+    if (bridged && input.emit) await input.emit(bridged.type, bridged.data);
+    if (event.type === "message_end") {
+      if (event.message.role === "assistant" && input.emit) {
+        await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
+      }
+      // Skip empty-content error/abort envelopes — pi-agent-core synthesises an
+      // assistant message with `content: []` + `stopReason: "error" | "aborted"`
+      // for a transport failure or in-flight abort. The row carries no tokens
+      // and no recoverable content; persisting it bloats the messages table on
+      // every provider-error retry chain. The `cost.recorded` above still fires.
+      if (input.persistMessage) {
+        const msg = event.message as AssistantMessage;
+        const isEmptyFailureEnvelope =
+          msg.role === "assistant" &&
+          (msg.stopReason === "error" || msg.stopReason === "aborted") &&
+          Array.isArray(msg.content) &&
+          msg.content.length === 0;
+        if (!isEmptyFailureEnvelope) input.persistMessage(event.message);
+      }
+    }
+  };
+}
+
+/** Emit the resolved `llm.start` snapshot (SPEC §3.5). Large fields are not
+ * inlined: the system prompt ships as sha256 + byte length (persisted separately
+ * as a role='system' message) and the prior transcript is omitted (it lives in
+ * the messages table). No-op when the call has no emit sink. */
+async function emitLlmStart(args: {
+  input: LlmInput;
+  provider: string;
+  modelId: string;
+  effectivePrompt: string;
+  systemPrompt: string;
+  threadId: string | undefined;
+  thinkingLevel: ThinkingLevel;
+  allow: string[] | undefined;
+  deny: string[] | undefined;
+  priorMessageCount: number;
+  contextFileRecords: Awaited<ReturnType<typeof loadContextFiles>>["files"];
+  effectiveSkills: readonly Skill[];
+}): Promise<void> {
+  const { input, provider, modelId, effectivePrompt, systemPrompt, threadId, thinkingLevel, allow, deny } = args;
+  if (!input.emit) return;
+  const systemPromptBytes = Buffer.byteLength(systemPrompt, "utf8");
+  const llmStart: Record<string, unknown> = {
+    provider,
+    model: modelId,
+    prompt: effectivePrompt,
+    system_prompt_sha256: sha256Hex(systemPrompt),
+    system_prompt_bytes: systemPromptBytes,
+  };
+  if (threadId) llmStart["thread_id"] = threadId;
+  // The resolved thinking level — surfaced so "is thinking on?" is visible in
+  // the event feed, not silently inherited from an upstream default.
+  llmStart["thinking_level"] = thinkingLevel;
+  if (allow) llmStart["allowed_tools"] = allow;
+  if (deny) llmStart["denied_tools"] = deny;
+  if (input.iteration) llmStart["iteration"] = input.iteration;
+  if (args.priorMessageCount > 0) llmStart["prior_message_count"] = args.priorMessageCount;
+  const settings = captureSettings(input.node.attrs as Record<string, unknown>);
+  if (settings) llmStart["settings"] = settings;
+  if (args.contextFileRecords.length > 0) llmStart["context_files"] = args.contextFileRecords;
+  if (args.effectiveSkills.length > 0) llmStart["skills"] = args.effectiveSkills.map(toCatalogRecord);
+  // Budget snapshot: prefer the executor-supplied cumulative value; fall back to
+  // the zeroed shape derived from node attrs for callers not yet threaded.
+  const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs as Record<string, unknown>);
+  if (budget) llmStart["budget"] = budget;
+  await input.emit("llm.start", llmStart);
+}
+
+/** Classify the terminal assistant message into a resumable pause / hard fail,
+ * or `null` to fall through to exit resolution. Handles no-response, provider
+ * transport errors (4xx/5xx), signal-driven abort (rethrown as AbortError so the
+ * executor's `wasAborted` path runs), a trailing abort tool call, unclassified
+ * failure envelopes (fail open to a resumable pause), and empty responses. */
+function classifyTerminalMessage(args: {
+  messages: readonly AgentMessage[];
+  provider: string;
+  lastHttpStatus: number | null;
+  lastRetryAfterMs: number | undefined;
+  hydratedCount: number;
+  signalAborted: boolean;
+}): Outcome | null {
+  const { messages, provider, lastHttpStatus, lastRetryAfterMs, hydratedCount, signalAborted } = args;
+  const last = messages[messages.length - 1];
+  if (!last) {
+    // No messages at all is the strongest signal that the very first call failed
+    // transport-level. Pause-not-halt so the run can resume after a fix.
+    return failProvider("provider returned no response", {
+      httpStatus: lastHttpStatus,
+      provider,
+      ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+    });
+  }
+
+  if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+    if (last.stopReason === "error") {
+      // pi-ai's `onResponse` only fires once a stream begins; a pre-stream reject
+      // (e.g. Anthropic 400 on a malformed history) never invokes it, so recover
+      // the status from the leading token of `errorMessage`.
+      const extracted = effectiveProviderHttpStatus(
+        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+        last.errorMessage,
+      );
+      const httpIs4xx5xx = extracted !== null && extracted >= 400 && extracted < 600;
+      const noContent = !Array.isArray(last.content) || last.content.length === 0;
+      if (httpIs4xx5xx || noContent) {
+        return failProvider(last.errorMessage ?? `provider stream error (HTTP ${extracted ?? "n/a"})`, {
+          httpStatus: extracted,
+          provider,
+          ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+        });
+      }
+    }
+    // Signal-driven abort (operator pause/cancel, supervisor timeout, shutdown
+    // drain): rethrow so the executor's `wasAborted` path emits
+    // `fact.node_aborted` instead of halting with `aborted_exit`.
+    if (last.stopReason === "aborted" && signalAborted) {
+      const err = new Error(last.errorMessage ?? "stream aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    // A deliberate self-abort can leave a trailing error envelope; the abort
+    // still wins over a provider pause.
+    const abortedEarlier = findAbortToolCall(messages.slice(hydratedCount));
+    if (abortedEarlier && !abortedEarlier.isolated) {
+      return fail(
+        "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+        { non_retryable: true },
+      );
+    }
+    if (abortedEarlier) {
+      return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
+    }
+    // Unclassified failure envelope: FAIL OPEN to a resumable pause rather than
+    // route a transient transport failure into the no-fail-edge terminal halt.
+    const unclassifiedStatus = effectiveProviderHttpStatus(
+      lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+      last.errorMessage,
+    );
+    return failProvider(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
+      httpStatus: unclassifiedStatus,
+      provider,
+      ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+    });
+  }
+
+  // Empty assistant turn without an explicit error — the stream ended cleanly but
+  // produced nothing (observed against real provider 402s). Pause-not-halt.
+  if (last.role === "assistant" && (!Array.isArray(last.content) || last.content.length === 0)) {
+    return failProvider("provider returned an empty response", {
+      httpStatus: lastHttpStatus,
+      provider,
+      ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+    });
+  }
+  return null;
+}
+
+/** Resolve a clean-ended turn into its exit outcome: a self-abort (wins over
+ * everything), a route pick (`routes:` nodes), an `emit_output` value
+ * (`outputs:` nodes), or a plain `ok`. Each terminating tool must be called in
+ * isolation (D3) — sharing its batch fails the node. */
+function resolveExitOutcome(args: {
+  messages: readonly AgentMessage[];
+  hydratedCount: number;
+  nodeRoutes: string[] | undefined;
+  outputsDecl: OutputsDecl | undefined;
+}): Outcome {
+  const { messages, hydratedCount, nodeRoutes, outputsDecl } = args;
+  const lastAssistant = lastAssistantMessage(messages);
+  const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
+  const aborted = findAbortToolCall(messages.slice(hydratedCount));
+  // Isolation (mirrors the route / emit_output exits, D3).
+  if (aborted && !aborted.isolated) {
+    return fail(
+      "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+      { non_retryable: true },
+    );
+  }
+  if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
+
+  // Route-tool resolution — only when the node opted into `routes=`.
+  if (Array.isArray(nodeRoutes) && nodeRoutes.length > 0) {
+    const routeCall = findRouteToolCall(messages.slice(hydratedCount));
+    if (routeCall == null) {
+      return failHalt("route_not_picked", "agent ended turn without calling route()");
+    }
+    if (!routeCall.isolated) {
+      return fail(
+        "route() shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
+        { non_retryable: true },
+      );
+    }
+    return ok({ notes, route: routeCall.route });
+  }
+
+  // emit_output resolution for nodes that declare outputs: but no routes:.
+  if (outputsDecl !== undefined) {
+    const emitCall = findEmitOutputCall(messages.slice(hydratedCount));
+    if (emitCall == null) {
+      return fail("node declared outputs: but did not call emit_output", { non_retryable: true });
+    }
+    if (!emitCall.isolated) {
+      return fail(
+        "emit_output shared an assistant response with other tool calls — emit it alone, with no other tools in the same turn",
+        { non_retryable: true },
+      );
+    }
+    const valErr = validateOutputsValue(outputsDecl, emitCall.value);
+    if (valErr !== null) {
+      return fail(`emit_output value failed validation: ${valErr}`, { non_retryable: true });
+    }
+    return ok({ notes, outputs: emitCall.value as OutputsValue });
+  }
+
+  return ok({ notes });
 }
 
 /** Cooperative-unwind window between `input.signal` aborting and the

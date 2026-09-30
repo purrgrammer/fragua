@@ -100,6 +100,11 @@ export interface ServerDeps {
 
 const DEFAULT_SSE_POLL_MS = 100;
 const DEFAULT_SSE_BATCH_SIZE = 500;
+// Upper bound on the `/metrics/global` window. The default is 30 days; the cap
+// (5 years) sits far above any legitimate dashboard range while stopping a
+// `?windowHours=1e12` from driving `cutoffMs` negative and scanning all
+// history. Preserves the existing default window (no `windowHours` → 30 days).
+const MAX_WINDOW_HOURS = 24 * 365 * 5;
 
 /**
  * Scan a workflow source for nodes with malformed `timeout=` or `max_ms=`
@@ -728,7 +733,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   // ─── Aggregate metrics (dashboard) ──────────────────────────
 
   app.get("/metrics/global", (c) => {
-    const windowHours = numericQueryParam(c.req.query("windowHours"), { fallback: 24 * 30 });
+    const windowHours = numericQueryParam(c.req.query("windowHours"), { fallback: 24 * 30, max: MAX_WINDOW_HOURS });
     const cutoffMs = (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
 
     const totals = readPlane.globalMetrics({ sinceMs: cutoffMs });

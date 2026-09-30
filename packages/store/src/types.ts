@@ -39,6 +39,8 @@ import type {
   WorkflowDirectoryRow,
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
+import type { JudgeAnswerRow } from "./message-queries.ts";
+import type { MetricsSnapshot } from "./metrics.ts";
 import type {
   FleetSummary,
   FleetSummaryOpts,
@@ -716,6 +718,11 @@ export interface GetDaemonEventsOpts {
 //                         overlap with run_state, no OCC, separate tables.
 //   IProviderCredentialStore / IProviderConfigStore — per-provider
 //                         credential + config rows (declared further down).
+//   IMcpOAuthStore      — the `mcp_oauth` token table (CLI OAuth seam).
+//   IBundleStore        — portable `.fragua` export/import + the CI
+//                         `retainPortableTables` pruning primitive.
+//   IMetricsReader      — the process-local write-path metrics snapshot.
+//   IJudgeReader        — recorded judge_node message history.
 //
 // Every consumer types its `store` seam against the narrowest slice (or
 // intersection) it calls — NEVER the composite `IEventStore` below. This is
@@ -1321,6 +1328,92 @@ export interface IProviderConfigStore {
   getProviderConfigRevision(): { maxUpdatedAt: number; rowCount: number };
 }
 
+/** Options for {@link IBundleStore.exportRunBundle}. */
+export interface ExportBundleOptions {
+  fraguaVersion: string;
+  /** `"source"` (default): markers are `[REDACTED:source]`. `"generic"`:
+   * markers are `[REDACTED]` with no source label (CI bundles). */
+  labelMode?: "source" | "generic";
+  /** Extra literal needles merged into the registry before compilation.
+   * Used by the CI profile to inject captured env secrets. */
+  extraLiterals?: Array<{ value: string; source: string }>;
+  /** The run's terminal result envelope (`fragua ci`'s
+   * `{ runId, status, outputs, usage }`). When supplied it is scrubbed as JSON
+   * and shipped as `runs/<id>/result.json` so an imported run carries the same
+   * object the `--json` stream emitted. Omitted for a non-terminal run. */
+  runResult?: unknown;
+}
+
+/** Return value of {@link IBundleStore.exportRunBundle}. */
+export interface ExportBundleResult {
+  bytes: Uint8Array;
+  /** `true` when a live secret value (provider-credential or `env:*` literal)
+   * was found VERBATIM in an UN-SCRUBBED binary artifact blob. Text surfaces
+   * are always scrubbed, so a literal hit there is non-fatal by design. Binary
+   * blobs ship as-is (§13 residual) and are scanned — a hit means the secret
+   * reached an egress surface the scrubber does NOT redact. Pattern-only
+   * matches never set this flag. */
+  liveLiteralHit: boolean;
+}
+
+/** Return value of {@link IBundleStore.importRunBundle}. */
+export interface ImportBundleResult {
+  runs: { runId: string; imported: boolean }[];
+  resumeCompatible: boolean;
+}
+
+/**
+ * MCP OAuth token persistence — the `mcp_oauth` table. Opaque per-URL
+ * payloads (tokens + client registration) written by the CLI's OAuth
+ * provider seam. Secret-bearing and instance-scoped (dropped by
+ * {@link IBundleStore.retainPortableTables}); orthogonal to run state.
+ */
+export interface IMcpOAuthStore {
+  /** Opaque payload for `url`, or `undefined` when unstored. */
+  getMcpOAuth(url: string): string | undefined;
+  /** Every stored `(url, payload)` pair. Used by bundle export to redact
+   *  live token literals. */
+  listMcpOAuth(): { url: string; payload: string }[];
+  /** Upsert. `payload` must already be a JSON-serialised string (I1). */
+  upsertMcpOAuth(url: string, payload: string): void;
+  /** Hard delete. No-op when the row is absent. */
+  deleteMcpOAuth(url: string): void;
+}
+
+/**
+ * Portable-bundle export / import + the CI table-pruning primitive. The
+ * `.fragua` bundle is a manifest-first tar of a scrubbed, replayable run
+ * record; import re-derives `run_state` by replaying the log.
+ */
+export interface IBundleStore {
+  /** Export `runId` as a scrubbed, replayable `.fragua` bundle. */
+  exportRunBundle(runId: string, opts: ExportBundleOptions): ExportBundleResult;
+  /** Merge a `.fragua` bundle's runs into this store. Idempotent per run. */
+  importRunBundle(bytes: Uint8Array): ImportBundleResult;
+  /** Prune the store to the portable, replayable run record (drops the
+   *  secret-bearing + instance-scoped tables) then VACUUM + checkpoint.
+   *  `fragua ci` calls this before leaving a `--db` artifact. */
+  retainPortableTables(): void;
+}
+
+/**
+ * Process-local write-path metrics snapshot — backs `GET /metrics/store`.
+ * Read-only; no run-state overlap.
+ */
+export interface IMetricsReader {
+  metricsSnapshot(): MetricsSnapshot;
+}
+
+/**
+ * Recorded `judge_node` message history — read-only, backs
+ * `fragua judge calibrate`. Orthogonal to the run-read surface.
+ */
+export interface IJudgeReader {
+  /** Every recorded `judge_node` message, optionally narrowed to one
+   *  workflow by display name. */
+  getJudgeMessages(workflowName?: string): JudgeAnswerRow[];
+}
+
 /**
  * Composite store contract — the full intersection that `SqliteStore`
  * implements. Only the store package and the assembly seams that construct
@@ -1335,4 +1428,8 @@ export type IEventStore = IEventWriter &
   IAnalyticsReader &
   IDaemonCoordinator &
   IProviderCredentialStore &
-  IProviderConfigStore;
+  IProviderConfigStore &
+  IMcpOAuthStore &
+  IBundleStore &
+  IMetricsReader &
+  IJudgeReader;

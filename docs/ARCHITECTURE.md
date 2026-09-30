@@ -251,15 +251,16 @@ Schedule events ride `daemon_events` (not the per-run `events` table) because th
 
 ## 4. Store interfaces
 
-The store contract is segregated into six sub-interfaces along the
+The store contract is segregated into ten sub-interfaces along the
 fault lines that actually matter (write vs read, run-state vs analytics
-vs daemon coordination vs the two per-provider stores). `IEventStore` is
+vs daemon coordination vs the two per-provider stores, plus the
+orthogonal MCP-OAuth / bundle / metrics / judge groups). `IEventStore` is
 preserved as a composite type alias so existing callers don't break, but
 new code should depend on the narrowest interface that fits its needs —
 analytics routes need `IAnalyticsReader`, the supervisor needs
 `IDaemonCoordinator`, the daemon executor needs the full set.
 
-`SqliteStore` implements all six in a single class today. Splitting
+`SqliteStore` implements all ten in a single class today. Splitting
 them by surface is **necessary but not sufficient** for any future
 shared or out-of-process backing — say, the reader interface fronted by
 a Postgres replica or the analytics one by DuckDB. It removes one
@@ -273,7 +274,7 @@ SPEC §5 is authoritative here: multi-machine / shared deployment is out
 of scope by design, and this split is groundwork, not a drop-in seam.
 See §12.
 
-The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator & IProviderCredentialStore & IProviderConfigStore` in `packages/store/src/types.ts`, where every method signature is authoritative.
+The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator & IProviderCredentialStore & IProviderConfigStore & IMcpOAuthStore & IBundleStore & IMetricsReader & IJudgeReader` in `packages/store/src/types.ts`, where every method signature is authoritative.
 
 ### 4.1 IEventWriter
 
@@ -314,7 +315,26 @@ schedule's only state transitions are paused/resumed/fired/deleted,
 all single-row updates with no cross-table invariants. Audit rows live
 on `daemon_events` (see §3).
 
-### 4.5 Errors and shared types
+### 4.5 IMcpOAuthStore / IBundleStore / IMetricsReader / IJudgeReader
+
+Four small, orthogonal groups that previously hung off `SqliteStore` with no
+sub-interface (so consumers reached them only through the concrete class or an
+`as unknown as {…}` cast). Now first-class members of the composite:
+
+- **`IMcpOAuthStore`** — the `mcp_oauth` token table (`getMcpOAuth` /
+  `listMcpOAuth` / `upsertMcpOAuth` / `deleteMcpOAuth`). Opaque per-URL payloads
+  written by the CLI's OAuth provider seam; secret-bearing and instance-scoped
+  (dropped by `retainPortableTables`).
+- **`IBundleStore`** — portable `.fragua` export/import plus the CI pruning
+  primitive (`exportRunBundle` / `importRunBundle` / `retainPortableTables`).
+  `exportRunBundle` emits a scrubbed, replayable, manifest-first tar;
+  `importRunBundle` re-derives `run_state` by replaying the log.
+- **`IMetricsReader`** — the process-local write-path metrics snapshot
+  (`metricsSnapshot`), backing `GET /metrics/store`.
+- **`IJudgeReader`** — recorded `judge_node` message history
+  (`getJudgeMessages`), backing `fragua judge calibrate`.
+
+### 4.6 Errors and shared types
 
 `ArtifactScope` is `{ runId, nodeId, iteration, key }` and `ArtifactRef` extends it with `{ sha256, sizeBytes, mime }`. The store throws typed errors — `ConcurrencyError` (OCC conflict), `ArtifactCollisionError` (same-scope rewrite with differing content), `ArtifactTooLargeError`, `SchemaDriftError`, `QuarantineError`. These plus `SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`, `GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`, `RunCostTotalsRow`, `Project`, the analytics row types, and the global-feed cursor option types all live in `packages/store/src/types.ts`. SQL strings are split per-table across `event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`, `artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and `analytics-queries.ts` — each file owns its table's reads + writes. A sub-interface discipline lint (`packages/store/test/event-store-sub-interface.lint.test.ts`) source-scans every `packages/*/src` OUTSIDE `packages/store` and fails the build if a parameter or property is annotated with the bare composite `: IEventStore` (or `& IEventStore`): consumers must type their `store` seam against the narrowest sub-interface they actually call, so the split is enforced rather than merely documented. It does NOT compare the interfaces to `SqliteStore` — that agreement is held by `implements IEventStore` on the class plus the workspace typecheck. Only four assembly seams (server + daemon entrypoints, CLI store-client + executor-deps) may hold the full composite, to hand narrow slices out.
 

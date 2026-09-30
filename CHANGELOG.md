@@ -8,6 +8,16 @@ guarantee.
 
 ## [Unreleased]
 
+### Changed
+
+- **Read-path ceilings on the dashboard and run-detail APIs.** The
+  `/metrics/global` window (`?windowHours=`) is now clamped to a 5-year maximum
+  so a pathological value can't scan all history; the default 30-day window is
+  unchanged. `GET /runs/:id/events.json` and `GET /runs/:id/messages` now clamp
+  an explicit `?limit=` to 5000, matching the run event-stream sibling; both
+  stay uncapped by default so the full-fidelity transcript still returns
+  everything.
+
 ### Added
 
 - **`type: judge` steps can name a backend.** `provider:` on a judge step picks

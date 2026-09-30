@@ -105,8 +105,10 @@ export interface ReadPlane {
    *  absent. Mirrors `GET /runs/:id/messages`. */
   messages(runId: string, opts?: GetMessagesOpts): NarrowMessage[] | null;
   /** Raw store event log (`fact.*` + `intent.*`), or `null` when the run
-   *  is absent. Mirrors `GET /runs/:id/events.json`. */
-  events(runId: string): StoredEvent[] | null;
+   *  is absent. Mirrors `GET /runs/:id/events.json`. Uncapped by default (the
+   *  canonical full-fidelity read); an optional `limit` bounds the scan for
+   *  clients that opt in. */
+  events(runId: string, opts?: { limit?: number }): StoredEvent[] | null;
   /** Bounded tail of the raw event log — the last `opts.limit` events
    *  strictly after `opts.sinceSeq`, optionally type-prefix filtered,
    *  oldest-first — or `null` when the run is absent. SQL-level bound;
@@ -264,9 +266,9 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
       if (store.getState(runId) == null) return null;
       return store.getMessagesNarrow(runId, opts);
     },
-    events(runId) {
+    events(runId, opts) {
       if (store.getState(runId) == null) return null;
-      return store.getEvents(runId);
+      return store.getEvents(runId, opts?.limit === undefined ? undefined : { limit: opts.limit });
     },
     eventsTail(runId, opts = {}) {
       if (store.getState(runId) == null) return null;

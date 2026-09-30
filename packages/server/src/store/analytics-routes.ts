@@ -37,6 +37,10 @@ export interface AnalyticsRoutesOpts {
 const TOP_WORKFLOWS_LIMIT = 8;
 const DRILLDOWN_DEFAULT_LIMIT = 30;
 const DRILLDOWN_MAX_LIMIT = 100;
+// Per-run event cap for the drill-down hydrate loop. The loop is bounded on
+// both axes: the page is ≤ DRILLDOWN_MAX_LIMIT rows and each row's event fetch
+// is capped here, so the total scan is DRILLDOWN_MAX_LIMIT × EVENTS_PER_RUN_LIMIT.
+const EVENTS_PER_RUN_LIMIT = 5000;
 const VALID_BUCKETS: ReadonlySet<BucketKind> = new Set(["hour", "day", "month"]);
 const VALID_WORKFLOW_SCOPES: ReadonlySet<WorkflowScopeFilter> = new Set(["global", "local"]);
 
@@ -115,13 +119,14 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     // Hydrate RunSummary[] for the wire. Mirrors what `/runs` does so the
     // drawer can render with the same RunRow primitive. The events fetch
     // stays in this loop (per-run) — the drill-down page is bounded
-    // (≤ 100) so the cost is manageable. If this becomes hot, fold the
-    // summary-side fields the row needs into a dedicated SQL projection.
+    // (≤ DRILLDOWN_MAX_LIMIT) and each fetch is capped, so the cost is
+    // bounded. If this becomes hot, fold the summary-side fields the row
+    // needs into a dedicated SQL projection.
     const summaries = [];
     for (const runId of page.runIds) {
       const state = store.getState(runId);
       if (state == null) continue;
-      const events = store.getEvents(runId, { limit: 5000 });
+      const events = store.getEvents(runId, { limit: EVENTS_PER_RUN_LIMIT });
       // Conversation runs (kind='conversation') carry no workflow_sha
       // — skip the lookup; the summary's `workflowName` falls through.
       const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
