@@ -155,7 +155,10 @@ The shell always inherits this baseline allow-list, verbatim, with no config:
 - `USER`
 - `LANG`
 - every `LC_*` (locale)
-- every `FRAGUA_*` (engine-set, e.g. `FRAGUA_OUTPUT`)
+
+Engine vars such as `FRAGUA_OUTPUT` are **not** admitted by an ambient prefix:
+the engine injects them per-step into the tool subprocess, so an unrelated
+ambient `FRAGUA_*` var in the operator's shell never reaches a workflow's bash.
 
 `HOME` is on the list on purpose: `git` and `gh` read their config and credential
 helpers from `$HOME`, so worktree operations and `gh` steps keep working.

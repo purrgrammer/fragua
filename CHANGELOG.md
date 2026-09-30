@@ -70,6 +70,23 @@ guarantee.
 
 ### Changed
 
+- **The unauthenticated control plane no longer trusts the Vite dev origin in
+  production.** The same-origin gate previously accepted any `localhost:5173`
+  page unconditionally, letting a rogue loopback page drive the compiled
+  binary's control plane. It now trusts the Vite dev origin **only** under
+  `fragua serve --dev` (or `FRAGUA_DEV_ORIGIN=1`); the compiled binary and
+  `fragua harness` never do. The documented dev workflow adds one flag:
+  `fragua serve --dev`, then `FRAGUA_API_URL=<origin>/api bun run dev:web`.
+- **The bash env allow-list no longer admits an ambient `FRAGUA_*` prefix.** A
+  `tool`/`bash` subprocess previously inherited any host env var beginning with
+  `FRAGUA_`. It now inherits only the fixed baseline plus `LC_*` and the
+  operator's `bash.env-passthrough` / `--allow-env` names; an arbitrary ambient
+  `FRAGUA_FOO` is dropped. Engine vars such as `FRAGUA_OUTPUT` are injected
+  per-step by the engine and are unaffected, so tool `outputs:` keep working.
+- **`judge` state interpolation is fenced (experimental).** An `${{ outputs }}`
+  / `${{ inputs }}` value substituted into a `judge` step's `state:` is now
+  wrapped in the same content-derived boundary an `llm` `prompt:` uses, so an
+  upstream-laundered value can't pose as an instruction to the System One model.
 - **Plain `on: {fail: <step>}` back-edges honour `max-retries`.** When a step's
   `fail` edge re-enters the step itself or an upstream step, the engine now
   counts the re-entries against that step's `max-retries` and pauses

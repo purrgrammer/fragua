@@ -50,6 +50,22 @@ describe("startServer", () => {
     expect(typeof handle.close).toBe("function");
   });
 
+  test("serve --dev threads devMode: the Vite dev origin (localhost:5173) is trusted", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, webDistDir: undefined, dev: true });
+    const res = await fetch(`${handle.url}/health`, { headers: { origin: "http://localhost:5173" } });
+    expect(res.status).toBe(200);
+  });
+
+  test("without --dev the Vite dev origin (localhost:5173) is refused", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, webDistDir: undefined });
+    const res = await fetch(`${handle.url}/health`, { headers: { origin: "http://localhost:5173" } });
+    expect(res.status).toBe(403);
+  });
+
   test("GET /health returns 200 {ok:true}", async () => {
     scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
     scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));

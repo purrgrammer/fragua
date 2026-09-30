@@ -21,9 +21,9 @@ steps:
     type: exit
 `;
 
-function mount(): { app: ReturnType<typeof createServer>; store: SqliteStore } {
+function mount(devMode = false): { app: ReturnType<typeof createServer>; store: SqliteStore } {
   const store = freshStore();
-  const app = createServer({ store, boundOrigin: () => BOUND });
+  const app = createServer({ store, boundOrigin: () => BOUND, devMode });
   return { app, store };
 }
 
@@ -107,6 +107,25 @@ describe("same-origin gate", () => {
   test("loopback Host with no Origin passes the gate", async () => {
     const { app, store } = mount();
     const res = await gatedRequest(app, "/health", { host: "localhost" });
+    expect(res.status).toBe(200);
+    store.close();
+  });
+
+  test("Vite dev origin (localhost:5173) is refused when dev mode is OFF", async () => {
+    const { app, store } = mount();
+    const res = await gatedRequest(app, "/health", {
+      headers: { origin: "http://localhost:5173" },
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code?: string }).code).toBe("forbidden_origin");
+    store.close();
+  });
+
+  test("Vite dev origin (localhost:5173) is allowed when dev mode is ON", async () => {
+    const { app, store } = mount(true);
+    const res = await gatedRequest(app, "/health", {
+      headers: { origin: "http://localhost:5173" },
+    });
     expect(res.status).toBe(200);
     store.close();
   });

@@ -381,7 +381,10 @@ async function resolveState(
   const walk = async (s: JudgeState, path: string): Promise<ResolvedState> => {
     if (typeof s === "string") {
       try {
-        return { state: substitute(s, { args: ctx.args }) };
+        // Fence interpolated outputs/inputs so an upstream-laundered value can't
+        // pose as an instruction in the state text the System One model reads
+        // (same boundary as an llm `prompt:`, handler-bridge.ts).
+        return { state: substitute(s, { args: ctx.args, wrapValues: true }) };
       } catch (err) {
         if (err instanceof UnpopulatedOutputError) return { fail: err.message };
         throw err;
@@ -427,6 +430,10 @@ async function resolveState(
 function resolveList(ref: string, ctx: HandlerContext): { items: JudgeJson[] } | { fail: string } {
   let text: string;
   try {
+    // No `wrapValues` here: the substituted text is parsed as JSON immediately
+    // below, so a content-boundary wrapper would break the parse. The list is
+    // structured data, not prompt text; each item's leaves are re-serialised
+    // into the state object, not concatenated into an instruction stream.
     text = substitute(ref, { args: ctx.args });
   } catch (err) {
     if (err instanceof UnpopulatedOutputError) return { fail: err.message };

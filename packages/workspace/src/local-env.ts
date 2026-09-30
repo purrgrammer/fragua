@@ -51,8 +51,10 @@ const CD_ESCAPE_PATTERN = /\bcd\s+(['"]?)(\/[^\s'"&;|()]+)\1/g;
  *  operator allow-list. These are the vars a POSIX shell and the tools this
  *  repo's own workflows shell out to (`git`, `gh`, `bun`, coreutils) need to
  *  function; `HOME` in particular anchors `git`/`gh` credential-helper and
- *  config lookup. `LC_*` locale vars and `FRAGUA_*` engine vars are admitted by
- *  prefix in {@link isBaselineEnvAllowed}. */
+ *  config lookup. `LC_*` locale vars are admitted by prefix in
+ *  {@link isBaselineEnvAllowed}. Engine vars (`FRAGUA_OUTPUT`, …) are NOT
+ *  admitted by an ambient prefix — the engine injects them per-step through
+ *  `opts.env`, which wins over the allow-list at spawn time. */
 export const BASELINE_ENV_ALLOW: ReadonlySet<string> = new Set([
   "PATH",
   "HOME",
@@ -64,10 +66,13 @@ export const BASELINE_ENV_ALLOW: ReadonlySet<string> = new Set([
 ]);
 
 /** True when `name` is in the built-in baseline allow-list — an exact
- *  {@link BASELINE_ENV_ALLOW} member, an `LC_*` locale var, or a `FRAGUA_*`
- *  engine var. The floor beneath every operator/CI allow-list. */
+ *  {@link BASELINE_ENV_ALLOW} member or an `LC_*` locale var. The floor beneath
+ *  every operator/CI allow-list. An ambient `FRAGUA_*` var is NOT admitted here:
+ *  engine-set vars reach the subprocess via `opts.env` (applied after this
+ *  filter), and admitting arbitrary ambient `FRAGUA_*` names was a leak surface
+ *  under the single-user threat model. */
 export function isBaselineEnvAllowed(name: string): boolean {
-  return BASELINE_ENV_ALLOW.has(name) || name.startsWith("LC_") || name.startsWith("FRAGUA_");
+  return BASELINE_ENV_ALLOW.has(name) || name.startsWith("LC_");
 }
 
 export interface LocalEnvironmentOptions {
@@ -78,7 +83,7 @@ export interface LocalEnvironmentOptions {
   /** Additional blocklist patterns appended to the built-in defaults. */
   extraBlockedPatterns?: string[];
   /** Operator/CI allow-list ADDITIONS to the built-in baseline
-   * ({@link BASELINE_ENV_ALLOW} plus `LC_*` / `FRAGUA_*`). A bash subprocess
+   * ({@link BASELINE_ENV_ALLOW} plus `LC_*`). A bash subprocess
    * inherits from `process.env` only the names in the baseline OR this set OR
    * {@link envAllowPredicate}; everything else — provider credentials, ambient
    * secrets, unrelated vars — is dropped by default. Set by `fragua daemon` /
@@ -298,7 +303,8 @@ export class LocalEnvironment implements ExecutionEnvironment {
             }
           }
           // Engine-set vars (e.g. FRAGUA_OUTPUT) always pass — they are supplied
-          // by the handler through opts.env, not inherited from the ambient env.
+          // by the handler through opts.env, not inherited from the ambient env,
+          // and this assignment wins over the allow-list filter above.
           Object.assign(merged, opts.env);
           return merged as NodeJS.ProcessEnv;
         })(),

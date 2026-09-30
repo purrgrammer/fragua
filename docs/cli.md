@@ -203,7 +203,7 @@ fragua schedule list | pause <id> | resume <id> | rm <id>
 
 ```sh
 fragua harness [--port <n>] [--host <addr>] [--db <path>]   # daemon + HTTP under one supervisor (127.0.0.1:6767)
-fragua serve   [--port <n>] [--host <addr>] [--cwd <dir>] [--db <path>]   # HTTP + SSE only
+fragua serve   [--port <n>] [--host <addr>] [--cwd <dir>] [--db <path>] [--dev]   # HTTP + SSE only
 fragua daemon  start [--concurrency <n>] [--provider <name>] [--model <id>] [--cwd <dir>] [--db <path>]
 fragua daemon  stop                                       # SIGTERM the daemon holding the store lock
 ```
@@ -212,6 +212,16 @@ Server discovery is store-resident: whoever binds the HTTP listener (the
 harness's in-process server, or a standalone `serve`) writes its URL into the
 store's `server_endpoint` row and clears it on shutdown. `@fragua/web` reads that
 row — there is no `serve.json` file and no localhost default.
+
+`serve --dev` trusts the Vite dev origin (`http://localhost:5173`) for the
+same-origin gate so `bun run dev:web` can proxy to this listener — **dev only**.
+The compiled binary and `fragua harness` never trust it, so a rogue
+`localhost:5173` page can't drive the unauthenticated control plane in
+production. The same trust can be enabled via the `FRAGUA_DEV_ORIGIN=1` env var.
+The documented dev workflow needs no manual gate step: run `fragua serve --dev`
+(it prints the `FRAGUA_API_URL=<origin>/api` line), then
+`FRAGUA_API_URL=<origin>/api bun run dev:web` — Vite proxies `/api/**` to the
+dev-gated server. Without `--dev` the server refuses the 5173 origin with 403.
 
 `harness` supervises the daemon subprocess: an unexpected exit — including a crash
 during initial boot — is restarted with exponential backoff (500ms doubling to

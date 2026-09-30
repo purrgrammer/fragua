@@ -280,16 +280,30 @@ describe("LocalEnvironment", () => {
       expect(r.stdout).toContain("O=/tmp/scratch-x");
     });
 
-    test("(e) an ambient FRAGUA_* var passes by baseline prefix", async () => {
-      const prev = process.env["FRAGUA_TEST_BASELINE"];
-      process.env["FRAGUA_TEST_BASELINE"] = "engine-set-visible";
+    test("(e) an ambient FRAGUA_* var is DROPPED unless allow-listed", async () => {
+      const prev = process.env["FRAGUA_FOO"];
+      process.env["FRAGUA_FOO"] = "ambient-must-not-leak-abcdef";
       try {
         const env = new LocalEnvironment({ cwd: scratch });
-        const r = await env.exec("echo F=${FRAGUA_TEST_BASELINE:-MISSING}");
-        expect(r.stdout).toContain("F=engine-set-visible");
+        const r = await env.exec("echo F=${FRAGUA_FOO:-MISSING}");
+        expect(r.stdout).toContain("F=MISSING");
+        expect(r.stdout).not.toContain("ambient-must-not-leak");
       } finally {
-        if (prev === undefined) delete process.env["FRAGUA_TEST_BASELINE"];
-        else process.env["FRAGUA_TEST_BASELINE"] = prev;
+        if (prev === undefined) delete process.env["FRAGUA_FOO"];
+        else process.env["FRAGUA_FOO"] = prev;
+      }
+    });
+
+    test("(e2) an ambient FRAGUA_FOO reaches the subprocess when explicitly allow-listed", async () => {
+      const prev = process.env["FRAGUA_FOO"];
+      process.env["FRAGUA_FOO"] = "allow-listed-visible-abcdef";
+      try {
+        const env = new LocalEnvironment({ cwd: scratch, envAllowNames: new Set(["FRAGUA_FOO"]) });
+        const r = await env.exec("echo F=${FRAGUA_FOO:-MISSING}");
+        expect(r.stdout).toContain("F=allow-listed-visible-abcdef");
+      } finally {
+        if (prev === undefined) delete process.env["FRAGUA_FOO"];
+        else process.env["FRAGUA_FOO"] = prev;
       }
     });
   });

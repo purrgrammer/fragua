@@ -306,6 +306,7 @@ cli
   .option("--host <addr>", 'Bind address (default 127.0.0.1, configurable via web.host; "::" exposes to the network)')
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.fragua/fragua.db); enables parallel fraguas")
+  .option("--dev", "Dev only: trust the Vite dev origin (localhost:5173) so `bun run dev:web` can proxy here")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -323,6 +324,7 @@ cli
       ...(pick("host") !== undefined ? { hostname: pick("host")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(options["dev"] === true ? { dev: true } : {}),
     });
     process.exit(code);
   });

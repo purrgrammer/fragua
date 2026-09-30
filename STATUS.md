@@ -18,11 +18,13 @@ see `docs/ARCHITECTURE.md` and `docs/SPEC.md`.
 **Agents**
 
 - 12+ inference providers via [`pi-ai`](https://github.com/badlogic/pi-mono): anthropic, openai, google, openrouter, vercel-ai-gateway, bedrock, vertex, groq, cerebras, xai, mistral, …
+- Deny-by-default bash env floor — a `tool`/`bash` subprocess inherits only the baseline (`PATH`/`HOME`/…/`LANG`, every `LC_*`) plus the operator's `bash.env-passthrough` / `--allow-env` names; provider credentials and any ambient `FRAGUA_*` var are dropped. Engine vars (`FRAGUA_OUTPUT`) are injected per-step via `opts.env`, so the ambient `FRAGUA_` prefix carries nothing to the shell
 - Run isolation via worktrees: per-run git worktree under the run's `cwd` (`<project>/.fragua/worktrees/<run_id>/`). At terminal the run's tree (committed + uncommitted) is captured into non-porcelain `refs/fragua/snapshots/<run_id>` + `refs/fragua/heads/<run_id>` before the worktree is disposed, and runs with recoverable agent work are flagged on `run_state.inbox_status`. Each run's `cwd` is captured on `run_state` so a single harness can drive runs from any project directory
 
 **Operator surface**
 
 - Web UI on `:6767` (default; configurable via `web.port` or `--port`) with live SSE feeds (per-run + global). The harness auto-builds the web bundle when sources are newer than `dist/` and prints a clickable OSC 8 hyperlink on the `ready` line
+- Same-origin gate on the unauthenticated control plane — cross-origin/foreign-Host requests are refused (DNS-rebinding defence). The Vite dev origin (`http://localhost:5173`) is trusted **only** under `fragua serve --dev` (env `FRAGUA_DEV_ORIGIN=1`); the compiled binary and `fragua harness` never trust it, so a rogue loopback:5173 page can't drive the control plane in production
 - Projects are emergent — a project is a distinct `run_state.project_id` (a stable UUIDv7 committed in `.fragua/config.yaml`, denormalized NOT NULL onto `run_state` next to the `project_name` label). `/projects` lists every project fragua has ever run from with run rollups; `/projects/:projectId` adds a `.gitignore`-honored file tree + blob viewer; `/analytics` carries a per-project filter
 - Run-scoped file tree + git-aware diff on every run (`/runs/:id/tree`, `/runs/:id/blob`, `/runs/:id/changes`) — survives worktree disposal by reading the run's `refs/fragua/snapshots/<id>` snapshot ref
 - Workflow listing aggregates `~/.fragua/workflows/` (global) with every project cwd's `.fragua/workflows/`; cross-source name collisions disambiguate by `cwd`
