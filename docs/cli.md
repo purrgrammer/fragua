@@ -95,9 +95,9 @@ fragua runs goal-gate   <id> <n>
 fragua runs max-loops   <id> <n>
 
 # inspect (forensics — no raw SQL)
-fragua runs events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]
+fragua runs events    <id> [--type <glob>] [--limit N | --all] [--since <seq>] [--json]
 fragua runs steps     <id> [--json]               # per-LLM-call cost / tokens / duration
-fragua runs messages  <id> [--node <id>] [--json] # the LLM-visible transcript
+fragua runs messages  <id> [--node <id>] [--all] [--json] # the LLM-visible transcript
 fragua runs artifacts <id>                        # list a run's artifacts
 fragua runs artifact  <id> <nodeId> --key <k> [--iteration N]   # one artifact's bytes to stdout
 ```
@@ -123,9 +123,19 @@ awaiting input — and `75` when `--timeout <dur>` expires first.
 `fragua runs tail` backfills the last 200 events before going live (the bound
 is a SQL-level read — long runs never hydrate the full log); pass `--full` to
 replay the entire log. `fragua runs events` prints the last 50 by default;
-`--limit N` keeps the last N matching events, and `--since <seq>` keeps only
-events with seq strictly greater than `<seq>` (unbounded unless `--limit` is
-also given — a forward cursor for scripts).
+`--limit N` keeps the last N matching events, `--all` emits the entire matching
+log (overriding the default window), and `--since <seq>` keeps only events with
+seq strictly greater than `<seq>` (unbounded unless `--limit` is also given — a
+forward cursor for scripts). `--type <glob>` filters by event-type prefix: the
+bare `fact.` prefix and the `fact.*` glob (a single trailing `*` is stripped)
+are equivalent, and `fact.*` is the common forensic narrowing to state-changing
+facts. The default human render closes with a `showing last N of M events —
+--all for everything` footer whenever the window elided events; `--json` emits
+the raw `StoredEvent[]` (and `runs messages --json` the full transcript),
+drained to completion so a multi-MB log or a large assistant message survives a
+pipe into `jq`. The transcript read is already unbounded, so `runs messages
+--all` is accepted for symmetry but is a no-op — `runs messages` always returns
+every message.
 
 `fragua runs ls --summary` swaps the per-run list for a fleet rollup: a
 status-count line (queued / running / paused\* / completed / halted / …), a

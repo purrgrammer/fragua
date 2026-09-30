@@ -716,9 +716,9 @@ function runsHelp(): void {
                                                          60 (blocked) / 75 (timeout)
 
   Inspect (forensics — dissect a run, no raw SQL):
-    events    <id> [--type <prefix>] [--limit N] [--since <seq>] [--json]   the event log (default last 50, oldest-first)
+    events    <id> [--type <glob>] [--limit N | --all] [--since <seq>] [--json]   the event log (default last 50, oldest-first; --type fact.* narrows)
     steps     <id> [--json]                                 per-LLM-call cost / tokens / duration
-    messages  <id> [--node <id>] [--json]                   the LLM-visible transcript (one preview line each)
+    messages  <id> [--node <id>] [--all] [--json]           the LLM-visible transcript (one preview line each; already full)
     artifacts <id>                                          list a run's artifacts (metadata)
     artifact  <id> <nodeId> --key <k> [--iteration N]       write one artifact's bytes to stdout
 
@@ -753,8 +753,9 @@ cli
   .option("--settle <mode>", "wait: terminal | blocked (default blocked: paused counts as settled)")
   .option("--limit <n>", "ls/inbox/events: cap results")
   .option("--since <seq>", "events: only events with seq greater than <seq>")
+  .option("--all", "events/messages: emit the entire log, overriding the default window")
   .option("--full", "tail: replay the entire event log instead of the last 200")
-  .option("--type <prefix>", "events: filter by event-type prefix (e.g. fact.)")
+  .option("--type <glob>", "events: filter by event-type prefix (e.g. fact. or the fact.* glob)")
   .option("--json", "events/steps/messages/ls/status/inbox/explain: emit full JSON instead of one-line render")
   .option("--key <k>", "artifact: the artifact key to fetch")
   .option("--iteration <n>", "artifact: node iteration (default 0)")
@@ -982,6 +983,7 @@ cli
               ...(pickStr(options, "type") !== undefined ? { type: pickStr(options, "type")! } : {}),
               ...limitOpt,
               ...sinceOpt,
+              ...(options["all"] === true ? { all: true } : {}),
               ...(options["json"] === true ? { json: true } : {}),
               ...discovery(options),
             }),
@@ -1001,6 +1003,7 @@ cli
             await messagesCommand({
               runId: needId(),
               ...(pickStr(options, "node") !== undefined ? { node: pickStr(options, "node")! } : {}),
+              ...(options["all"] === true ? { all: true } : {}),
               ...(options["json"] === true ? { json: true } : {}),
               ...discovery(options),
             }),

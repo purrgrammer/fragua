@@ -85,6 +85,7 @@ import {
   insertEventWeb,
   type OrphanSideEffectRow,
   type PendingIntentRow,
+  selectEventCount,
   selectEvents,
   selectEventsByType,
   selectEventsTail,
@@ -240,6 +241,7 @@ import {
   type DaemonLockResult,
   type DaemonLockRow,
   type EnqueueRunParams,
+  type EventCountOpts,
   type EventWriter,
   type ExportBundleOptions,
   type ExportBundleResult,
@@ -926,6 +928,10 @@ export class SqliteStore implements IEventStore {
 
   getEventsTail(runId: string, opts: GetEventsTailOpts = {}): StoredEvent[] {
     return selectEventsTail(this.db, runId, opts).map(rowToStoredEvent);
+  }
+
+  getEventCount(runId: string, opts: EventCountOpts = {}): number {
+    return selectEventCount(this.db, runId, opts);
   }
 
   getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }> {

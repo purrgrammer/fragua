@@ -696,9 +696,20 @@ describe("fragua forensics verbs", () => {
 
   test("events: --json emits an array of stored events", async () => {
     seedCommitted(r.store, "ev3");
-    const code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
-    expect(code).toBe(0);
-    const parsed = JSON.parse(out()) as Array<{ type: string; payload?: unknown }>;
+    const chunks: string[] = [];
+    const spy = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array, cb?: unknown) => {
+      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      if (typeof cb === "function") (cb as () => void)();
+      return true;
+    }) as typeof process.stdout.write);
+    let code: number;
+    try {
+      code = await eventsCommand({ runId: "ev3", json: true, dbPath: r.dbPath });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code!).toBe(0);
+    const parsed = JSON.parse(chunks.join("")) as Array<{ type: string; payload?: unknown }>;
     expect(
       parsed.some((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "completed"),
     ).toBe(true);

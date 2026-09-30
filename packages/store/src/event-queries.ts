@@ -197,6 +197,32 @@ export function selectEventsTail(
     .all(runId, opts.sinceSeq ?? 0, pattern, opts.limit ?? NO_LIMIT);
 }
 
+// Same WHERE as SELECT_EVENTS_TAIL_SQL (run scope, since floor, optional LIKE
+// prefix) so the CLI footer's total matches exactly what the tail draws from.
+const SELECT_EVENT_COUNT_SQL = `
+  SELECT COUNT(*) AS n
+    FROM events
+   WHERE run_id = ?1
+     AND seq > ?2
+     AND (?3 IS NULL OR type LIKE ?3 ESCAPE '\\')
+`;
+
+/** Total events for `runId` strictly after `sinceSeq`, optionally restricted to
+ *  types starting with `typePrefix`. The unbounded companion to
+ *  {@link selectEventsTail}: the CLI footer reports "last N of M" without
+ *  hydrating the log. */
+export function selectEventCount(
+  db: Database,
+  runId: string,
+  opts: { sinceSeq?: number; typePrefix?: string } = {},
+): number {
+  const pattern = opts.typePrefix != null && opts.typePrefix.length > 0 ? escapeLikePrefix(opts.typePrefix) : null;
+  const row = db
+    .query<{ n: number }, [string, number, string | null]>(SELECT_EVENT_COUNT_SQL)
+    .get(runId, opts.sinceSeq ?? 0, pattern);
+  return row?.n ?? 0;
+}
+
 const SELECT_EVENTS_BY_TYPE_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events

@@ -114,6 +114,10 @@ export interface ReadPlane {
    *  oldest-first — or `null` when the run is absent. SQL-level bound;
    *  backs the CLI's `runs events` / `runs tail` reads. */
   eventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[] | null;
+  /** Total events matching the same `sinceSeq` / `typePrefix` filter as
+   *  {@link eventsTail}, unbounded — the "M" in the CLI's "last N of M"
+   *  footer — or `null` when the run is absent. */
+  eventCount(runId: string, opts?: { sinceSeq?: number; typePrefix?: string }): number | null;
   /** A run's artifact listing (metadata only), or `null` when the run is
    *  absent. The bytes come from {@link ReadPlane.artifactBody}. */
   artifacts(runId: string): ArtifactListRow[] | null;
@@ -273,6 +277,10 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     eventsTail(runId, opts = {}) {
       if (store.getState(runId) == null) return null;
       return store.getEventsTail(runId, opts);
+    },
+    eventCount(runId, opts = {}) {
+      if (store.getState(runId) == null) return null;
+      return store.getEventCount(runId, opts);
     },
     artifacts(runId) {
       if (store.getState(runId) == null) return null;

@@ -1124,33 +1124,59 @@ export interface EventsOptions extends DiscoveryOpts {
   type?: string;
   limit?: number;
   since?: number;
+  all?: boolean;
   json?: boolean;
 }
 
-/** Dump a run's event log. `--type <prefix>` filters by type prefix,
- * `--limit N` keeps the last N (default 50), `--since <seq>` keeps events
- * with seq strictly greater (unbounded unless `--limit` is also given),
- * printed oldest-first. The bound is a SQL-level read — long runs never
- * hydrate the full log. `--json` emits the raw `StoredEvent[]` with full
- * payloads (the operate skill's forensics reference mines these); the
- * default render reuses the live-follow `[seq] type payload` line. */
+/** Normalise a `--type` argument into a LIKE prefix: a single trailing `*`
+ * (the `fact.*` glob form) is stripped so it behaves like the bare `fact.`
+ * prefix; anything else is already a prefix. Returns undefined for an empty
+ * filter. */
+function typePrefixOf(type: string | undefined): string | undefined {
+  if (type == null || type.length === 0) return undefined;
+  const prefix = type.endsWith("*") ? type.slice(0, -1) : type;
+  return prefix.length > 0 ? prefix : undefined;
+}
+
+/** Dump a run's event log. `--type <glob>` filters by type prefix (a trailing
+ * `*`, as in `fact.*`, is accepted and behaves like the bare `fact.` prefix),
+ * `--limit N` keeps the last N (default 50), `--all` emits the entire matching
+ * log, `--since <seq>` keeps events with seq strictly greater (unbounded unless
+ * `--limit` is also given), printed oldest-first. The bound is a SQL-level
+ * read — long runs never hydrate the full log. `--json` emits the raw
+ * `StoredEvent[]` with full payloads (the operate skill's forensics reference
+ * mines these), drained to completion so a multi-MB log survives a pipe; the
+ * default render reuses the live-follow `[seq] type payload` line and closes
+ * with a "showing last N of M" footer when the window elided events. */
 export function eventsCommand(opts: EventsOptions): Promise<number> {
-  return withStoreClient(opts, ({ readPlane }) => {
-    const limit = opts.limit != null && opts.limit > 0 ? opts.limit : opts.since != null ? undefined : 50;
-    const tail = readPlane.eventsTail(opts.runId, {
+  return withStoreClient(opts, async ({ readPlane }) => {
+    const limit =
+      opts.all === true
+        ? undefined
+        : opts.limit != null && opts.limit > 0
+          ? opts.limit
+          : opts.since != null
+            ? undefined
+            : 50;
+    const typePrefix = typePrefixOf(opts.type);
+    const filter = {
       ...(opts.since != null ? { sinceSeq: opts.since } : {}),
-      ...(opts.type != null && opts.type.length > 0 ? { typePrefix: opts.type } : {}),
-      ...(limit !== undefined ? { limit } : {}),
-    });
+      ...(typePrefix !== undefined ? { typePrefix } : {}),
+    };
+    const tail = readPlane.eventsTail(opts.runId, { ...filter, ...(limit !== undefined ? { limit } : {}) });
     if (tail == null) {
       console.error(chalk.red("events: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
     if (opts.json === true) {
-      console.log(JSON.stringify(tail, null, 2));
+      await writeStdout(`${JSON.stringify(tail, null, 2)}\n`);
       return 0;
     }
     for (const ev of tail) renderEvent(ev);
+    const total = readPlane.eventCount(opts.runId, filter) ?? tail.length;
+    if (total > tail.length) {
+      console.error(chalk.dim(`(showing last ${tail.length} of ${total} events — --all for everything)`));
+    }
     return 0;
   });
 }
@@ -1200,20 +1226,25 @@ function renderStepLine(s: StepSnapshot): string {
 export interface MessagesOptions extends DiscoveryOpts {
   runId: string;
   node?: string;
+  /** Accepted for symmetry with `runs events`; the transcript read is already
+   * unbounded, so there is no window to lift — this is a no-op. */
+  all?: boolean;
   json?: boolean;
 }
 
 /** LLM-visible transcript. `--node <id>` scopes to one node. `--json` emits the
- * full messages (transcript mining); default is one preview line per message. */
+ * full messages (transcript mining), drained to completion so a large
+ * assistant message survives a pipe; default is one preview line per message.
+ * The read is already unbounded — the whole transcript, every call. */
 export function messagesCommand(opts: MessagesOptions): Promise<number> {
-  return withStoreClient(opts, ({ readPlane }) => {
+  return withStoreClient(opts, async ({ readPlane }) => {
     const msgs = readPlane.messages(opts.runId, opts.node != null ? { nodeId: opts.node } : {});
     if (msgs == null) {
       console.error(chalk.red("messages: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
     if (opts.json === true) {
-      console.log(JSON.stringify(msgs, null, 2));
+      await writeStdout(`${JSON.stringify(msgs, null, 2)}\n`);
       return 0;
     }
     for (const m of msgs) console.log(renderMessageLine(m));

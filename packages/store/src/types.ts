@@ -639,6 +639,11 @@ export interface GetEventsTailOpts {
   limit?: number;
 }
 
+/** {@link GetEventsTailOpts} minus the `limit` — a count is inherently
+ * unbounded. Same `sinceSeq` / `typePrefix` filters, so the total matches
+ * the tail it accompanies. */
+export type EventCountOpts = Omit<GetEventsTailOpts, "limit">;
+
 export interface GetGlobalEventsForwardOpts {
   /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
    * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
@@ -861,6 +866,12 @@ export interface IEventReader {
    * `runs tail` reads.
    */
   getEventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[];
+  /**
+   * Total events for `runId` matching the same `sinceSeq` / `typePrefix`
+   * filter as {@link getEventsTail}, unbounded — the "M" in the CLI's
+   * "last N of M" footer, without hydrating the log.
+   */
+  getEventCount(runId: string, opts?: EventCountOpts): number;
   /**
    * The TYPE of the most recent node-lifecycle fact per node
    * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /
