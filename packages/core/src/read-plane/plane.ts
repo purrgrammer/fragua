@@ -20,12 +20,16 @@ import type {
   GetGlobalEventsAtFloorOpts,
   GetGlobalEventsForwardOpts,
   GetMessagesOpts,
+  GlobalMetricsTotalsRow,
+  GlobalModelBreakdownRow,
+  IAnalyticsReader,
   IEventReader,
   ListRunSummaryRowsOpts,
   NarrowMessage,
+  RunStatus,
   StoredEvent,
 } from "@fragua/store";
-import { FEED_EVENT_KINDS, isTerminal as isTerminalStatus } from "@fragua/types";
+import { FEED_EVENT_KINDS, type InboxStatus, isTerminal as isTerminalStatus } from "@fragua/types";
 import { deserializeGraph } from "../ir.ts";
 import type { RunOutputDecl } from "../types/graph.ts";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
@@ -38,7 +42,32 @@ export type { ArtifactListRow, ArtifactScope, FleetSummary, FleetSummaryOpts, Fl
 
 export interface ReadPlaneDeps {
   store: IEventReader;
+  /** Cross-run analytics reader. Supplied by clients that front the
+   *  aggregate-metrics routes (`GET /metrics/global`); omitted by run-focused
+   *  clients (CLI store-client, snapshot reader). The `globalMetrics` /
+   *  `globalModelBreakdown` methods require it. */
+  analytics?: IAnalyticsReader;
 }
+
+/** The declared human-pause gate of a run: the paused node and its route
+ *  enum. `routes` is `[]` for legacy pauses that carried none. */
+export interface PauseRoutes {
+  nodeId?: string;
+  routes: string[];
+}
+
+/** The lean run-state slice the control routes need (accept/discard gate,
+ *  SSE close-check, HITL status precheck) without projecting a full
+ *  `RunDetail`. */
+export interface RunControlState {
+  status: RunStatus;
+  inboxStatus: InboxStatus | null;
+  cwd: string | null;
+  baseGitSha: string | null;
+}
+
+/** One row of the identity projection over `run_state.project_id`. */
+export type ProjectRow = ReturnType<IEventReader["listProjects"]>[number];
 
 /** Forward-cursor fields for the global feed, MINUS the `kindIn`
  *  allow-list — the read plane bakes `FEED_EVENT_KINDS` in, so the
@@ -109,10 +138,35 @@ export interface ReadPlane {
   /** Global feed boundary rescan at `floorTs`. `FEED_EVENT_KINDS` is
    *  baked in. Backs the `/events/stream` at-floor query. */
   globalFeedAtFloor(cursor: GlobalFeedAtFloorCursor): StoredEvent[];
+  /** The declared route enum of the run's latest human-pause gate, or
+   *  `null` when the run never paused at a human node. Bounded read (one
+   *  row) — folds the v4 `fact.run_paused{reason:"human"}` and the LEGACY
+   *  `fact.run_paused_human`. Backs the `POST /runs/:id/human` route-enum
+   *  precheck. */
+  pauseRoutes(runId: string): PauseRoutes | null;
+  /** The lean control-route state slice, or `null` when the run is absent.
+   *  Backs the accept/discard gate, the SSE close-check, and the HITL
+   *  status precheck. */
+  controlState(runId: string): RunControlState | null;
+  /** Identity projection: one row per distinct `run_state.project_id`,
+   *  most-recent activity first. Backs `GET /projects`. */
+  projects(): ProjectRow[];
+  /** Cross-status aggregate totals over the `updated_at >= sinceMs` window.
+   *  Requires `deps.analytics`. Backs `GET /metrics/global`. */
+  globalMetrics(opts: { sinceMs: number }): GlobalMetricsTotalsRow;
+  /** Per-model breakdown over the same window. Requires `deps.analytics`.
+   *  Backs `GET /metrics/global`. */
+  globalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];
 }
 
 export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
-  const { store } = deps;
+  const { store, analytics } = deps;
+  const requireAnalytics = (): IAnalyticsReader => {
+    if (analytics == null) {
+      throw new Error("read plane: analytics reader not configured (globalMetrics/globalModelBreakdown)");
+    }
+    return analytics;
+  };
   // Per-sha cache of a workflow's run-level `outputs:` declarations, so repeated
   // polls of a completed run don't re-`deserializeGraph(wf.ir)` on every
   // `runDetail`. The value disambiguates three states with a single `.get()`:
@@ -276,6 +330,32 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     },
     globalFeedAtFloor(cursor) {
       return store.getGlobalEventsAtFloor({ ...cursor, kindIn: FEED_EVENT_KINDS });
+    },
+    pauseRoutes(runId) {
+      const ev = store.getLatestHumanPause(runId);
+      if (ev == null) return null;
+      const p = ev.payload as { nodeId?: unknown; routes?: unknown };
+      const routes = Array.isArray(p.routes) ? p.routes.filter((r): r is string => typeof r === "string") : [];
+      return typeof p.nodeId === "string" ? { nodeId: p.nodeId, routes } : { routes };
+    },
+    controlState(runId) {
+      const state = store.getState(runId);
+      if (state == null) return null;
+      return {
+        status: state.status,
+        inboxStatus: state.inboxStatus,
+        cwd: state.cwd,
+        baseGitSha: state.baseGitSha,
+      };
+    },
+    projects() {
+      return store.listProjects();
+    },
+    globalMetrics(opts) {
+      return requireAnalytics().getGlobalMetricsTotals(opts);
+    },
+    globalModelBreakdown(opts) {
+      return requireAnalytics().getGlobalModelBreakdown(opts);
     },
   };
 }

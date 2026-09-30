@@ -94,6 +94,7 @@ import {
   selectGlobalEventsForward,
   selectGlobalEventsLatest,
   selectLatestEvents,
+  selectLatestHumanPause,
   selectLatestLifecycleByNode,
   selectNextPendingIntent,
   selectOrphanSideEffects,
@@ -941,6 +942,11 @@ export class SqliteStore implements IEventStore {
 
   getLatestEvents(runId: string, limit: number): StoredEvent[] {
     return selectLatestEvents(this.db, runId, limit).map(rowToStoredEvent);
+  }
+
+  getLatestHumanPause(runId: string): StoredEvent | null {
+    const row = selectLatestHumanPause(this.db, runId);
+    return row == null ? null : rowToStoredEvent(row);
   }
 
   getEventsTail(runId: string, opts: GetEventsTailOpts = {}): StoredEvent[] {

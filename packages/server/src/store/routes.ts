@@ -22,6 +22,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { RunActionExec, RunSnapshotReader, WorkflowReader } from "../ports.ts";
+import { numericQueryParam } from "./query-params.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
@@ -192,7 +193,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   // The read plane: the one read/projection surface. Event-streaming
   // reads (per-run tail, global feed) route through it so no reader
   // bypasses the shared projection — the feed allow-list lives there.
-  const readPlane = makeReadPlane({ store: deps.store });
+  const readPlane = makeReadPlane({ store: deps.store, analytics: deps.store });
   const commitBuilt = (c: Context, runId: string, built: BuildResult): Response =>
     built.ok ? appendIntentOr413(c, runId, built.intent) : c.json({ error: built.error }, 400);
   // Mint a workflow's identity through the chokepoint, surfacing the parse /
@@ -509,25 +510,12 @@ export function createRoutes(deps: ServerDeps): Hono {
     // same enum (defense-in-depth — a hand-crafted intent could bypass this);
     // the operator-facing path fails loudly here so the UI surfaces it instead
     // of letting the daemon halt the run on resume.
-    // read-discipline-allow: stateful route-enum precheck reads raw run_state; no read-plane primitive yet.
-    const state = deps.store.getState(runId);
+    const state = readPlane.controlState(runId);
     if (state == null) return c.json({ error: "run not found", code: "not_found" }, 404);
     if (state.status !== "paused_human") {
       return c.json({ error: `run not paused at a human node (status=${state.status})`, code: "wrong_status" }, 409);
     }
-    // read-discipline-allow: scans the raw event tail for the latest paused-node route enum; no read-plane primitive yet.
-    const events = deps.store.getEvents(runId);
-    let declaredRoutes: string[] = [];
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i]!;
-      if (ev.type === "fact.run_paused" && (ev.payload as { reason?: unknown }).reason === "human") {
-        const p = ev.payload as { routes?: unknown };
-        if (Array.isArray(p.routes)) {
-          declaredRoutes = p.routes.filter((r): r is string => typeof r === "string");
-        }
-        break;
-      }
-    }
+    const declaredRoutes = readPlane.pauseRoutes(runId)?.routes ?? [];
     if (declaredRoutes.length > 0 && !declaredRoutes.includes(route)) {
       return c.json(
         {
@@ -600,8 +588,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   // in-inbox / has-worktree) live inside `applyAccept`/`applyDiscard` so server
   // and CLI share one set of refusals (intent-plane.md §3.7).
   function readGate(c: Context, runId: string): { ok: true; gate: RunActionGate } | { ok: false; res: Response } {
-    // read-discipline-allow: assembles the accept/discard gate from raw run_state columns; no read-plane primitive yet.
-    const state = deps.store.getState(runId);
+    const state = readPlane.controlState(runId);
     if (state == null) return { ok: false, res: c.json({ error: "run not found", code: "not_found" }, 404) };
     return {
       ok: true,
@@ -654,8 +641,8 @@ export function createRoutes(deps: ServerDeps): Hono {
   // pagination that the detail adapter doesn't expose.
 
   app.get("/runs/:id/events", (c) => {
-    const sinceSeq = Number(c.req.query("since") ?? 0);
-    const limit = Math.min(Number(c.req.query("limit") ?? 1000), 5000);
+    const sinceSeq = numericQueryParam(c.req.query("since"), { fallback: 0 });
+    const limit = numericQueryParam(c.req.query("limit"), { fallback: 1000, max: 5000 });
     const events = readPlane.eventsSince(c.req.param("id"), sinceSeq, limit);
     return c.json(events);
   });
@@ -679,8 +666,7 @@ export function createRoutes(deps: ServerDeps): Hono {
           // Settled, not terminal: a quarantined run emits no further events
           // until an operator unquarantines it, so close the socket rather
           // than hold it open indefinitely (resume reopens it).
-          // read-discipline-allow: SSE close-check reads raw run_state status; no read-plane primitive yet.
-          const state = deps.store.getState(runId);
+          const state = readPlane.controlState(runId);
           return state != null && isSettled(state.status);
         },
         batchSize,
@@ -742,13 +728,11 @@ export function createRoutes(deps: ServerDeps): Hono {
   // ─── Aggregate metrics (dashboard) ──────────────────────────
 
   app.get("/metrics/global", (c) => {
-    const windowHours = Number(c.req.query("windowHours") ?? 24 * 30);
+    const windowHours = numericQueryParam(c.req.query("windowHours"), { fallback: 24 * 30 });
     const cutoffMs = (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
 
-    // read-discipline-allow: cross-run analytics aggregation; not fronted by the run-focused read plane.
-    const totals = deps.store.getGlobalMetricsTotals({ sinceMs: cutoffMs });
-    // read-discipline-allow: cross-run analytics aggregation; not fronted by the run-focused read plane.
-    const breakdownByModel = deps.store.getGlobalModelBreakdown({ sinceMs: cutoffMs });
+    const totals = readPlane.globalMetrics({ sinceMs: cutoffMs });
+    const breakdownByModel = readPlane.globalModelBreakdown({ sinceMs: cutoffMs });
 
     return c.json({ ...totals, breakdownByModel });
   });
@@ -762,8 +746,7 @@ export function createRoutes(deps: ServerDeps): Hono {
   // repo into one project. `cwd` is retained as the LOCATION hint for the
   // file/tree views; it is no longer the wire identity.
   app.get("/projects", (c) => {
-    // read-discipline-allow: identity projection over run_state; not fronted by the run-focused read plane.
-    const rows = deps.store.listProjects();
+    const rows = readPlane.projects();
     return c.json(
       rows.map((r) => ({
         projectId: r.projectId,

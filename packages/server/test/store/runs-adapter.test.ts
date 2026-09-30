@@ -736,21 +736,15 @@ describe("runStateToDetail \u2014 lastEventSeq", () => {
 });
 
 describe("runStateToDetail \u2014 worktreePath", () => {
-  test("populates worktreePath when worktree directory exists", async () => {
+  test("never sets worktreePath (the probe moved to the HTTP boundary; the projection is pure)", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fragua-runs-adapter-wt-"));
     try {
       const runId = "r-wt-1";
-      const wt = join(cwd, ".fragua", "worktrees", runId);
-      // First call: dir absent → worktreePath should stay undefined.
-      const stateNoDir = makeState({ runId, cwd });
-      const detailNoDir = runStateToDetail(stateNoDir, [], undefined, undefined);
-      expect(detailNoDir.worktreePath).toBeUndefined();
-
-      // Now create the canonical worktree dir and re-derive.
-      await mkdir(wt, { recursive: true });
-      const stateWithDir = makeState({ runId, cwd });
-      const detailWithDir = runStateToDetail(stateWithDir, [], undefined, undefined);
-      expect(detailWithDir.worktreePath).toBe(wt);
+      // Even with the canonical worktree dir present on disk, the pure
+      // projection does not probe the filesystem — `GET /runs/:id` resolves it.
+      await mkdir(join(cwd, ".fragua", "worktrees", runId), { recursive: true });
+      const detail = runStateToDetail(makeState({ runId, cwd }), [], undefined, undefined);
+      expect(detail.worktreePath).toBeUndefined();
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

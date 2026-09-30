@@ -16,8 +16,11 @@ export {
   type GlobalFeedAtFloorCursor,
   type GlobalFeedForwardCursor,
   makeReadPlane,
+  type PauseRoutes,
+  type ProjectRow,
   type ReadPlane,
   type ReadPlaneDeps,
+  type RunControlState,
 } from "./plane.ts";
 export {
   deriveNodeStates,
