@@ -51,6 +51,11 @@ const OCC_CEILING = 3;
 const OCC_WARN_AT = 2;
 const OCC_BACKOFF_CAP_MS = 16;
 
+/** Bound on retrying a terminal/parking fact append against fresh state when it
+ * loses its OCC race. Shared by the OCC controller's `occ_exhausted` escalation
+ * and the executor's mid-turn-crash recovery so both use the same ceiling. */
+export const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
+
 export interface OccController {
   /** Record an OCC conflict on an append. Backs off; warns once at
    * OCC_WARN_AT; at OCC_CEILING halts the run (`occ_exhausted`) and returns
@@ -86,7 +91,6 @@ export function makeOccController(deps: {
         // a bounded number of times so the run actually terminates instead
         // of returning `halted: true` while the halt fact never landed —
         // which left the run stranded `running`.
-        const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
         for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
           const fresh = store.getState(runId);
           // Already terminal (a concurrent writer halted/cancelled/completed

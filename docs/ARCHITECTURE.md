@@ -372,6 +372,8 @@ The executor loop (`runExecutor`) claims the next run (`claimNextRun(MAX_CONCURR
 
 `runOne` is the per-run turn loop. It re-reads `run_state` each turn and returns on any terminal/paused/quarantined status (it does not re-read `daemon_lock` — a TTL-reclaimed zombie is fenced only when its next fact commit fails OCC, then halts via `occ_exhausted`; §1.6). It then checks the contract-version gate — an out-of-`[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` pin pauses with `engine_incompatible` and returns (§1.11). Otherwise it folds unapplied intents (`cancel` wins — commits the cancel fact and returns), builds the node's abort signal as `AbortSignal.any` of the steer controller ∪ shutdown ∪ (when `maxMs` is set) a timeout, dispatches the handler (bounded by a `maxMs + LEAK_GRACE_MS` race when applicable, unbounded for llm), maps the result (or a caught error) to facts, and appends them under OCC — retrying the turn on `ConcurrencyError`. See `packages/daemon/src/executor.ts`.
 
+If a throw escapes the per-turn body entirely (outside the inner try that wraps only the handler — a fold / graph-load / commit failure), `runOne`'s outer safety-net catch terminates the run **in-process** rather than leaving it stranded `running` for the next restart to sweep. It captures the crash-terminal (`fact.run_terminated{errored}`) append's OCC result and, on a lost race (a sibling advanced the version between the catch's read and its write), re-reads fresh `run_state` and retries under a fresh OCC controller (`commitParkOrTerminal` semantics), bounded by `HALT_APPEND_MAX_ATTEMPTS`, escalating to `occ_exhausted` at the ceiling. `startupSweep` is now only a last-resort backstop for a process that dies mid-recovery, not the primary recovery path for a mid-turn crash.
+
 ### 6.1 Executor module decomposition
 
 `packages/daemon/src/executor.ts` is the orchestration entry point
@@ -432,8 +434,13 @@ each owning one concern and reaching only into the store API:
   HONESTLY — on a lost OCC race it re-reads (return terminal if the run already
   left `running`), else drives the controller (halt `occ_exhausted` at the
   ceiling, else park the facts for a re-commit next turn). No call site discards
-  a commit result, so a conflicted halt/pause can no longer strand the run
-  `running` (§1.6). Owns `DispatchOutcome`, re-exported from `executor.ts`.
+  a commit result — including `runOne`'s outer crash catch, which drives its
+  crash-terminal append through the same `commitParkOrTerminal` + fresh OCC
+  controller so a conflicted mid-turn crash recovers in-process rather than
+  stranding the run `running` (§1.6, §6). The bounded terminal-append retry
+  shares the exported `HALT_APPEND_MAX_ATTEMPTS` ceiling with the controller's
+  `occ_exhausted` escalation. Owns `DispatchOutcome`, re-exported from
+  `executor.ts`.
 - `snapshot-service.ts` — `captureBoundarySnapshot` (per-step / HITL Diff
   snapshots) and `disposeTerminalWorktree` (terminal snapshot then dispose,
   gated on the `fact.snapshot_recorded` append landing).
