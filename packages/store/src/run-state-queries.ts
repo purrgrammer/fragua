@@ -601,6 +601,71 @@ export function bumpRunSeq(db: Database, runId: string): number {
   return row.seq;
 }
 
+// ─────────────── Crash-recovery startup sweep ───────────────
+
+/** A run left in `running` at crash time, plus the node it was on. Imported
+ *  runs are excluded — their execution is the source store's concern. */
+export interface RunningRunRow {
+  run_id: string;
+  version: number;
+  current_node: string | null;
+}
+
+const SELECT_RUNNING_NON_IMPORTED_SQL = `
+  SELECT run_id, version, current_node
+    FROM run_state
+   WHERE status = 'running'
+     AND ${notImportedSql("run_state")}
+`;
+
+/** Every non-imported run stuck in `running` — the requeue candidates for
+ *  the startup sweep. */
+export function selectRunningNonImportedRuns(db: Database): RunningRunRow[] {
+  return db.query<RunningRunRow, []>(SELECT_RUNNING_NON_IMPORTED_SQL).all();
+}
+
+const UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL = `
+  UPDATE run_state SET
+      status = 'quarantined',
+      current_node = NULL,
+      node_started_at = NULL,
+      dispatch_started_at = NULL,
+      version = version + 1,
+      updated_at = ?
+    WHERE run_id = ?
+`;
+
+/** Quarantine an orphan-side-effect run during the startup sweep. Leaves
+ *  `last_applied_seq` untouched: the sweep folds no operator intents, so it
+ *  must not advance the watermark past a pre-crash intent. */
+export function updateRunStateQuarantinedBySweep(db: Database, runId: string, now: number): void {
+  db.query(UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL).run(now, runId);
+}
+
+const UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL = `
+  UPDATE run_state SET
+      status = 'queued',
+      node_started_at = NULL,
+      dispatch_started_at = NULL,
+      ready_at = ?,
+      version = version + 1,
+      updated_at = ?,
+      metrics = json_set(metrics, '$.activeMs',
+                         COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
+    WHERE run_id = ?
+`;
+
+/** Requeue a run the crash left `running`, crediting `activeMsDelta` (computed
+ *  by the shared reducer helper before the txn) so the SQL projection can't
+ *  drift from the fold. `current_node` is preserved so the executor resumes the
+ *  in-flight node rather than re-running from the start. */
+export function updateRunStateRequeuedAfterCrash(
+  db: Database,
+  args: { runId: string; readyAt: number; now: number; activeMsDelta: number },
+): void {
+  db.query(UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL).run(args.readyAt, args.now, args.activeMsDelta, args.runId);
+}
+
 const SET_RUN_STATE_NEXT_SEQ_SQL = `
   UPDATE run_state SET next_seq = ? WHERE run_id = ?
 `;

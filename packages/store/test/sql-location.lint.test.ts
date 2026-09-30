@@ -18,7 +18,6 @@ const SRC_DIR = join(__dirname, "..", "src");
 
 /** Non-`*-queries.ts` files permitted to hold SQL, each with a reason. */
 const ALLOWLIST = new Map<string, string>([
-  ["sweep.ts", "crash-recovery heal runs its own SAVEPOINT DML/DQL"],
   ["migrations.ts", "schema DDL + schema_version bookkeeping"],
   ["store.ts", "backup/scrub maintenance: sqlite_master introspection + table drops"],
 ]);
@@ -77,6 +76,20 @@ describe("SQL lives in *-queries.ts", () => {
   test("catches an inlined SELECT in a non-queries file", () => {
     expect(scanString("const rows = db.query(`SELECT * FROM run_state`).all();\n")).toEqual([1]);
     expect(scanString('db.query("INSERT INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
+  });
+
+  test("sweep.ts is not on the SQL allowlist", () => {
+    // The crash-recovery sweep routes every INSERT/UPDATE/SELECT through the
+    // *-queries.ts modules; reintroducing raw DML there must be caught, not
+    // exempted by a whole-file allowlist entry.
+    expect(ALLOWLIST.has("sweep.ts")).toBe(false);
+  });
+
+  test("flags a raw INSERT INTO events reintroduced into a non-queries file", () => {
+    const src =
+      "db.query(`INSERT INTO events (run_id, seq, type, writer, payload, ts)" +
+      " VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`).run(r, s, p, t);\n";
+    expect(scanString(src)).toEqual([1]);
   });
 
   test("does not flag SQL that appears only in a comment", () => {

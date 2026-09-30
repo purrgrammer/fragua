@@ -43,6 +43,14 @@ export interface OrphanSideEffectRow {
   nodeId: string;
 }
 
+/** An orphan side-effect intent located by the all-runs startup sweep:
+ *  the owning run plus the intent's seq (folded into the quarantine
+ *  payload's `orphanedIntents` list). */
+export interface AllOrphanSideEffectRow {
+  run_id: string;
+  seq: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Writes
 // ─────────────────────────────────────────────────────────────────────
@@ -347,23 +355,44 @@ export function selectFactSideEffectIntent(
   );
 }
 
-const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
-  SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotencyKey,
-         json_extract(i.payload, '$.toolName')       AS toolName,
-         json_extract(i.payload, '$.nodeId')         AS nodeId
+// Shared orphan-detection body: a `fact.side_effect_intent` whose
+// idempotencyKey has no matching `fact.side_effect_done`/`_failed`. Both
+// the single-run recovery read and the all-runs startup sweep interpolate
+// this so the LEFT JOIN and the done/failed enum are encoded exactly once.
+const ORPHAN_SIDE_EFFECTS_FROM_WHERE = `
     FROM events i
     LEFT JOIN events d
            ON d.run_id = i.run_id
           AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
           AND json_extract(d.payload, '$.idempotencyKey') =
               json_extract(i.payload, '$.idempotencyKey')
-   WHERE i.run_id = ?
-     AND i.type   = 'fact.side_effect_intent'
+   WHERE i.type   = 'fact.side_effect_intent'
      AND d.seq IS NULL
+`;
+
+const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
+  SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotencyKey,
+         json_extract(i.payload, '$.toolName')       AS toolName,
+         json_extract(i.payload, '$.nodeId')         AS nodeId
+  ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
+     AND i.run_id = ?
 `;
 
 export function selectOrphanSideEffects(db: Database, runId: string): OrphanSideEffectRow[] {
   return db.query<OrphanSideEffectRow, [string]>(SELECT_ORPHAN_SIDE_EFFECTS_SQL).all(runId);
+}
+
+const SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL = `
+  SELECT i.run_id AS run_id, i.seq AS seq
+  ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
+   ORDER BY i.run_id, i.seq
+`;
+
+/** Every orphan side-effect intent across ALL runs, oldest-first per run.
+ *  The startup sweep quarantines each owning run; the single-run variant
+ *  (`selectOrphanSideEffects`) backs the executor's per-run recovery. */
+export function selectAllOrphanSideEffects(db: Database): AllOrphanSideEffectRow[] {
+  return db.query<AllOrphanSideEffectRow, []>(SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL).all();
 }
 
 // ─────────────────────────────────────────────────────────────────────
