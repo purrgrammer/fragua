@@ -48,7 +48,7 @@ import {
 } from "./executor-helpers.ts";
 import { runFanout } from "./fanout.ts";
 import { invokeHandler } from "./invoke-handler.ts";
-import { commitParkOrTerminal, type DispatchOutcome, tryAppendFact } from "./occ-append.ts";
+import { commitParkOrTerminal, commitWithOcc, type DispatchOutcome, occAppendOnce } from "./occ-append.ts";
 import { planLeakHalt, planPreDispatch } from "./predispatch-planner.ts";
 import { cancelToFacts } from "./result-to-facts.ts";
 import { countDispatch, type RunTurnState, recordAbort, resetAborts } from "./run-turn-state.ts";
@@ -186,41 +186,37 @@ async function commitCancel(
   runState: RunState,
   decision: Extract<core.IntentDecision, { kind: "cancel" }>,
 ): Promise<DispatchOutcome> {
-  const ok = await tryAppendFact(deps.opts.store, deps.runId, runState.version, cancelToFacts(decision.intentSeq));
-  if (!ok) {
-    const { halted } = await deps.occ.onConflict(
-      "fact.run_terminated",
-      runState.currentNode ?? "",
-      nodeRetryCount(runState.routing, runState.currentNode ?? ""),
-      runState.version,
-    );
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  return { kind: "terminal" };
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: runState.currentNode ?? "",
+      iteration: nodeRetryCount(runState.routing, runState.currentNode ?? ""),
+      expectedVersion: runState.version,
+      attemptedFactType: "fact.run_terminated",
+      commit: occAppendOnce(deps.opts.store, deps.runId, runState.version),
+      successOutcome: { kind: "terminal" },
+      statusOutcome: { kind: "terminal" },
+    },
+    cancelToFacts(decision.intentSeq),
+  );
 }
 
 async function commitPause(deps: RunDeps, runState: RunState, decision: ProceedDecision): Promise<DispatchOutcome> {
   const advanceAppliedTo = computeAdvanceAppliedTo(decision.appliedSeqs);
   const appendOpts = advanceAppliedTo !== undefined ? { advanceAppliedTo } : undefined;
-  const paused = await tryAppendFact(
-    deps.opts.store,
-    deps.runId,
-    runState.version,
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: runState.currentNode ?? "",
+      iteration: nodeRetryCount(runState.routing, runState.currentNode ?? ""),
+      expectedVersion: runState.version,
+      attemptedFactType: "fact.run_paused",
+      commit: occAppendOnce(deps.opts.store, deps.runId, runState.version, appendOpts),
+      successOutcome: { kind: "terminal" },
+      statusOutcome: { kind: "terminal" },
+    },
     [{ type: "fact.run_paused", payload: { reason: "operator", nodeId: runState.currentNode ?? "" } }],
-    appendOpts,
   );
-  if (!paused) {
-    const { halted } = await deps.occ.onConflict(
-      "fact.run_paused",
-      runState.currentNode ?? "",
-      nodeRetryCount(runState.routing, runState.currentNode ?? ""),
-      runState.version,
-    );
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  return { kind: "terminal" };
 }
 
 /** Provision the run's worktree before the first `fact.run_started`. Returns an
@@ -306,31 +302,39 @@ async function startRun(
   const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
   if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
   if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;
-  const ok = await tryAppendFact(opts.store, deps.runId, runState.version, startFacts, startAppendOpts);
-  if (!ok) {
-    const { halted } = await deps.occ.onConflict("fact.run_started", start, 0, runState.version);
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  deps.occ.onResolved(start, 0);
-  if (opts.autoTitler && runState.title == null) {
-    const graph = graphFor(deps, ts, workflowSha);
-    const goal = graph?.attrs.goal;
-    const inputLines = Object.entries(getInputs(effectiveRouting))
-      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
-      .join("\n");
-    const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
-    const workflowName = wf?.name;
-    const parts: string[] = [];
-    if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
-    if (inputLines !== "") parts.push(inputLines);
-    const seed = parts.join("\n");
-    const req: TitleRequest = { runId: deps.runId, workflowSha, input: seed };
-    if (goal !== undefined) req.goal = goal;
-    if (workflowName !== undefined) req.workflowName = workflowName;
-    opts.autoTitler.titleRun(req);
-  }
-  return { kind: "continue" };
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: start,
+      iteration: 0,
+      expectedVersion: runState.version,
+      attemptedFactType: "fact.run_started",
+      commit: occAppendOnce(opts.store, deps.runId, runState.version, startAppendOpts),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onSuccess: () => {
+        deps.occ.onResolved(start, 0);
+        if (opts.autoTitler && runState.title == null) {
+          const graph = graphFor(deps, ts, workflowSha);
+          const goal = graph?.attrs.goal;
+          const inputLines = Object.entries(getInputs(effectiveRouting))
+            .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+            .join("\n");
+          const wf = workflowSha != null ? opts.store.getWorkflow(workflowSha) : null;
+          const workflowName = wf?.name;
+          const parts: string[] = [];
+          if (workflowName !== undefined) parts.push(`workflow=${workflowName}`);
+          if (inputLines !== "") parts.push(inputLines);
+          const seed = parts.join("\n");
+          const req: TitleRequest = { runId: deps.runId, workflowSha, input: seed };
+          if (goal !== undefined) req.goal = goal;
+          if (workflowName !== undefined) req.workflowName = workflowName;
+          opts.autoTitler.titleRun(req);
+        }
+      },
+    },
+    startFacts,
+  );
 }
 
 /** Stamp `fact.dispatch_started` when the projection's `dispatchStartedAt` was
@@ -345,29 +349,32 @@ async function commitDispatchMarker(
   const opts = deps.opts;
   const dispatchIteration = nodeRetryCount(runState.routing, currentNode);
   const dispatchPass = readGoalGateRetries(runState.routing);
-  const ok = await tryAppendFact(opts.store, deps.runId, runState.version, [
+  return commitWithOcc(
     {
-      type: "fact.dispatch_started",
-      payload: {
-        nodeId: currentNode,
-        iteration: dispatchIteration,
-        ...passField(dispatchPass),
-        resumeOf: deriveResumeOf(opts.store, deps.runId),
+      occ: deps.occ,
+      nodeId: currentNode,
+      iteration: dispatchIteration,
+      expectedVersion: runState.version,
+      attemptedFactType: "fact.dispatch_started",
+      commit: occAppendOnce(opts.store, deps.runId, runState.version),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onSuccess: () => {
+        deps.occ.onResolved(currentNode, dispatchIteration);
       },
     },
-  ]);
-  if (!ok) {
-    const { halted } = await deps.occ.onConflict(
-      "fact.dispatch_started",
-      currentNode,
-      dispatchIteration,
-      runState.version,
-    );
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  deps.occ.onResolved(currentNode, dispatchIteration);
-  return { kind: "continue" };
+    [
+      {
+        type: "fact.dispatch_started",
+        payload: {
+          nodeId: currentNode,
+          iteration: dispatchIteration,
+          ...passField(dispatchPass),
+          resumeOf: deriveResumeOf(opts.store, deps.runId),
+        },
+      },
+    ],
+  );
 }
 
 /** Production ceiling on handler dispatches. Returns an outcome when the ceiling
@@ -632,13 +639,19 @@ async function commitAbort(
   if (abortPlan.advanceAppliedTo !== undefined) abortAppendOpts.advanceAppliedTo = abortPlan.advanceAppliedTo;
 
   if (abortPlan.outcome === "timeout_retry") {
-    const ok = await tryAppendFact(opts.store, deps.runId, recorder.version(), abortPlan.facts, abortAppendOpts);
-    if (!ok) {
-      const { halted } = await deps.occ.onConflict("fact.run_paused", currentNode, iteration, recorder.version());
-      if (halted) return { kind: "terminal" };
-      return { kind: "continue" };
-    }
-    return { kind: "terminal" };
+    return commitWithOcc(
+      {
+        occ: deps.occ,
+        nodeId: currentNode,
+        iteration,
+        expectedVersion: recorder.version(),
+        attemptedFactType: "fact.run_paused",
+        commit: occAppendOnce(opts.store, deps.runId, recorder.version(), abortAppendOpts),
+        successOutcome: { kind: "terminal" },
+        statusOutcome: { kind: "terminal" },
+      },
+      abortPlan.facts,
+    );
   }
   if (abortPlan.outcome === "halt" || abortPlan.outcome === "pause") {
     return commitParkOrTerminal(
@@ -654,33 +667,42 @@ async function commitAbort(
       abortPlan.facts,
     );
   }
-  const abortStepOk = await tryAppendFact(opts.store, deps.runId, recorder.version(), abortPlan.facts, abortAppendOpts);
-  if (!abortStepOk) {
-    const { halted } = await deps.occ.onConflict("fact.node_aborted", currentNode, iteration, recorder.version());
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  recordAbort(ts);
-  const loopPlan = planAbortLoop({
-    consecutiveAborts: ts.consecutiveAborts,
-    ceiling: deps.abortLoopCeiling,
-    nodeId: currentNode,
-  });
-  if (loopPlan.warn !== undefined) opts.store.appendObservabilityEvents(deps.runId, [loopPlan.warn]);
-  if (loopPlan.pause !== undefined) {
-    return commitParkOrTerminal(
-      {
-        store: opts.store,
-        runId: deps.runId,
-        occ: deps.occ,
-        nodeId: currentNode,
-        iteration,
-        expectedVersion: opts.store.getState(deps.runId)?.version ?? runState.version,
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: currentNode,
+      iteration,
+      expectedVersion: recorder.version(),
+      attemptedFactType: "fact.node_aborted",
+      commit: occAppendOnce(opts.store, deps.runId, recorder.version(), abortAppendOpts),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onSuccess: () => {
+        recordAbort(ts);
+        const loopPlan = planAbortLoop({
+          consecutiveAborts: ts.consecutiveAborts,
+          ceiling: deps.abortLoopCeiling,
+          nodeId: currentNode,
+        });
+        if (loopPlan.warn !== undefined) opts.store.appendObservabilityEvents(deps.runId, [loopPlan.warn]);
+        if (loopPlan.pause !== undefined) {
+          return commitParkOrTerminal(
+            {
+              store: opts.store,
+              runId: deps.runId,
+              occ: deps.occ,
+              nodeId: currentNode,
+              iteration,
+              expectedVersion: opts.store.getState(deps.runId)?.version ?? runState.version,
+            },
+            [loopPlan.pause],
+          );
+        }
+        return undefined;
       },
-      [loopPlan.pause],
-    );
-  }
-  return { kind: "continue" };
+    },
+    abortPlan.facts,
+  );
 }
 
 interface TransitionArgs {
@@ -725,16 +747,23 @@ async function commitTransition(
   const appendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
   if (plan.routingPatch !== undefined) appendOpts.routingPatch = plan.routingPatch;
   if (plan.advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = plan.advanceAppliedTo;
-  const ok = await tryAppendFact(opts.store, deps.runId, recorder.version(), facts, appendOpts);
-  if (!ok) {
-    const turnIteration = nodeRetryCount(runState.routing, currentNode);
-    const turnFactType = facts[0]?.type ?? "fact.unknown";
-    const { halted } = await deps.occ.onConflict(turnFactType, currentNode, turnIteration, recorder.version());
-    if (halted) return { kind: "terminal" };
-    return { kind: "continue" };
-  }
-  deps.occ.onResolved(currentNode, nodeRetryCount(runState.routing, currentNode));
-  invalidateOutputsCacheIf(ts, facts);
-  await captureBoundarySnapshot(opts, deps.runId, facts, currentNode);
-  return { kind: "continue" };
+  const turnIteration = nodeRetryCount(runState.routing, currentNode);
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: currentNode,
+      iteration: turnIteration,
+      expectedVersion: recorder.version(),
+      attemptedFactType: facts[0]?.type ?? "fact.unknown",
+      commit: occAppendOnce(opts.store, deps.runId, recorder.version(), appendOpts),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onSuccess: async () => {
+        deps.occ.onResolved(currentNode, turnIteration);
+        invalidateOutputsCacheIf(ts, facts);
+        await captureBoundarySnapshot(opts, deps.runId, facts, currentNode);
+      },
+    },
+    facts,
+  );
 }

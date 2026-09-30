@@ -13,7 +13,9 @@
 // and the per-branch abort-loop pause — are lifted here too (pure fact choices,
 // no store / clock / RNG), so the driver only applies them.
 
+import type { BudgetDecision } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
+import { nodeRetryCount, passField } from "./executor-helpers.ts";
 
 /** The frontier of one `type: parallel` node at the start of a fan-out turn,
  * as plain data. `active`/`redispatch` are already folded by the caller — the
@@ -94,4 +96,140 @@ export function planBranchAbortLoop(branchAborts: ReadonlyMap<string, number>, c
     }
   }
   return undefined;
+}
+
+/** Map a run-level budget evaluation into the parallel node's disposition fact:
+ * a `stop`-policy breach halts (`run_terminated{budget}`), a `pause`-policy
+ * breach parks (`run_paused{budget}`), no breach is undefined. The caller keeps
+ * the store reads + `evaluateBudget` call (I/O); this is only the fact choice,
+ * symmetric with the linear path's `planAbort` budget arms. */
+export function planBudgetDisposition(budget: BudgetDecision, nodeId: string): FactEvent | undefined {
+  if (budget.shouldHalt) {
+    const payload: { status: "errored"; reason: "budget"; detail?: string } = { status: "errored", reason: "budget" };
+    if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
+    return { type: "fact.run_terminated", payload };
+  }
+  if (budget.pauseBreach !== undefined) {
+    const b = budget.pauseBreach;
+    return {
+      type: "fact.run_paused",
+      payload: { reason: "budget", nodeId, scope: b.scope, metric: b.metric, limit: b.limit, actual: b.actual },
+    };
+  }
+  return undefined;
+}
+
+/** The single `fact.fanout_started` that seeds a fresh frontier over the
+ * declared branch entries. */
+export function planSeedFanout(args: {
+  nodeId: string;
+  iteration: number;
+  pass: number;
+  branches: readonly string[];
+}): FactEvent[] {
+  return [
+    {
+      type: "fact.fanout_started",
+      payload: {
+        nodeId: args.nodeId,
+        iteration: args.iteration,
+        ...passField(args.pass),
+        branches: [...args.branches],
+      },
+    },
+  ];
+}
+
+/** The join transition: a deferred operator pause parks the run
+ * (`run_paused{operator}`), otherwise the region closes with `fanout_joined`. */
+export function planJoin(args: {
+  deferredPause: boolean;
+  nodeId: string;
+  iteration: number;
+  pass: number;
+  nextNode: string;
+  branchesCompleted: number;
+}): FactEvent {
+  if (args.deferredPause) return { type: "fact.run_paused", payload: { reason: "operator", nodeId: args.nodeId } };
+  return {
+    type: "fact.fanout_joined",
+    payload: {
+      nodeId: args.nodeId,
+      iteration: args.iteration,
+      ...passField(args.pass),
+      nextNode: args.nextNode,
+      branchesCompleted: args.branchesCompleted,
+    },
+  };
+}
+
+/** The result of folding one settled branch's completion facts. */
+export interface BranchSettlement {
+  /** Node-scoped facts to commit for this branch (its `node_completed` plus a
+   *  bundled successor `dispatch_started` when the branch continues). */
+  readonly branchFacts: FactEvent[];
+  /** The (possibly updated) pool disposition slot after folding this branch's
+   *  run-level facts + the fail-closed branch-terminal halt. */
+  readonly disposition: FactEvent | undefined;
+  /** The successor to dispatch next, or undefined (branch drained into the join,
+   *  or resolved to a terminal). */
+  readonly successor: string | undefined;
+  /** Whether this branch resolved to a run terminal (fail-closed halt captured
+   *  into `disposition`). */
+  readonly terminal: boolean;
+}
+
+/** Fold one successful branch's completion facts into its node-scoped commit
+ * batch, the pool disposition, and the successor to dispatch. Pure: the caller
+ * keeps the store commit (I/O); this is the fact-selection the driver used to
+ * inline. Sorts run-level facts to the disposition (halt-over-pause via
+ * `noteDisposition`), keeps the rest as branch facts, fails closed on a
+ * successor that resolves to a run terminal or is missing from the graph, and
+ * bundles the successor's `dispatch_started`. */
+export function planBranchSettlement(args: {
+  nodeId: string;
+  facts: readonly FactEvent[];
+  nextNode: string | undefined;
+  join: string | undefined;
+  graphNodes: Readonly<Record<string, unknown>> | null;
+  pass: number;
+  liveRouting: Record<string, unknown>;
+  routingPatch: Record<string, unknown> | undefined;
+  disposition: FactEvent | undefined;
+}): BranchSettlement {
+  const branchFacts: FactEvent[] = [];
+  let disposition = args.disposition;
+  let terminal = false;
+  for (const f of args.facts) {
+    if (f.type === "fact.run_terminated" && f.payload.status === "completed") {
+      terminal = true;
+    } else if (f.type === "fact.run_terminated" || f.type === "fact.run_paused") {
+      disposition = noteDisposition(disposition, f);
+    } else if (f.type !== "fact.node_started") {
+      branchFacts.push(f);
+    }
+  }
+  let successor = args.nextNode !== undefined && args.nextNode !== args.join ? args.nextNode : undefined;
+  if (successor !== undefined && (args.graphNodes === null || args.graphNodes[successor] === undefined)) {
+    terminal = true;
+    successor = undefined;
+  }
+  if (terminal) {
+    successor = undefined;
+    disposition = noteDisposition(disposition, planBranchTerminal(args.nodeId));
+  }
+  if (successor !== undefined) {
+    const successorRouting =
+      args.routingPatch !== undefined ? { ...args.liveRouting, ...args.routingPatch } : args.liveRouting;
+    branchFacts.push({
+      type: "fact.dispatch_started",
+      payload: {
+        nodeId: successor,
+        iteration: nodeRetryCount(successorRouting, successor),
+        ...passField(args.pass),
+        resumeOf: "fresh",
+      },
+    });
+  }
+  return { branchFacts, disposition, successor, terminal };
 }

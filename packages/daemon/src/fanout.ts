@@ -46,11 +46,14 @@ import {
   type FanoutPlan,
   noteDisposition,
   planBranchAbortLoop,
-  planBranchTerminal,
+  planBranchSettlement,
+  planBudgetDisposition,
   planFanoutStep,
+  planJoin,
+  planSeedFanout,
 } from "./fanout-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
-import { type CommitResult, commitParkOrTerminal, type DispatchOutcome } from "./occ-append.ts";
+import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
@@ -351,26 +354,7 @@ function fanoutBudgetDisposition(ctx: FanoutCtx, gate: { fresh?: boolean } = {})
     );
     for (const t of budget.newlyWarned) ts.pendingWarnTags.add(t);
   }
-  if (budget.shouldHalt) {
-    const payload: { status: "errored"; reason: "budget"; detail?: string } = { status: "errored", reason: "budget" };
-    if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
-    return { type: "fact.run_terminated", payload };
-  }
-  if (budget.pauseBreach !== undefined) {
-    const b = budget.pauseBreach;
-    return {
-      type: "fact.run_paused",
-      payload: {
-        reason: "budget",
-        nodeId: parallelNode,
-        scope: b.scope,
-        metric: b.metric,
-        limit: b.limit,
-        actual: b.actual,
-      },
-    };
-  }
-  return undefined;
+  return planBudgetDisposition(budget, parallelNode);
 }
 
 /** Fold committed same-turn retry-count bumps into `liveRouting` so a successor
@@ -476,87 +460,62 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
   }
 
   if (outcome.kind === "abort") {
-    const abortRes = await commitFanoutFact(deps, ts, outcome.facts, takeFold(ctx));
-    if (!abortRes.ok) {
-      abortInflightPool(ctx);
-      if (abortRes.reason === "occ") {
-        const { halted } = await deps.occ.onConflict(
-          "fact.node_aborted",
-          outcome.nodeId,
-          nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
-          ctx.runState.version,
-        );
-        if (halted) return { kind: "terminal" };
-      }
-      await drainInflightPool(ctx);
-      return { kind: "continue" };
-    }
-    foldCommittedRetryCounts(ctx);
-    bumpBranchAbort(ts, outcome.nodeId);
-    captureDisposition(ctx);
-    return undefined;
+    return commitWithOcc(
+      {
+        occ: deps.occ,
+        nodeId: outcome.nodeId,
+        iteration: nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
+        expectedVersion: ctx.runState.version,
+        attemptedFactType: "fact.node_aborted",
+        commit: (f) => commitFanoutFact(deps, ts, f, takeFold(ctx)),
+        successOutcome: undefined,
+        statusOutcome: { kind: "continue" },
+        onFail: () => abortInflightPool(ctx),
+        onNonHalt: () => drainInflightPool(ctx),
+        onSuccess: () => {
+          foldCommittedRetryCounts(ctx);
+          bumpBranchAbort(ts, outcome.nodeId);
+          captureDisposition(ctx);
+        },
+      },
+      outcome.facts,
+    );
   }
 
-  const branchFacts: FactEvent[] = [];
-  let branchTerminal = false;
-  for (const f of outcome.facts) {
-    if (f.type === "fact.run_terminated" && f.payload.status === "completed") {
-      branchTerminal = true;
-    } else if (f.type === "fact.run_terminated" || f.type === "fact.run_paused") {
-      ctx.disposition = noteDisposition(ctx.disposition, f);
-    } else if (f.type !== "fact.node_started") {
-      branchFacts.push(f);
-    }
-  }
-  let successor = outcome.nextNode !== undefined && outcome.nextNode !== ctx.join ? outcome.nextNode : undefined;
-  if (successor !== undefined && ctx.graph?.nodes[successor] === undefined) {
-    branchTerminal = true;
-    successor = undefined;
-  }
-  if (branchTerminal) {
-    successor = undefined;
-    ctx.disposition = noteDisposition(ctx.disposition, planBranchTerminal(outcome.nodeId));
-  }
-  if (successor !== undefined) {
-    const successorRouting =
-      outcome.appendOpts.routingPatch !== undefined
-        ? { ...(ctx.liveRouting as Record<string, unknown>), ...outcome.appendOpts.routingPatch }
-        : (ctx.liveRouting as Record<string, unknown>);
-    branchFacts.push({
-      type: "fact.dispatch_started",
-      payload: {
-        nodeId: successor,
-        iteration: nodeRetryCount(successorRouting, successor),
-        ...passField(ctx.pass),
-        resumeOf: "fresh",
+  const settlement = planBranchSettlement({
+    nodeId: outcome.nodeId,
+    facts: outcome.facts,
+    nextNode: outcome.nextNode,
+    join: ctx.join,
+    graphNodes: ctx.graph?.nodes ?? null,
+    pass: ctx.pass,
+    liveRouting: ctx.liveRouting as Record<string, unknown>,
+    routingPatch: outcome.appendOpts.routingPatch,
+    disposition: ctx.disposition,
+  });
+  ctx.disposition = settlement.disposition;
+  const successor = settlement.successor;
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: outcome.nodeId,
+      iteration: nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
+      expectedVersion: ctx.runState.version,
+      attemptedFactType: "fact.node_completed",
+      commit: (f) => commitFanoutFact(deps, ts, f, mergeFanoutAppendOpts(takeFold(ctx), outcome.appendOpts)),
+      successOutcome: undefined,
+      statusOutcome: { kind: "continue" },
+      onFail: () => abortInflightPool(ctx),
+      onNonHalt: () => drainInflightPool(ctx),
+      onSuccess: () => {
+        foldCommittedRetryCounts(ctx);
+        clearBranchAbort(ts, outcome.nodeId);
+        captureDisposition(ctx);
+        if (successor !== undefined && ctx.disposition === undefined) poolDispatch(ctx, successor);
       },
-    });
-  }
-  const successRes = await commitFanoutFact(
-    deps,
-    ts,
-    branchFacts,
-    mergeFanoutAppendOpts(takeFold(ctx), outcome.appendOpts),
+    },
+    settlement.branchFacts,
   );
-  if (!successRes.ok) {
-    abortInflightPool(ctx);
-    if (successRes.reason === "occ") {
-      const { halted } = await deps.occ.onConflict(
-        "fact.node_completed",
-        outcome.nodeId,
-        nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
-        ctx.runState.version,
-      );
-      if (halted) return { kind: "terminal" };
-    }
-    await drainInflightPool(ctx);
-    return { kind: "continue" };
-  }
-  foldCommittedRetryCounts(ctx);
-  clearBranchAbort(ts, outcome.nodeId);
-  captureDisposition(ctx);
-  if (successor !== undefined && ctx.disposition === undefined) poolDispatch(ctx, successor);
-  return undefined;
 }
 
 /** Seed the frontier with the branch entries (fresh entry). */
@@ -572,23 +531,19 @@ async function seedFrontier(ctx: FanoutCtx, plan: Extract<FanoutPlan, { kind: "s
       },
     };
   }
-  const res = await commitFanoutFact(
-    deps,
-    ctx.ts,
-    [
-      {
-        type: "fact.fanout_started",
-        payload: { nodeId: parallelNode, iteration, ...passField(pass), branches: [...plan.branches] },
-      },
-    ],
-    seedOpts,
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: parallelNode,
+      iteration,
+      expectedVersion: ctx.runState.version,
+      attemptedFactType: "fact.fanout_started",
+      commit: (f) => commitFanoutFact(deps, ctx.ts, f, seedOpts),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+    },
+    planSeedFanout({ nodeId: parallelNode, iteration, pass, branches: plan.branches }),
   );
-  if (!res.ok) {
-    if (res.reason !== "occ") return { kind: "continue" };
-    const { halted } = await deps.occ.onConflict("fact.fanout_started", parallelNode, iteration, ctx.runState.version);
-    return halted ? { kind: "terminal" } : { kind: "continue" };
-  }
-  return { kind: "continue" };
 }
 
 /** Frontier drained → advance `current_node` to the join (budget first). */
@@ -596,30 +551,34 @@ async function advanceJoin(ctx: FanoutCtx, plan: Extract<FanoutPlan, { kind: "jo
   const { deps, parallelNode, iteration, pass, deferredPause } = ctx;
   const drainedBarrier = fanoutBudgetDisposition(ctx, { fresh: true });
   if (drainedBarrier !== undefined) return commitFanoutDisposition(ctx, [drainedBarrier]);
-  const joinFact: FactEvent = deferredPause
-    ? { type: "fact.run_paused", payload: { reason: "operator", nodeId: parallelNode } }
-    : {
-        type: "fact.fanout_joined",
-        payload: {
-          nodeId: parallelNode,
-          iteration,
-          ...passField(pass),
-          nextNode: plan.nextNode,
-          branchesCompleted: plan.branchesCompleted,
-        },
-      };
+  const joinFact = planJoin({
+    deferredPause,
+    nodeId: parallelNode,
+    iteration,
+    pass,
+    nextNode: plan.nextNode,
+    branchesCompleted: plan.branchesCompleted,
+  });
   let joinOpts = takeFold(ctx);
   if (deferredPause) {
     joinOpts = { ...joinOpts, routingPatch: { ...(joinOpts.routingPatch ?? {}), [PAUSE_AFTER_DISPATCH_KEY]: false } };
   }
-  const res = await commitFanoutFact(deps, ctx.ts, [joinFact], joinOpts);
-  if (!res.ok) {
-    if (res.reason !== "occ") return { kind: "continue" };
-    const { halted } = await deps.occ.onConflict(joinFact.type, parallelNode, iteration, ctx.runState.version);
-    return halted ? { kind: "terminal" } : { kind: "continue" };
-  }
-  deps.occ.onResolved(parallelNode, iteration);
-  return { kind: "continue" };
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: parallelNode,
+      iteration,
+      expectedVersion: ctx.runState.version,
+      attemptedFactType: joinFact.type,
+      commit: (f) => commitFanoutFact(deps, ctx.ts, f, joinOpts),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onSuccess: () => {
+        deps.occ.onResolved(parallelNode, iteration);
+      },
+    },
+    [joinFact],
+  );
 }
 
 /** Re-mark active branches whose latest lifecycle fact is `node_aborted` with a
@@ -636,21 +595,20 @@ async function redispatchAborted(
     type: "fact.dispatch_started",
     payload: { nodeId: n, iteration: nodeRetryCount(ctx.runState.routing, n), ...passField(pass), resumeOf: "paused" },
   }));
-  const reRes = await commitFanoutFact(deps, ctx.ts, facts, takeFold(ctx));
-  if (!reRes.ok) {
-    if (reRes.reason === "occ") {
-      const first = reDispatched[0]!;
-      const { halted } = await deps.occ.onConflict(
-        "fact.dispatch_started",
-        first,
-        nodeRetryCount(ctx.runState.routing, first),
-        ctx.runState.version,
-      );
-      if (halted) return { kind: "terminal" };
-    }
-    return { kind: "continue" };
-  }
-  return undefined;
+  const first = reDispatched[0]!;
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: first,
+      iteration: nodeRetryCount(ctx.runState.routing, first),
+      expectedVersion: ctx.runState.version,
+      attemptedFactType: "fact.dispatch_started",
+      commit: (f) => commitFanoutFact(deps, ctx.ts, f, takeFold(ctx)),
+      successOutcome: undefined,
+      statusOutcome: { kind: "continue" },
+    },
+    facts,
+  );
 }
 
 /** The reactive pool: dispatch the live frontier concurrently and, as each
