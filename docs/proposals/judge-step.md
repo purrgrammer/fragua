@@ -644,6 +644,14 @@ for Jev, and far wider on some benchmarks. `fragua judge calibrate` therefore
 partitions its report by `provider/model` and refuses to pool two models' reads
 under one bound.
 
+A row that defines a **new** provider must supply the numbers a built-in would
+have lent it — `base-url` (http or https), the two token budgets,
+`bytes-per-token` and `state-max-bytes`. A zero is not a permissive default: the
+handler rejects every state as "over the 0-byte cap" and the chunk planner sizes
+each request at zero bytes, so an omitted field would surface as a capacity
+error that says nothing about the config. A row **overlaying** a built-in needs
+none of them and inherits what it does not set.
+
 **A user defines a provider** with a `provider_config` row keyed `judge:<id>`
 — the same table llm custom providers use, namespaced because the two record
 shapes are incompatible and an un-namespaced row is silently adopted by the llm
@@ -766,6 +774,7 @@ tool step's shell.
 | 401 / 403 | `transition{outcomeStatus:"fail", non-retryable}` — same class as an llm auth failure |
 | 400 (TypeSafe) | `fail` — that provider's data-dependent rejection of an oversized state |
 | 422 | `fail`, carrying the provider's message; sharpened to name `state-max-bytes:` when the provider says it was a size problem. One runtime uses two different codes for the same oversized state, so the outcome cannot hinge on the code |
+| unknown `provider:` | `fail` naming the id and the `judge:<id>` row that would fix it. Not a halt: E055 only warns offline, so a bad name reaches runtime, and the remedy is a config row — the same class as a missing model |
 | `MODEL_NOT_FOUND` | `fail`, non-retryable, naming the model and provider |
 | retryable (408 / 429 / 500–504 / 529) | in-client full-jitter backoff (3 attempts, `Retry-After` honoured); on exhaustion `pause_provider{httpStatus, provider, errorMessage, retryAfterMs?}` |
 | network / abort | `pause_provider{httpStatus:null}` / propagate the abort |

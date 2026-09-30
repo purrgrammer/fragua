@@ -67,6 +67,48 @@ describe("loadJudgeProviders", () => {
     }
   });
 
+  test("a new provider missing its budgets is reported, not registered with zeros", () => {
+    const store = new SqliteStore();
+    try {
+      // A row overlaying a built-in inherits the missing numbers; a row defining
+      // a NEW provider inherits nothing, and a zero budget is not permissive —
+      // it rejects every state as "over the 0-byte cap" and divides by zero in
+      // the chunk planner, so the operator sees a capacity error instead.
+      seed(store, "judge:lab", { "base-url": "http://10.0.0.5:8080", "default-model": "kev" });
+      const { providers, error } = loadJudgeProviders(store);
+      expect(providers["lab"]).toBeUndefined();
+      expect(error).toMatch(/request-tokens/);
+      expect(error).toMatch(/bytes-per-token/);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("an overlay of a built-in needs no budgets — it inherits them", () => {
+    const store = new SqliteStore();
+    try {
+      seed(store, "judge:ollaya", { "default-model": "kev:0.8b" });
+      const { providers, error } = loadJudgeProviders(store);
+      expect(error).toBeNull();
+      expect(providers["ollaya"]!.defaultModel).toBe("kev:0.8b");
+      expect(providers["ollaya"]!.bytesPerToken).toBeGreaterThan(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a base-url that is not http(s) is reported, not left to fail inside fetch", () => {
+    const store = new SqliteStore();
+    try {
+      seed(store, "judge:lab", { "base-url": "/var/run/judge.sock" });
+      const { providers, error } = loadJudgeProviders(store);
+      expect(providers["lab"]).toBeUndefined();
+      expect(error).toMatch(/must be http\(s\)/);
+    } finally {
+      store.close();
+    }
+  });
+
   test("a new provider without a base URL is reported and skipped", () => {
     const store = new SqliteStore();
     try {

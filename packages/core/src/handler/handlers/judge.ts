@@ -77,7 +77,16 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
     const provider = cfg.provider ?? judge.defaultProvider;
     const record = judge.resolve(provider);
     if (record === undefined) {
-      return halt(`judge step "${cfg.nodeId}": unknown provider "${provider}" — no record is configured for it`);
+      // Same class as the missing-model case below and `MODEL_NOT_FOUND` from
+      // the wire: user-addressable without a code change (add a `judge:<id>`
+      // config row, or fix the name). It has to fail rather than halt for the
+      // same reason they do — a halt gives an `on: {fail}` edge nothing to
+      // route, and E055 is only a warning offline, so a bad name can reach
+      // runtime.
+      return fail(
+        `judge step "${cfg.nodeId}": unknown provider "${provider}" — no record is configured for it; ` +
+          `add a \`judge:${provider}\` row or fix \`provider:\``,
+      );
     }
     const model = cfg.model ?? record.defaultModel;
     if (model === undefined) {

@@ -98,9 +98,13 @@ the row is hand-written:
 }
 ```
 
-Every field is optional: a row may define a provider outright or overlay a
-built-in with the one number a measurement corrected, field by field, without
-dropping that model's other limits.
+Every field is optional in the schema, but a row that defines a **new** provider
+must actually supply `base-url` (http or https), both token budgets,
+`bytes-per-token` and `state-max-bytes` — it inherits nothing, and a zero budget
+rejects every state as "over the 0-byte cap" rather than behaving permissively.
+A row that **overlays** a built-in needs none of them: it corrects the one
+number a measurement moved, field by field, without dropping that model's other
+limits.
 
 `models` matters. Ollaya's context windows span 512 to 32768 tokens across its
 library, and a state over a model's window is **refused** rather than answered

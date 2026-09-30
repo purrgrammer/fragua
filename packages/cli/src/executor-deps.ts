@@ -301,7 +301,14 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
   // a step that names neither still resolves one.
   const judgeConfigModel = config.judge?.model;
   const selected = judgeProviders.providers[judgeDefaultProvider];
-  if (judgeConfigModel !== undefined && selected !== undefined) {
+  if (selected === undefined) {
+    // Otherwise the misconfiguration is invisible until the first judge step
+    // fails, and a `judge.model` set beside it is dropped without a word.
+    console.warn(
+      `[judge] config selects provider "${judgeDefaultProvider}", which has no record — ` +
+        `known: ${Object.keys(judgeProviders.providers).sort().join(", ")}`,
+    );
+  } else if (judgeConfigModel !== undefined) {
     judgeProviders.providers[judgeDefaultProvider] = { ...selected, defaultModel: judgeConfigModel };
   }
   const judgeClient = handler.makeJudgeClient({

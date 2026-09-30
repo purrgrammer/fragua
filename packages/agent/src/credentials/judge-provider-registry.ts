@@ -80,6 +80,16 @@ function overlay(id: string, base: JudgeProviderRecord | undefined, cfg: JudgePr
   return record;
 }
 
+/** The fields a row defining a NEW provider must supply, with how to read each
+ * off the overlaid record. `base-url` is checked separately because its empty
+ * value is a string, not a zero. */
+const REQUIRED_NEW_PROVIDER_FIELDS: ReadonlyArray<readonly [string, (r: JudgeProviderRecord) => number]> = [
+  ["`request-tokens`", (r) => r.requestTokenBudget],
+  ["`state-tokens`", (r) => r.stateTokenBudget],
+  ["`bytes-per-token`", (r) => r.bytesPerToken],
+  ["`state-max-bytes`", (r) => r.stateMaxBytes],
+];
+
 export interface JudgeProviderRegistryResult {
   providers: Record<string, JudgeProviderRecord>;
   /** Per-row problems, joined. A corrupt row is skipped, never fatal — one bad
@@ -114,9 +124,27 @@ export function loadJudgeProviders(store: IProviderConfigStore): JudgeProviderRe
       errors.push(`provider_config[${row.provider}]: invalid schema\n${details}`);
       continue;
     }
-    const record = overlay(id, providers[id], row.config);
+    const base = providers[id];
+    const record = overlay(id, base, row.config);
     if (record.baseUrl.length === 0) {
       errors.push(`provider_config[${row.provider}]: a new judge provider needs \`base-url\``);
+      continue;
+    }
+    // A bare path or `file://` passes the non-empty check and then fails inside
+    // `fetch` with an implementation-defined TypeError, far from the row.
+    if (!/^https?:\/\//i.test(record.baseUrl)) {
+      errors.push(`provider_config[${row.provider}]: \`base-url\` must be http(s), got "${record.baseUrl}"`);
+      continue;
+    }
+    // A row overlaying a built-in inherits every number it does not set. A row
+    // defining a NEW provider inherits nothing, so an omitted budget is zero —
+    // and a zero is not a permissive default, it is a broken one: the handler
+    // rejects any state as "over the 0-byte cap" and the chunk planner sizes
+    // every request at zero bytes, so the operator sees a capacity error that
+    // says nothing about the missing config. Name the missing fields instead.
+    const missing = REQUIRED_NEW_PROVIDER_FIELDS.filter(([, read]) => read(record) === 0).map(([key]) => key);
+    if (base === undefined && missing.length > 0) {
+      errors.push(`provider_config[${row.provider}]: a new judge provider needs ${missing.join(", ")}`);
       continue;
     }
     providers[id] = record;

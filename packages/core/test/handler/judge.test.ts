@@ -714,12 +714,17 @@ describe("judge handler — provider records", () => {
     expect(c.requests).toHaveLength(0);
   });
 
-  test("an unconfigured provider halts naming the id", async () => {
+  test("an unconfigured provider fails the node, so an `on: {fail}` edge can route it", async () => {
+    // E055 only warns offline, so a bad name reaches runtime; and the fix is a
+    // config row, exactly as user-addressable as the missing-model case beside
+    // it. Halting would leave a recovery edge nothing to do.
     const c = fresh();
     const h = makeJudgeHandler({ nodeId: "j", provider: "nope", state: "x", questions: { ok: OK_Q } });
     const res = await h.handler(stubCtx(c, { judge: recordingJudge(c) }));
-    expect(res).toMatchObject({ kind: "halt", reason: "error" });
-    expect((res as { detail: string }).detail).toMatch(/unknown provider "nope"/);
+    expect(res).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    expect((res as { failureReason: string }).failureReason).toMatch(/unknown provider "nope"/);
+    expect((res as { failureReason: string }).failureReason).toMatch(/judge:nope/);
+    expect(c.requests).toHaveLength(0);
   });
 
   test("422 STATE_TRUNCATED is a node fail pointing at state-max-bytes, not a halt", async () => {
