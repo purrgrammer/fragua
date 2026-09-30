@@ -13,14 +13,14 @@ import {
   AutoTitler,
   buildSteerDelivery,
   type Provisioner,
-  type ResolvedRunEnvDeny,
+  type ResolvedRunEnvAllow,
   startDaemon,
   WorktreeProvisioner,
 } from "@fragua/daemon";
 import { hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, resolveEnvPassthrough, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
-import { buildProviderCredentialContext, daemonEnvDeny } from "../env-creds.ts";
+import { buildProviderCredentialContext, daemonEnvAllow } from "../env-creds.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
 
 /**
@@ -194,33 +194,33 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // provider-credential names listed in `bash.env-passthrough` that will be
     // refused, so the operator catches the misconfiguration in ONE place
     // instead of a warning that repeats on every provision. The per-run
-    // `daemonEnvDeny` below no longer warns (a module-level dedup would still
+    // `daemonEnvAllow` below no longer warns (a module-level dedup would still
     // interleave with run output).
     const startupPassthrough = resolveEnvPassthrough(config);
-    const startupDeny = daemonEnvDeny({
+    const startupAllow = daemonEnvAllow({
       storeProviders,
       passthrough: startupPassthrough,
       ctx: credCtx,
       warn: false,
     });
-    const startupRefused = [...startupPassthrough].filter((n) => !startupDeny.passthrough.has(n));
+    const startupRefused = startupAllow.refused;
     // Per-run refusals from a NON-launch-cwd project's `bash.env-passthrough`
     // aren't visible in the startup dry-run above, which only inspects the
     // daemon's own cwd. Dedupe by name across the daemon's lifetime and warn
     // once per unique refused name so a project silently losing a provider cred
     // still surfaces in the daemon log — without repeating on every provision.
     const refusedSeen = new Set<string>(startupRefused);
-    const resolveRunEnvDeny = async (runCwd: string): Promise<ResolvedRunEnvDeny> => {
+    const resolveRunEnvAllow = async (runCwd: string): Promise<ResolvedRunEnvAllow> => {
       const runConfig = await loadConfig(runCwd);
       const requested = resolveEnvPassthrough(runConfig);
-      const { names, predicate, passthrough } = daemonEnvDeny({
+      const { allow, refused } = daemonEnvAllow({
         storeProviders,
         passthrough: requested,
         ctx: credCtx,
         warn: false,
       });
-      for (const n of requested) {
-        if (!passthrough.has(n) && !refusedSeen.has(n)) {
+      for (const n of refused) {
+        if (!refusedSeen.has(n)) {
           refusedSeen.add(n);
           console.warn(
             chalk.yellow(
@@ -230,11 +230,11 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
           );
         }
       }
-      return { names, predicate };
+      return { names: allow };
     };
     const provisioner: Provisioner = new WorktreeProvisioner({
       resolveRunBootstrap: resolveProjectBootstrap,
-      resolveRunEnvDeny,
+      resolveRunEnvAllow,
       envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
       ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
     });

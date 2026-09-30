@@ -47,6 +47,29 @@ export class PathEscapeError extends Error {
  *  is the runtime backstop for the most common escape pattern. */
 const CD_ESCAPE_PATTERN = /\bcd\s+(['"]?)(\/[^\s'"&;|()]+)\1/g;
 
+/** Env-var names always inherited by a bash subprocess, regardless of any
+ *  operator allow-list. These are the vars a POSIX shell and the tools this
+ *  repo's own workflows shell out to (`git`, `gh`, `bun`, coreutils) need to
+ *  function; `HOME` in particular anchors `git`/`gh` credential-helper and
+ *  config lookup. `LC_*` locale vars and `FRAGUA_*` engine vars are admitted by
+ *  prefix in {@link isBaselineEnvAllowed}. */
+export const BASELINE_ENV_ALLOW: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TERM",
+  "SHELL",
+  "USER",
+  "LANG",
+]);
+
+/** True when `name` is in the built-in baseline allow-list — an exact
+ *  {@link BASELINE_ENV_ALLOW} member, an `LC_*` locale var, or a `FRAGUA_*`
+ *  engine var. The floor beneath every operator/CI allow-list. */
+export function isBaselineEnvAllowed(name: string): boolean {
+  return BASELINE_ENV_ALLOW.has(name) || name.startsWith("LC_") || name.startsWith("FRAGUA_");
+}
+
 export interface LocalEnvironmentOptions {
   /** Working directory. Defaults to process.cwd(). */
   cwd?: string;
@@ -54,21 +77,21 @@ export interface LocalEnvironmentOptions {
   defaultTimeoutMs?: number;
   /** Additional blocklist patterns appended to the built-in defaults. */
   extraBlockedPatterns?: string[];
-  /** Set by `fragua ci` (full perimeter strip) and by `fragua daemon` / harness
-   * (`daemonEnvDeny` provider-credential strip). When set, every named env var is
-   * deleted from the spawned subprocess env AFTER the `{ ...process.env,
-   * ...opts.env }` merge — so even a caller-supplied opts.env override of a
-   * denied name is stripped. When unset (the default — operator-trusted local
-   * runs), behavior is unchanged: the subprocess inherits the full env. */
-  envDenyNames?: ReadonlySet<string>;
-  /** Applied at SPAWN TIME over the live merged env (every `exec` call). Strips
-   * any name for which it returns true — so a secret-named var set AFTER the
-   * environment was constructed is still stripped. Composes with `envDenyNames`:
-   * a name is denied when EITHER the set contains it OR the predicate returns
-   * true. Keep the set for value capture (scrub needles); add the predicate for
-   * the live-rule path. No-predicate default: local operator runs inherit the
-   * full env unchanged. */
-  envDenyPredicate?: (name: string) => boolean;
+  /** Operator/CI allow-list ADDITIONS to the built-in baseline
+   * ({@link BASELINE_ENV_ALLOW} plus `LC_*` / `FRAGUA_*`). A bash subprocess
+   * inherits from `process.env` only the names in the baseline OR this set OR
+   * {@link envAllowPredicate}; everything else — provider credentials, ambient
+   * secrets, unrelated vars — is dropped by default. Set by `fragua daemon` /
+   * harness (from `bash.env-passthrough`) and by `fragua ci` (from
+   * `--allow-env`), both with provider-credential names already refused
+   * upstream. bash is arbitrary host code execution, not a sandbox; the
+   * allow-list is the containment we DO offer. */
+  envAllowNames?: ReadonlySet<string>;
+  /** Applied at SPAWN TIME over the live `process.env` (every `exec` call): a
+   * name is admitted when it returns true. Complements the static
+   * {@link envAllowNames} set for a rule that can't be enumerated ahead of time.
+   * The baseline and `envAllowNames` are checked first. */
+  envAllowPredicate?: (name: string) => boolean;
 }
 
 /** Walk up `absolutePath` until a path component exists on disk, realpath
@@ -95,15 +118,15 @@ export class LocalEnvironment implements ExecutionEnvironment {
   private readonly _cwd: string;
   private readonly defaultTimeoutMs: number;
   private readonly extraBlocked: string[];
-  private readonly envDenyNames: ReadonlySet<string> | undefined;
-  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
+  private readonly envAllowNames: ReadonlySet<string> | undefined;
+  private readonly envAllowPredicate: ((name: string) => boolean) | undefined;
 
   constructor(opts: LocalEnvironmentOptions = {}) {
     this._cwd = resolve(opts.cwd ?? process.cwd());
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
     this.extraBlocked = opts.extraBlockedPatterns ?? [];
-    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
-    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
+    if (opts.envAllowNames !== undefined) this.envAllowNames = opts.envAllowNames;
+    if (opts.envAllowPredicate !== undefined) this.envAllowPredicate = opts.envAllowPredicate;
   }
 
   /** Memoised realpath(_cwd). Computed lazily because WorktreeEnvironment
@@ -262,17 +285,21 @@ export class LocalEnvironment implements ExecutionEnvironment {
       const child = spawn("/bin/sh", ["-c", command], {
         cwd,
         env: (() => {
-          const merged: Record<string, string | undefined> = { ...process.env, ...opts.env };
-          if (this.envDenyNames !== undefined) {
-            for (const name of this.envDenyNames) delete merged[name];
-          }
-          // Predicate applied at SPAWN TIME over the live merged env: strips any
-          // name matching the secret-name rule regardless of when it was set.
-          if (this.envDenyPredicate !== undefined) {
-            for (const name of Object.keys(merged)) {
-              if (this.envDenyPredicate(name)) delete merged[name];
+          // Deny-by-default: the subprocess inherits from process.env ONLY the
+          // baseline vars plus the operator/CI allow-list. Everything else —
+          // provider credentials, ambient secrets, unrelated vars — never
+          // reaches the shell.
+          const allowNames = this.envAllowNames;
+          const allowPredicate = this.envAllowPredicate;
+          const merged: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(process.env)) {
+            if (isBaselineEnvAllowed(name) || allowNames?.has(name) || allowPredicate?.(name)) {
+              merged[name] = value;
             }
           }
+          // Engine-set vars (e.g. FRAGUA_OUTPUT) always pass — they are supplied
+          // by the handler through opts.env, not inherited from the ambient env.
+          Object.assign(merged, opts.env);
           return merged as NodeJS.ProcessEnv;
         })(),
         stdio: ["ignore", "pipe", "pipe"],

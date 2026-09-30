@@ -184,54 +184,61 @@ describe("WorktreeProvisioner — bootstrap resolution", () => {
   });
 });
 
-describe("WorktreeProvisioner — per-run env-strip resolution", () => {
-  test("no resolver → constructor envDeny values pass through", async () => {
-    const names = new Set(["ANTHROPIC_API_KEY"]);
-    const predicate = (n: string) => n === "SECRET";
-    const p = new WorktreeProvisioner({ envDenyNames: names, envDenyPredicate: predicate });
-    const out = await p.resolveEnvDenyFor("/any/cwd");
+describe("WorktreeProvisioner — per-run env allow-list resolution", () => {
+  test("no resolver → constructor envAllow values pass through", async () => {
+    const names = new Set(["GH_TOKEN"]);
+    const predicate = (n: string) => n === "WIDGET";
+    const p = new WorktreeProvisioner({ envAllowNames: names, envAllowPredicate: predicate });
+    const out = await p.resolveEnvAllowFor("/any/cwd");
     expect(out.names).toBe(names);
     expect(out.predicate).toBe(predicate);
   });
 
   test("resolver is authoritative and receives each run's cwd", async () => {
-    // Mirrors bootstrap: one daemon serving many projects resolves the env-strip
-    // per run, so each project's own bash.env-passthrough takes effect.
+    // Mirrors bootstrap: one daemon serving many projects resolves the
+    // allow-list per run, so each project's own bash.env-passthrough takes effect.
     const seen: string[] = [];
     const namesA = new Set(["A_TOKEN"]);
     const namesB = new Set(["B_TOKEN"]);
     const p = new WorktreeProvisioner({
-      envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
-      resolveRunEnvDeny: async (cwd) => {
+      envAllowNames: new Set(["SHOULD_NOT_LEAK"]),
+      resolveRunEnvAllow: async (cwd) => {
         seen.push(cwd);
         return { names: cwd === "/project/a" ? namesA : namesB };
       },
     });
-    expect((await p.resolveEnvDenyFor("/project/a")).names).toBe(namesA);
-    expect((await p.resolveEnvDenyFor("/project/b")).names).toBe(namesB);
+    expect((await p.resolveEnvAllowFor("/project/a")).names).toBe(namesA);
+    expect((await p.resolveEnvAllowFor("/project/b")).names).toBe(namesB);
     expect(seen).toEqual(["/project/a", "/project/b"]);
   });
 
-  // Regression guard: `create()` must forward the resolver's env-strip into the
+  // Regression guard: `create()` must forward the resolver's allow-list into the
   // provisioned environment, not the constructor fallback. A LocalEnvironment
-  // that stripped `SHOULD_NOT_LEAK` (the constructor value) instead of
-  // `RUN_TOKEN` (the resolver value) would leave the direct-resolver tests green.
-  test("create() applies resolveRunEnvDeny to the provisioned environment (not the fallback)", async () => {
-    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-envdeny-"));
+  // that allowed `SHOULD_NOT_LEAK` (the constructor value) instead of `RUN_TOKEN`
+  // (the resolver value) would leave the direct-resolver tests green.
+  test("create() applies resolveRunEnvAllow to the provisioned environment (not the fallback)", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-envallow-"));
+    const prevRun = process.env["RUN_TOKEN"];
+    const prevLeak = process.env["SHOULD_NOT_LEAK"];
+    process.env["RUN_TOKEN"] = "from-resolver";
+    process.env["SHOULD_NOT_LEAK"] = "from-constructor";
     try {
       const p = new WorktreeProvisioner({
-        envDenyNames: new Set(["SHOULD_NOT_LEAK"]),
-        resolveRunEnvDeny: async () => ({ names: new Set(["RUN_TOKEN"]) }),
+        envAllowNames: new Set(["SHOULD_NOT_LEAK"]),
+        resolveRunEnvAllow: async () => ({ names: new Set(["RUN_TOKEN"]) }),
       });
-      const env = await p.ensure("r-envdeny", { cwd: nonGit });
+      const env = await p.ensure("r-envallow", { cwd: nonGit });
       expect(env).toBeInstanceOf(LocalEnvironment);
-      const res = await env.exec('echo "[$RUN_TOKEN][$SHOULD_NOT_LEAK]"', {
-        env: { RUN_TOKEN: "from-resolver", SHOULD_NOT_LEAK: "from-constructor" },
-      });
-      // Resolver's name is stripped; the constructor fallback name survives.
-      expect(res.stdout).not.toContain("from-resolver");
-      expect(res.stdout).toContain("from-constructor");
+      const res = await env.exec('echo "[${RUN_TOKEN:-MISSING}][${SHOULD_NOT_LEAK:-MISSING}]"');
+      // Resolver's name is allowed through; the constructor fallback name is NOT
+      // (the resolver is authoritative, so its allow-list replaces the fallback).
+      expect(res.stdout).toContain("from-resolver");
+      expect(res.stdout).not.toContain("from-constructor");
     } finally {
+      if (prevRun === undefined) delete process.env["RUN_TOKEN"];
+      else process.env["RUN_TOKEN"] = prevRun;
+      if (prevLeak === undefined) delete process.env["SHOULD_NOT_LEAK"];
+      else process.env["SHOULD_NOT_LEAK"] = prevLeak;
       rmSync(nonGit, { recursive: true, force: true });
     }
   });

@@ -257,3 +257,56 @@ describe("ciCommand --json terminal result envelope", () => {
     expect(lines.some((l) => l.includes("fragua.run_result"))).toBe(false);
   });
 });
+
+// The tool step runs through the same LocalEnvironment.exec path as the bash
+// tool, so a passing `test -n "$VAR"` probe proves the var reached the shell.
+describe("ciCommand --allow-env (deny-by-default env)", () => {
+  const ENV_KEYS = ["GH_TOKEN", "UNRELATED_SEEDED"] as const;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const k of ENV_KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  test("--allow-env GH_TOKEN exposes GH_TOKEN to a tool step and hides an unrelated seeded var", async () => {
+    // probe succeeds (exit 0) only if GH_TOKEN is present AND UNRELATED_SEEDED is
+    // absent from the tool subprocess env.
+    writeFileSync(
+      wfPath,
+      'name: ci-allow\nsteps:\n  probe:\n    type: tool\n    run: \'test -n "$GH_TOKEN" && test -z "$UNRELATED_SEEDED"\'\n    next: exit\n',
+    );
+    process.env["GH_TOKEN"] = "ghs-visible-to-tool-12345678";
+    process.env["UNRELATED_SEEDED"] = "must-not-leak-12345678";
+    const { results } = partition(
+      (await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true, allowEnv: ["GH_TOKEN"] })).lines,
+    );
+    expect(results[0]!.status).toBe("completed");
+  });
+
+  test("without --allow-env a seeded GH_TOKEN is hidden from the tool step (deny-by-default)", async () => {
+    writeFileSync(
+      wfPath,
+      "name: ci-deny\nsteps:\n  probe:\n    type: tool\n    run: 'test -n \"$GH_TOKEN\"'\n    next: exit\n",
+    );
+    process.env["GH_TOKEN"] = "ghs-should-be-hidden-12345678";
+    const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);
+    expect(results[0]!.status).toBe("errored");
+  });
+
+  test("--allow-env ANTHROPIC_API_KEY is refused with a usage error", async () => {
+    writeFileSync(wfPath, "name: ci-refuse\nsteps:\n  done: {type: exit}\n");
+    const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, allowEnv: ["ANTHROPIC_API_KEY"] });
+    expect(code).toBe(CLI_EXIT.usage);
+  });
+});

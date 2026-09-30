@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeEnvironment } from "../src/worktree-env.ts";
@@ -168,55 +168,66 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("bootstrap failure names the stripped var and the envPassthroughHint when the env-strip is active", async () => {
-    const env = new WorktreeEnvironment({
-      repoRoot: repo,
-      runId: "boot-fail-strip",
-      bootstrap: "echo $NPM_TOKEN; exit 3",
-      envDenyNames: new Set(["NPM_TOKEN"]),
-      envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
-    });
-    let error: Error | undefined;
+  test("bootstrap failure names a non-allow-listed referenced var and the envPassthroughHint", async () => {
+    const prev = process.env["NPM_TOKEN"];
+    process.env["NPM_TOKEN"] = "npm-secret-value";
     try {
-      await env.init();
-    } catch (err) {
-      error = err as Error;
+      const env = new WorktreeEnvironment({
+        repoRoot: repo,
+        runId: "boot-fail-strip",
+        bootstrap: "echo $NPM_TOKEN; exit 3",
+        envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
+      });
+      let error: Error | undefined;
+      try {
+        await env.init();
+      } catch (err) {
+        error = err as Error;
+      }
+      expect(error).toBeDefined();
+      expect(error?.message).toContain("bootstrap command failed");
+      // The note names the referenced non-allow-listed var and the escape hatch.
+      expect(error?.message).toContain("NPM_TOKEN");
+      expect(error?.message).toContain("bash.env-passthrough");
+      await env.dispose();
+    } finally {
+      if (prev === undefined) delete process.env["NPM_TOKEN"];
+      else process.env["NPM_TOKEN"] = prev;
     }
-    expect(error).toBeDefined();
-    expect(error?.message).toContain("bootstrap command failed");
-    // The note names the referenced stripped var and points at the escape hatch.
-    expect(error?.message).toContain("NPM_TOKEN");
-    expect(error?.message).toContain("bash.env-passthrough");
-    await env.dispose();
   });
 
   test("ci-mode hint (--allow-env) is used instead of the daemon config key", async () => {
-    const env = new WorktreeEnvironment({
-      repoRoot: repo,
-      runId: "boot-fail-ci-hint",
-      bootstrap: "echo $NPM_TOKEN; exit 3",
-      envDenyNames: new Set(["NPM_TOKEN"]),
-      envPassthroughHint: "--allow-env",
-    });
-    let error: Error | undefined;
+    const prev = process.env["NPM_TOKEN"];
+    process.env["NPM_TOKEN"] = "npm-secret-value";
     try {
-      await env.init();
-    } catch (err) {
-      error = err as Error;
+      const env = new WorktreeEnvironment({
+        repoRoot: repo,
+        runId: "boot-fail-ci-hint",
+        bootstrap: "echo $NPM_TOKEN; exit 3",
+        envPassthroughHint: "--allow-env",
+      });
+      let error: Error | undefined;
+      try {
+        await env.init();
+      } catch (err) {
+        error = err as Error;
+      }
+      expect(error?.message).toContain("--allow-env");
+      expect(error?.message).not.toContain("bash.env-passthrough");
+      await env.dispose();
+    } finally {
+      if (prev === undefined) delete process.env["NPM_TOKEN"];
+      else process.env["NPM_TOKEN"] = prev;
     }
-    expect(error?.message).toContain("--allow-env");
-    expect(error?.message).not.toContain("bash.env-passthrough");
-    await env.dispose();
   });
 
-  test("unrelated bootstrap failure (no referenced var) gets NO env-strip note", async () => {
-    // The daemon always populates envDenyNames with provider names, so an
-    // unrelated failure must not be blamed on the env-strip.
+  test("unrelated bootstrap failure (no referenced var) gets NO allow-list note", async () => {
+    // A failure whose command references no non-allow-listed var must not be
+    // blamed on the allow-list.
     const env = new WorktreeEnvironment({
       repoRoot: repo,
       runId: "boot-fail-unrelated",
       bootstrap: "exit 3",
-      envDenyNames: new Set(["ANTHROPIC_API_KEY"]),
       envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
     });
     let error: Error | undefined;
@@ -230,15 +241,14 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("a command-not-found bootstrap gets NO env-strip note", async () => {
-    // Exit 127 says a binary is missing from PATH. PATH is not secret-shaped,
-    // so the strip cannot have caused it — and under the daemon envDenyNames
-    // is never empty, so blaming the strip here would blame it on every typo.
+  test("a command-not-found bootstrap gets NO allow-list note", async () => {
+    // Exit 127 says a binary is missing from PATH. PATH is on the baseline
+    // allow-list, so the allow-list cannot have caused it — blaming it here
+    // would blame it on every typo.
     const env = new WorktreeEnvironment({
       repoRoot: repo,
       runId: "boot-fail-127",
       bootstrap: "this-binary-does-not-exist-xyz",
-      envDenyNames: new Set(["ANTHROPIC_API_KEY"]),
       envPassthroughHint: "bash.env-passthrough in .fragua/config.yaml",
     });
     let error: Error | undefined;
@@ -293,15 +303,16 @@ describe("WorktreeEnvironment", () => {
     }
   });
 
-  test("envDenyNames: denied var is absent from git subprocess env, present when unset", async () => {
-    // Place a fake `git` script at the front of PATH that logs its env
-    // to a temp file, then delegates to the real git so init() still works.
+  test("git plumbing inherits the full daemon env — the allow-list gates the bash tool, not fragua's own git", async () => {
+    // The deny-by-default allow-list gates the AGENT-facing bash tool
+    // (LocalEnvironment.exec). fragua's own git plumbing (worktree add /
+    // rev-parse / list / remove) is trusted, fixed-command code and inherits the
+    // full env so `git` / `gh` credential helpers keep working. Place a fake
+    // `git` at the front of PATH that logs its env, then delegates to real git.
     const fakeGitDir = await mkdtemp(join(tmpdir(), "fragua-fakegit-"));
     const envLogFile = join(fakeGitDir, "env.log");
     const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
     const fakeGitScript = join(fakeGitDir, "git");
-    // The script appends the full env (newline-delimited KEY=VALUE lines)
-    // to envLogFile on every invocation, then delegates to real git.
     writeFileSync(fakeGitScript, `#!/bin/sh\nenv >> "${envLogFile}"\nexec "${realGit}" "$@"\n`);
     chmodSync(fakeGitScript, 0o755);
 
@@ -310,56 +321,16 @@ describe("WorktreeEnvironment", () => {
     process.env[secretVarName] = "supersecret";
     process.env["PATH"] = `${fakeGitDir}:${originalPath ?? ""}`;
     try {
-      // Without envDenyNames: secret IS inherited.
-      const envWithout = new WorktreeEnvironment({ repoRoot: repo, runId: "deny-off" });
-      await envWithout.init();
-      await envWithout.dispose();
-      expect(await readFile(envLogFile, "utf8")).toContain(`${secretVarName}=supersecret`);
-
-      // Reset log for the second run.
-      await truncate(envLogFile, 0);
-
-      // With envDenyNames containing the secret: secret must NOT appear.
-      const envWith = new WorktreeEnvironment({
-        repoRoot: repo,
-        runId: "deny-on",
-        envDenyNames: new Set([secretVarName]),
-      });
-      await envWith.init();
-      await envWith.dispose();
-      expect(await readFile(envLogFile, "utf8")).not.toContain(secretVarName);
-    } finally {
-      if (originalPath === undefined) delete process.env["PATH"];
-      else process.env["PATH"] = originalPath;
-      delete process.env[secretVarName];
-      await rm(fakeGitDir, { recursive: true, force: true });
-    }
-  });
-
-  test("envDenyPredicate: predicate-denied var is absent from git subprocess env", async () => {
-    // Mirror the envDenyNames case, but exercise the predicate branch of
-    // buildGitEnv — the path the daemon uses in production for spawn-time
-    // stripping of secret-named vars set after the deny Set was captured.
-    const fakeGitDir = await mkdtemp(join(tmpdir(), "fragua-fakegit-"));
-    const envLogFile = join(fakeGitDir, "env.log");
-    const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
-    const fakeGitScript = join(fakeGitDir, "git");
-    writeFileSync(fakeGitScript, `#!/bin/sh\nenv >> "${envLogFile}"\nexec "${realGit}" "$@"\n`);
-    chmodSync(fakeGitScript, 0o755);
-
-    const secretVarName = `FRAGUA_TEST_PRED_${Date.now()}_API_KEY`;
-    const originalPath = process.env["PATH"];
-    process.env[secretVarName] = "supersecret";
-    process.env["PATH"] = `${fakeGitDir}:${originalPath ?? ""}`;
-    try {
+      // Even with an env allow-list that omits the secret, git plumbing still
+      // sees it — the allow-list is not applied to fragua's own git.
       const env = new WorktreeEnvironment({
         repoRoot: repo,
-        runId: "deny-pred",
-        envDenyPredicate: (n) => n.endsWith("_API_KEY"),
+        runId: "git-full-env",
+        envAllowNames: new Set(["UNRELATED_ONLY"]),
       });
       await env.init();
       await env.dispose();
-      expect(await readFile(envLogFile, "utf8")).not.toContain(secretVarName);
+      expect(await readFile(envLogFile, "utf8")).toContain(`${secretVarName}=supersecret`);
     } finally {
       if (originalPath === undefined) delete process.env["PATH"];
       else process.env["PATH"] = originalPath;
