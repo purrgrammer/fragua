@@ -11,8 +11,8 @@
 //
 // Beyond the plane-owned writes, this also guards the `IDaemonCoordinator`
 // lock-eviction write `evictDaemonLockIfStale`: it must never be inlined into a
-// new route/adapter body — the two legitimate direct callers (the reaper
-// delegate + the harness liveness adapter) are named in EXEMPT_FILES.
+// new route/adapter body — the one legitimate direct caller (the harness
+// liveness adapter) is named in EXEMPT_FILES.
 //
 // This is an AST walk (not a regex over source text), so a computed member
 // access — `store["enqueueRun"]()` — is caught the same as `store.enqueueRun()`.
@@ -53,13 +53,9 @@ const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages
 const EXEMPT_FILES = new Set<string>([
   "packages/daemon/src/auto-titler.ts",
   "packages/daemon/src/schedule-dispatcher.ts",
-  // Legitimate direct `evictDaemonLockIfStale` callers, not event-log bypasses:
-  //   - reaper: the daemon-recovery delegate every process (the /health path
-  //     included) routes stale-lock recovery through, so the TTL check + sweep +
-  //     audit events land in one place.
+  // Legitimate direct `evictDaemonLockIfStale` caller, not an event-log bypass:
   //   - harness: its liveness adapter reaps a provably-dead daemon's lock on
-  //     supervised restart.
-  "packages/server/src/reaper.ts",
+  //     supervised restart and on its periodic reaper tick.
   "packages/cli/src/commands/harness.ts",
 ]);
 const SCAN_DIRS = [
@@ -140,8 +136,8 @@ describe("intent-plane discipline — store writes only inside the plane", () =>
     expect(scanString(src).map((h) => h.method)).toContain("evictDaemonLockIfStale");
   });
 
-  test("exempts reaper.ts and harness.ts as documented direct coordinator callers", () => {
-    expect(EXEMPT_FILES.has("packages/server/src/reaper.ts")).toBe(true);
+  test("exempts harness.ts as the documented direct coordinator caller", () => {
     expect(EXEMPT_FILES.has("packages/cli/src/commands/harness.ts")).toBe(true);
+    expect(EXEMPT_FILES.has("packages/server/src/reaper.ts")).toBe(false);
   });
 });

@@ -1387,7 +1387,7 @@ export class SqliteStore implements IEventStore {
     const sweepStart = this.now();
     const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
     // Mirror the daemon's direct-takeover audit trail so a harness-supervised
-    // (or server-reaper) recovery is visible in `daemon_events`.
+    // recovery is visible in `daemon_events`.
     this.appendDaemonEvent({
       type: "daemon.reaper_took_over",
       payload: {

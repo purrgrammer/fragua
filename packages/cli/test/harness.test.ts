@@ -125,8 +125,25 @@ describe("superviseDaemon", () => {
       lockTtlMs: 0,
       shutdownGraceMs: 5_000,
       lockWaitMs: 5_000,
+      // Default off: the periodic reaper would otherwise open the store on a
+      // timer beneath every test. The reaper-tick test opts in explicitly.
+      reaperTickMs: 0,
       ...overrides,
     };
+  }
+
+  /** Install a stale `daemon_lock` row (backdated heartbeat) as a crashed
+   *  daemon would leave behind, so the reaper's TTL arm evicts it. */
+  function seedStaleLock(dbPath: string, pid: number): void {
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      store.forceAcquireDaemonLock(pid, hostnameSafe());
+      // biome-ignore lint/suspicious/noExplicitAny: test-only db access to backdate the heartbeat
+      const db = (store as any).db as { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+      db.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1").run(Date.now() - 60_000);
+    } finally {
+      store.close();
+    }
   }
 
   /** A lock-aware spawn: each child acquires `daemon_lock` under its own pid,
@@ -590,6 +607,36 @@ describe("superviseDaemon", () => {
     const endpoint = check.currentServerEndpoint();
     check.close();
     expect(endpoint).toBeNull();
+  });
+
+  test("reaps a stale lock on its periodic tick without spawning a replacement", async () => {
+    const dbPath = await freshDbPath();
+    const spawns: FakeProc[] = [];
+    const spawn: SpawnDaemon = () => {
+      const p = makeFakeProc(6_000 + spawns.length);
+      spawns.push(p);
+      // Crash during boot so the restart is parked behind a long backoff,
+      // leaving the periodic reaper tick as the only reclaimer in the window.
+      queueMicrotask(() => p.crash(1));
+      return p;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, {
+      reaperTickMs: 15,
+      restartInitialBackoffMs: 60_000,
+      lockTtlMs: 0,
+    });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => spawns.length >= 1 && spawns[0]!.exitCode !== null)).toBe(true);
+    // A crashed daemon's stale lock appears during the backoff window.
+    seedStaleLock(dbPath, 9_999);
+    expect(await waitFor(() => currentLockPid(dbPath) === null)).toBe(true);
+    // Reclaimed by the tick, not by a respawn.
+    expect(spawns.length).toBe(1);
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
   });
 });
 

@@ -327,8 +327,6 @@ export type {
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";
-export type { ReapOptions, ReapResult } from "./reaper.ts";
-export { DEFAULT_REAP_TTL_MS, reapStaleDaemon } from "./reaper.ts";
 export type {
   DaemonInfoFromStoreOptions,
   HealthDaemonInfo,

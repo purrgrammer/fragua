@@ -1161,7 +1161,7 @@ export interface IDaemonCoordinator {
   /**
    * Unconditionally delete whatever `daemon_lock` row exists, in a single
    * `DELETE FROM daemon_lock WHERE id = 1` statement. The low-level eviction
-   * primitive: the server reaper (after its own TTL check) and
+   * primitive: the harness reaper (after its own TTL check) and
    * {@link evictDaemonLockIfStale} call it. Prefer `evictDaemonLockIfStale`
    * over calling this directly so the TTL/liveness gate can't be skipped.
    */
@@ -1176,7 +1176,7 @@ export interface IDaemonCoordinator {
    * `DELETE`, so a daemon that re-acquired between the liveness snapshot and
    * the delete is spared (its fresh pid/heartbeat fails the guard). On a
    * successful eviction it emits `daemon.reaper_took_over` + a truthful
-   * `daemon.sweep_completed` so harness-supervised and server-reaper recoveries
+   * `daemon.sweep_completed` so harness-supervised recoveries
    * are audit-visible, mirroring the daemon's direct-takeover path.
    * `stalePid` / `priorHeartbeatAt` are populated only when `evicted` is true.
    */
