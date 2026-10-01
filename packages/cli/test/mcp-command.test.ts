@@ -266,6 +266,58 @@ describe("mcp login error paths (no listener / browser)", () => {
     store.close();
   });
 
+  test("a login clears the CSRF state + PKCE verifier left by an interrupted login, keeping tokens", async () => {
+    const dbPath = tempStore();
+    const url = "https://x.example.com/mcp";
+    const cwd = project({ mcpServers: { remote: { type: "http", url } } });
+    seedStore(
+      dbPath,
+      url,
+      JSON.stringify({
+        serverUrl: url,
+        tokens: { access_token: "at", token_type: "Bearer" },
+        oauthState: "stale-state",
+        codeVerifier: "stale-verifier",
+      }),
+    );
+    const code = await mcpLoginCommand(
+      "remote",
+      {},
+      { cwd, dbPath },
+      { transportFactory: () => ({ connect: async () => {}, finishAuth: async () => {}, close: async () => {} }) },
+    );
+    expect(code).toBe(0);
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    const blob = JSON.parse(store.getMcpOAuth(url) ?? "{}");
+    store.close();
+    expect(blob.oauthState).toBeUndefined();
+    expect(blob.codeVerifier).toBeUndefined();
+    expect(blob.tokens.access_token).toBe("at");
+  });
+
+  test("a hostile error message from the auth server is printed without control bytes", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    const code = await mcpLoginCommand(
+      "remote",
+      {},
+      { cwd, dbPath },
+      {
+        transportFactory: () => ({
+          connect: async () => {
+            throw new Error("access_denied\u001b[2J\u0007 by policy");
+          },
+          finishAuth: async () => {},
+          close: async () => {},
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(out()).toContain("access_denied[2J by policy");
+    expect(out()).not.toContain("\u001b");
+    expect(out()).not.toContain("\u0007");
+  });
+
   test("valid stored token → fast-path connect resolves → exit 0, transport closed", async () => {
     const dbPath = tempStore();
     const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });

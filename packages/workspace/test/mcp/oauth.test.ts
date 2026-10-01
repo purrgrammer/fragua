@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { OAuthTokens } from "@earendil-works/pi-mcp/oauth";
 import {
+  clearTransientOAuthState,
   type McpOAuthStore,
   makeMcpOAuthProvider,
   makeMcpOAuthStateStore,
@@ -173,6 +174,36 @@ describe("makeMcpOAuthStateStore", () => {
     const store = fakeStore();
     store.save(URL_A, JSON.stringify({ serverUrl: URL_A, tokens: { access_token: "y", token_type: "Bearer" } }));
     expect((await makeMcpOAuthStateStore(store, URL_A).load())?.serverUrl).toBe(URL_A);
+  });
+});
+
+describe("clearTransientOAuthState", () => {
+  test("drops oauthState + codeVerifier, keeps tokens and client registration", async () => {
+    const store = fakeStore();
+    const p = provider(store);
+    await p.saveTokens(tokens());
+    await p.saveClientInformation({ client_id: "dcr-client" });
+    await p.saveCodeVerifier("pkce-verifier-xyz");
+    const firstState = await p.state();
+    clearTransientOAuthState(store, URL_A);
+    const blob = parseOAuthBlob(store.dump().get(URL_A));
+    expect(blob?.oauthState).toBeUndefined();
+    expect(blob?.codeVerifier).toBeUndefined();
+    expect(blob?.tokens).toEqual(tokens());
+    expect(blob?.clientInformation).toEqual({ client_id: "dcr-client" });
+    expect(blob?.serverUrl).toBe(URL_A);
+    // pi-mcp's state() reuses a stored value; once cleared, the next login gets a fresh one.
+    expect(await provider(store).state()).not.toBe(firstState);
+  });
+
+  test("no row / no transient fields → no write", () => {
+    const store = fakeStore();
+    clearTransientOAuthState(store, URL_A);
+    expect(store.dump().has(URL_A)).toBe(false);
+    const settled = JSON.stringify({ serverUrl: URL_A, tokens: tokens() });
+    store.save(URL_A, settled);
+    clearTransientOAuthState(store, URL_A);
+    expect(store.dump().get(URL_A)).toBe(settled);
   });
 });
 

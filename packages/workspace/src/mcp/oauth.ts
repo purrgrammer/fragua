@@ -150,6 +150,22 @@ export function persistClientInformation(store: McpOAuthStore, url: string, info
   store.save(url, JSON.stringify(next));
 }
 
+/** Drop the per-login transients — the CSRF `oauthState` and the single-use
+ * PKCE `codeVerifier` — from the persisted blob, keeping tokens and client
+ * registration. pi-mcp's `McpOAuthProvider` never clears either after a
+ * successful exchange, and `state()` REUSES a stored `oauthState`, so without
+ * this every later login for the same URL would present the same CSRF value and
+ * the verifier would linger in the row (and any export of it). The login flow
+ * calls it before it starts (a stale value from an interrupted login must not be
+ * reused) and after it succeeds. A row without either field is left untouched. */
+export function clearTransientOAuthState(store: McpOAuthStore, url: string): void {
+  const current = parseOAuthBlob(store.load(url));
+  if (current === undefined) return;
+  if (current.oauthState === undefined && current.codeVerifier === undefined) return;
+  const { oauthState: _state, codeVerifier: _verifier, ...rest } = current;
+  store.save(url, JSON.stringify({ ...rest, serverUrl: rest.serverUrl ?? url }));
+}
+
 /** A headless provider for non-interactive contexts (the daemon connector, and
  * `mcp check`): it reads stored tokens and refreshes silently, but a flow that
  * would need a browser throws instead of opening one. Single source of the

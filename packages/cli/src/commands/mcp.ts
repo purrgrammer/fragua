@@ -20,6 +20,7 @@ import {
   OAuthCallbackServer,
 } from "@earendil-works/pi-mcp/oauth";
 import {
+  clearTransientOAuthState,
   createMcpConnector,
   hasStaticAuthHeader,
   isLoopbackHost,
@@ -427,6 +428,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
   });
 }
 
+/** Strip control bytes so a hostile `error_description` echoed by the auth
+ * server (it reaches us verbatim through the callback's rejection) can't inject
+ * terminal escapes when printed, and cap its length. */
+function sanitizeLoginError(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
+  return message.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+}
+
 async function runLoginFlow(
   server: string,
   url: string,
@@ -465,9 +475,13 @@ async function runLoginFlow(
           ? htmlPage("Authorization complete — you can close this tab and return to your terminal.")
           : htmlPage("Authorization failed — return to your terminal for details."),
     });
+    const oauthStore = makeMcpOAuthStore(client.store);
+    // A stale CSRF state / PKCE verifier from an interrupted login would be
+    // REUSED by pi-mcp's provider; start every login from fresh values.
+    clearTransientOAuthState(oauthStore, url);
     const provider = makeMcpOAuthProvider({
       url,
-      store: makeMcpOAuthStore(client.store),
+      store: oauthStore,
       redirectUrl: callbackServer.redirectUrl,
       onRedirect: (authUrl) => {
         console.log(chalk.bold("Open this URL to authorize:"));
@@ -503,7 +517,7 @@ async function runLoginFlow(
       // A 401 that needs the user surfaces as McpOAuthAuthorizationRequiredError;
       // anything else is a genuine connect failure.
       if (!(e instanceof McpOAuthAuthorizationRequiredError)) {
-        console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
+        console.error(chalk.red(`mcp: login failed: ${sanitizeLoginError(e)}`));
         return 1;
       }
     }
@@ -516,6 +530,7 @@ async function runLoginFlow(
     // Bound the token exchange — an auth server that goes unreachable between the
     // redirect and this call would otherwise hang the CLI indefinitely.
     await withTimeout(transport.finishAuth(code), 30_000, `timed out exchanging the auth code with ${server}`);
+    clearTransientOAuthState(oauthStore, url);
     // Persist a preset confidential client so the DAEMON — which builds its own
     // provider without these flags — can read client_id/secret to refresh tokens.
     // (With a preset, `McpOAuthProvider.saveClientInformation` is a no-op, so it
@@ -524,7 +539,7 @@ async function runLoginFlow(
     // then silently poisons every daemon run with no hint to `logout`.
     if (creds.clientId !== undefined) {
       persistClientInformation(
-        makeMcpOAuthStore(client.store),
+        oauthStore,
         url,
         creds.clientSecret !== undefined
           ? { client_id: creds.clientId, client_secret: creds.clientSecret }
@@ -534,7 +549,7 @@ async function runLoginFlow(
     console.log(chalk.green(`Logged in to ${server}.`));
     return 0;
   } catch (e) {
-    console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
+    console.error(chalk.red(`mcp: login failed: ${sanitizeLoginError(e)}`));
     return 1;
   } finally {
     await callbackServer?.close().catch(() => {});

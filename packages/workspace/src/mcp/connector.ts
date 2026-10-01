@@ -286,11 +286,14 @@ async function connectWithDeadline(
       timer.unref?.();
     }),
   ];
+  const abortError = (): Error => new Error("aborted");
+  let onAbort: (() => void) | undefined;
   if (signal) {
     races.push(
       new Promise<never>((_, reject) => {
-        if (signal.aborted) return reject(new Error("aborted"));
-        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        if (signal.aborted) return reject(abortError());
+        onAbort = () => reject(abortError());
+        signal.addEventListener("abort", onAbort, { once: true });
       }),
     );
   }
@@ -298,6 +301,9 @@ async function connectWithDeadline(
     await Promise.race(races);
   } finally {
     if (timer) clearTimeout(timer);
+    // The run's signal outlives this connect; drop the listener so repeated
+    // connects don't accumulate one closure each on it.
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 
