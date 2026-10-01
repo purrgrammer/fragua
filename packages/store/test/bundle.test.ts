@@ -1529,7 +1529,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
     expect(blobContent).toContain("[REDACTED");
 
     // The binary artifact ships unchanged, so CRED_SECRET may still be in the
-    // bundle (documented residual — see docs/proposals/secret-scrubbing.md §13).
+    // bundle (documented residual — see docs/proposals/archive/secret-scrubbing.md §13).
     const binRow = rows.find((r) => r.key === "data.bin");
     expect(binRow).toBeDefined();
     const binBlobEntry = entries.find((e) => e.name === `blobs/${binRow!.blobSha}`);

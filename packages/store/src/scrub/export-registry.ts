@@ -191,7 +191,7 @@ const TEXT_APPLICATION_MIMES = new Set([
  *
  * Text-ish = `text/*` or the application sub-types above.
  * Everything else (binary, unknown, null) is skipped — a known residual;
- * see docs/proposals/secret-scrubbing.md §13.
+ * see docs/proposals/archive/secret-scrubbing.md §13.
  */
 export function isTextMime(mime: string | null): boolean {
   if (mime == null) return false;

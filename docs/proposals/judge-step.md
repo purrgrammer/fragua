@@ -227,7 +227,7 @@ in order of preference:
    keep in sync at both ends, and it lives in the worktree (under `.fragua/`,
    so `accept` never stages it — the tool step must write inside the run's
    worktree, never a shared path, or parallel runs collide). The typed form is
-   [`tool-outputs.md`](tool-outputs.md) — `state: {diff_stat: ${{ outputs.diff_stat.stat }}}`
+   [`tool-outputs.md`](archive/tool-outputs.md) — `state: {diff_stat: ${{ outputs.diff_stat.stat }}}`
    — which is **unreviewed with a blocking finding (B2)**. Sequencing decision:
    ship the judge on the file bridge, use it as tool-outputs' first real
    consumer, and swap the bridge for typed outputs when that proposal lands.

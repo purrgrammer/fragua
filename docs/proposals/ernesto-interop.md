@@ -155,7 +155,7 @@ which then resolves its *own* workflow's `${{ inputs.X }}` over them. Ernesto's
 values. Non-scalar inputs (an object/array from a whole-string Ernesto token)
 ride `fragua ci --input-json '<json>'` — the handler `JSON.stringify`s its
 resolved inputs object once, and fragua validates it against the workflow's
-typed `inputs:` schema ([`structured-outputs.md`](structured-outputs.md) §12).
+typed `inputs:` schema ([`structured-outputs.md`](archive/structured-outputs.md) §12).
 No per-value encoding, no scalar-only wart.
 
 ### 5.2 Runner spec — subprocess via `fragua ci` (v1)
@@ -248,7 +248,7 @@ as it sees CAS tokens.
   (re-provisioned, ephemeral) workdir make retry idempotent by
   construction. Tool steps that deliberately reach outside (`curl`, `gh`)
   are the declared exception class —
-  [`tool-exec-variant.md`](tool-exec-variant.md)'s
+  [`tool-exec-variant.md`](archive/tool-exec-variant.md)'s
   `idempotent:` marker becomes load-bearing here, mapping onto Ernesto's
   `KindPolicy.idempotent`/retry posture.
 - **HITL: fail-fast in v1.** `fragua ci` stops with a non-zero exit on
@@ -256,7 +256,7 @@ as it sees CAS tokens.
   `error` (`code: 'fragua_hitl_unsupported'`), and Ernesto-side lint rejects
   a fragua workflow with a `human` node at settle. The bridged variant
   (resume across the process boundary against a pinned `--db`) is exactly the
-  surface [`hitl-channel.md`](hitl-channel.md) proposes (`--on-pause=emit`,
+  surface [`hitl-channel.md`](archive/hitl-channel.md) proposes (`--on-pause=emit`,
   `--resume`); it sequences after that ships, not in v1.
 - **Outputs: the typed envelope crosses as JSON; run-level outputs are the
   one real prerequisite.** A black-box step earns its place in Ernesto's DAG
@@ -265,7 +265,7 @@ as it sees CAS tokens.
   step outputs. With only `finalText` the fragua step is a display-only dead
   end. So `fragua ci` must emit the run's typed-partial output envelope as a
   terminal JSON object — designed in
-  [`structured-outputs.md`](structured-outputs.md) §11 (declared workflow
+  [`structured-outputs.md`](archive/structured-outputs.md) §11 (declared workflow
   `outputs:` block, absent ≠ `""` ≠ halt). The handler reads that object as
   the step's typed output; an absent field is handled by the consuming
   Ernesto step's own `skipIf`/`fallback`. A prototype may ship
@@ -285,7 +285,7 @@ as it sees CAS tokens.
     binds `outputs` into the DAG; it is the only new `ci` surface v1 needs.
   - **Known gap (state it, don't paper over it):** run-level outputs project
     only from `llm` producers, because tool-step production is deferred
-    ([`structured-outputs.md`](structured-outputs.md) §10 #3). A
+    ([`structured-outputs.md`](archive/structured-outputs.md) §10 #3). A
     *tool-terminal* fragua workflow — fetch a dataset, compute a value, emit
     a file — cannot yet surface that as a typed run-output, which is exactly
     the non-dev (data / image / transform) shape some embeddings want. v1's
@@ -342,7 +342,7 @@ Vocabulary-level alignment, pursued opportunistically — not shared code:
    without typed outputs can't participate in `depends`/`skipIf`/
    `fallback`/idempotency expressions). A run-level output mapping over
    fragua's structured-outputs grammar
-   ([`structured-outputs.md`](structured-outputs.md) §11) is the missing piece
+   ([`structured-outputs.md`](archive/structured-outputs.md) §11) is the missing piece
    that makes a fragua run *composable from outside* — on the critical path,
    not a candidate.
 4. **Pause facts → one `fact.run_paused { reason }`.** Both engines collapse
@@ -379,12 +379,12 @@ than deleted — the file:line audit is the part worth keeping.
 - Alejandro stays a reviewer on Ernesto-lib changes; taxonomy-affecting
   changes in either repo reference the shared spec version.
 - fragua-side work, v1 — small, because the subprocess seam ships today:
-  **(1)** run-level outputs ([`structured-outputs.md`](structured-outputs.md)
+  **(1)** run-level outputs ([`structured-outputs.md`](archive/structured-outputs.md)
   §11) — the one genuine prerequisite, and buildable on its own merit
   (fragua's own `fragua runs` output wants the same projection); **(2)**
   `fragua ci` emits the typed-partial output envelope as a terminal JSON
   object on `--json` + into the `--export` bundle; **(3)** object/array inputs
-  ([`structured-outputs.md`](structured-outputs.md) §12) — **pairs with (1)**
+  ([`structured-outputs.md`](archive/structured-outputs.md) §12) — **pairs with (1)**
   (same grammar + TypeBox path); ergonomics, not a hard blocker (per-value
   encoding works), but it dissolves the §5.1 input wart and is a standalone
   CLI UX win (`--input-json`, type-directed `--input` parse).
@@ -397,7 +397,7 @@ than deleted — the file:line audit is the part worth keeping.
   fragua's `run_paused` already carries `reason` for auto/operator). **Neither
   is a v1 blocker** — the §5.4 `ci` envelope emits the converged terminal
   `status` regardless, and pause convergence is internal. The HITL bridge
-  ([`hitl-channel.md`](hitl-channel.md), upgrades §5.4
+  ([`hitl-channel.md`](archive/hitl-channel.md), upgrades §5.4
   from fail-fast to resumable); the §5.5 in-process embed surface, **only when
   subprocess is proven and its limits bite** — not speculatively; closing the
   tool-terminal-output gap (§10 #3 of structured-outputs).

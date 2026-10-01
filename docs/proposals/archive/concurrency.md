@@ -20,7 +20,7 @@ join, which reads their typed outputs fail-closed.
 > workflow over a parameter sweep, isolated worktrees, joined by reading each
 > child's outputs) — is the other end of the recovery-granularity axis. It stays
 > future; see [`fan-out-runs.md`](fan-out-runs.md). This doc and
-> [`fan-out-nodes.md`](archive/fan-out-nodes.md) are about the intra-run primitive.
+> [`fan-out-nodes.md`](./fan-out-nodes.md) are about the intra-run primitive.
 
 ## The invariant that makes this sound — linearization, not isolation
 
@@ -185,10 +185,10 @@ any node).
 
 ## Relationship to other proposals
 
-- [`fan-out-nodes.md`](archive/fan-out-nodes.md) — the Model A spec (DSL, frontier
+- [`fan-out-nodes.md`](./fan-out-nodes.md) — the Model A spec (DSL, frontier
   execution, semaphore, validator, MVP scope, doors).
 - [`fan-out-runs.md`](fan-out-runs.md) — the cross-run primitive (`run:`); future.
-- [`deterministic-thread-id.md`](deterministic-thread-id.md) — prerequisite: a
+- [`deterministic-thread-id.md`](../deterministic-thread-id.md) — prerequisite: a
   thread is a single-writer log; concurrent branches each run on their own
   synthetic thread (E043). Ships with the frontier.
 - [`structured-outputs.md`](structured-outputs.md) (shipped) — the fail-closed

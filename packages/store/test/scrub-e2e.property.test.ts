@@ -1,4 +1,4 @@
-// End-to-end property test for the secret-scrubber (docs/proposals/secret-scrubbing.md §12).
+// End-to-end property test for the secret-scrubber (docs/proposals/archive/secret-scrubbing.md §12).
 //
 // Property: a randomly-generated secret seeded into EVERY scrubbable surface of a run
 // is ABSENT from the exported bundle bytes — verbatim AND in each declared encoding

@@ -378,7 +378,7 @@ Each rides its own proposal/PR; the MVP's contract admits each without a rewrite
 
 > **Shipped.** §§1–10 (per-step `outputs:`) and this increment are both built;
 > only §11.5 (`default:`) remains deferred. Driver: a fragua run embedded as a
-> single step in an outer engine ([`ernesto-interop.md`](ernesto-interop.md))
+> single step in an outer engine ([`ernesto-interop.md`](../ernesto-interop.md))
 > is a black box whose result the caller binds — a run exposing only thread
 > text is a dead end in the caller's DAG. The same projection is what a future
 > `fragua runs` verb would print as a run's typed result.
@@ -407,7 +407,7 @@ sub-record. The run-output's **type is the referenced field's type** — the §5
 grammar, no new type surface. (This mirrors Ernesto's
 `WorkflowDeclaration.outputs` `{ from, pick }` with node and path folded into
 one ref; the exact cross-engine key alignment is
-[`ernesto-interop.md`](ernesto-interop.md) open decision #4, not settled here.)
+[`ernesto-interop.md`](../ernesto-interop.md) open decision #4, not settled here.)
 
 **Why a projection, not the token.** `${{ outputs.X.f }}` is an in-graph
 *consumer* read and **fails closed** (§1) — an unpopulated read halts the
@@ -544,7 +544,7 @@ read as `${{ inputs.config.env }}` (dotted into the record) or
 3. **A whole-object form** — `--input-json '<json>'` (and/or `--inputs-file
    <path>`): the entire inputs object in one shot, validated against the same
    compiled `inputs:` schema. The ergonomic path for a **programmatic caller**
-   — the [`ernesto-interop.md`](ernesto-interop.md) `kind: 'fragua'` handler
+   — the [`ernesto-interop.md`](../ernesto-interop.md) `kind: 'fragua'` handler
    holds its inputs as one object and would otherwise decompose + per-value
    JSON-encode across N `--input` flags; with this it is one
    `JSON.stringify`, and typed objects round-trip natively.

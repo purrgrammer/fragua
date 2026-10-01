@@ -1,6 +1,6 @@
 // Canonical IR (intermediate representation) of a workflow Graph.
 //
-// (A) of docs/proposals/workflow-ir.md: persist the parsed Graph as JSON so
+// (A) of docs/proposals/archive/workflow-ir.md: persist the parsed Graph as JSON so
 // the dispatch path deserializes it instead of re-parsing source on every
 // load. `loc` (line/col) is validator-only metadata — consumed at upload when
 // the freshly-parsed Graph still carries it — and never belongs in the

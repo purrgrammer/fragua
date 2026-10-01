@@ -95,7 +95,7 @@ export interface NodeAttrs {
    * output names; values are restricted-profile type nodes. Validated at parse
    * time. An `llm` step emits via the provider-enforced `emit_output` tool; a
    * `tool` step emits via the `$FRAGUA_OUTPUT` file. See
-   * docs/proposals/structured-outputs.md and docs/proposals/tool-outputs.md. */
+   * docs/proposals/archive/structured-outputs.md and docs/proposals/archive/tool-outputs.md. */
   outputs?: OutputsDecl;
   /** Free-form text shown to the operator for type:human steps. */
   text?: string;
@@ -183,7 +183,7 @@ export interface InputDecl {
  * addressing, MINUS the wrapper and MINUS fail-closed — the run boundary is
  * typed-partial (an unproduced output is absent, never a halt). The projected
  * type is the referenced field's type (the §5 grammar; no new type surface).
- * See docs/proposals/structured-outputs.md §11. */
+ * See docs/proposals/archive/structured-outputs.md §11. */
 export interface RunOutputDecl {
   name: string;
   /** Producer step id (the `<node>` of `from: <node>.<path>`). */

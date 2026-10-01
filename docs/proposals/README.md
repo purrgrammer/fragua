@@ -2,37 +2,38 @@
 
 Design documents for work that is **not yet a frozen part of the spec**. Each
 file declares its `status` + `maturity` in its frontmatter; this index gives
-the cross-doc view. Shipped proposals move to [`archive/`](archive/).
+the cross-doc view.
 
 The authoritative description of shipped behaviour lives in
 [`docs/SPEC.md`](../SPEC.md) and [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md);
 this directory is for *active* design work and freeze checklists.
 
+**Rule.** A proposal stays live only while something is pulling on it: an open
+PR, a brief under `.fragua/reports/*/briefs/`, or a dated note in its
+frontmatter saying who picks it up and when. Anything shipped moves to
+[`archive/`](archive/) the day its PR merges; anything untouched for 90 days
+with none of the above moves there too, with its state recorded in the archive
+index so the thinking is not lost. The nightly `assess` run reports doc drift,
+and a stale proposal is the most common kind.
+
 ## Live
 
 | Doc | State | Open work |
 |---|---|---|
-| [`concurrency.md`](concurrency.md) | designed | Umbrella + decision record for parallel fan-out. The linearization invariant; the on-log frontier as the single intra-run model; the recovery-granularity axis (`branch:` / `run:`); doors (multi-node IN MVP, semaphore IN MVP, HITL-in-branch / nested / `map` deferred-but-sound). |
-| [`fact-taxonomy.md`](fact-taxonomy.md) | sketch (v0) | The shared `fact.*` event contract fragua + Ernesto both implement. Stance: **converge, don't reconcile**. Envelope, `fact.<subject>_<event>` grammar, the core event set with payload minima, the v0 convergence target — one `fact.run_terminated { status }` (Ernesto has it; fragua collapses its three terminal facts toward it, losslessly), and the extend/version/forward-compat rules. Open: the status string set. Not a shared package — each repo checks in a copy at the same `taxonomy_version`. The load-bearing half of `ernesto-interop.md`. |
-| [`ernesto-interop.md`](ernesto-interop.md) | sketch | Two engines, one contract: the shared `fact.*` taxonomy spec + Ernesto's `kind: 'fragua'` step. **v1 runner spec = subprocess** (`fragua ci --json`, ships today) — the child-process boundary dissolves runtime-mismatch, env-confinement, and crash-isolation; the in-process `@fragua/engine` embed (Bun split + `node:sqlite` + embed API) is **deferred, earned not speculative**. One v1 prerequisite: run-level outputs (structured-outputs §11). Plus the convergence list (env lifecycle, graph-as-data, pause taxonomy). Supersedes the embedding motivation of `embeddable-engine.md` (unmerged branch). |
-| [`deterministic-thread-id.md`](deterministic-thread-id.md) | partially shipped | E043 bars an explicit `thread:` on a branch, and synthetic thread ids are pass-qualified (`syntheticThreadId(node, iteration, pass)`; `messages.pass` scopes threadless rehydration). The `messages.thread_id` stamp-on-write column + thread-filtered reads remain designed, not built. |
-| [`fan-out-runs.md`](fan-out-runs.md) | specified (future) | Cross-run primitive (`run:` — N child runs over a parameter sweep, isolated worktrees, join by cross-run outputs read). The other end of the recovery-granularity axis; after the intra-run frontier. |
-| [`hitl-channel.md`](hitl-channel.md) | sketch | `fragua ci --on-pause=auto\|fail\|first\|emit`, `--resume`, console resolver. Route options on the pause fact are already shipped (§5.2). |
-| [`secret-scrubbing.md`](secret-scrubbing.md) | shipped-experimental | `scrubber:` config block (§15), `cwd` v1 contract call (full-redact vs basename-normalize), per-export label / `--keep-cwd-path` flags, V2 items. |
-| [`structured-outputs.md`](structured-outputs.md) | MVP shipped; §11–§12 designed | §12 (designed): object/array `inputs:` — lift the scalar-only gate, type-directed `--input` JSON parse + a whole-object `--input-json` (free TypeBox validation); pairs with §11, dissolves the `kind:'fragua'` input wart. §11 (designed, not built): run-level outputs — a top-level `outputs:` block projecting step outputs into a **typed-partial** egress envelope (absent ≠ `""`, absent ≠ halt), read-plane projection over the existing outputs index, E046/W018, `default:` deferred-but-sound. Driver: the `ernesto-interop.md` black-box step. MVP: `outputs:` on **`llm` steps only**; one type grammar shared with `inputs:` (provider-supported JSON-Schema subset, no recursion/`$ref`), compiled to TypeBox; `${{ outputs.X.f }}`, `emit_output` tool, fail-closed reads, native strict-mode via the tool channel; spill via the input CAS path; nonce-wrapped prompt interpolation. Tool production, route-carried outputs, native final-message JSON deferred (§10). `ir_version` bump. |
-| [`pi-085-auth-migration.md`](pi-085-auth-migration.md) | implemented | Migrated fragua off pi-ai's removed global OAuth registry, landing the pin bump to **0.87.1**. The registry is replaced by per-provider `ProviderAuth { apiKey?: ApiKeyAuth; oauth?: OAuthAuth }` read from `builtinProviders()`; `AuthStorage` keeps its own per-row store lock (login → `oauth.login`, refresh → `oauth.refresh`, token → `oauth.toAuth`) rather than routing through `Models.getAuth`. `modifyModels` was dropped (0.87.1 models are static; OAuth only changes request auth) along with the unused `ProviderConfigInput.oauth` field; the CLI login moved to the `AuthInteraction` `prompt`/`notify` shape; `mcp/oauth.ts` untouched. Authorize-URL health (issue #74) is pinned by `oauth-authorize-url.test.ts`. |
-| [`cache-retention.md`](cache-retention.md) | sketch | fragua never sets pi-ai's `cacheRetention`, so every provider falls back to a short default (5 min on Anthropic) and a stable prefix expires before the next run can read it. One `defaults.cache-retention: none \| short \| long` key threaded to `streamSimple`, reusing pi-ai's provider-neutral vocabulary so fragua never branches on provider or names a TTL. Open: which default to ship (`long` recommended; 2× write cost on Anthropic is the tradeoff). |
-| [`tool-exec-variant.md`](tool-exec-variant.md) | designed | 0.1.1. `exec: {cmd, args}` argv form + `idempotent:` marker on the `tool` kind. |
-| [`judge-step.md`](judge-step.md) | MVP built (unreviewed) | `type: judge` — a turn-less, tool-less node asking TypeSafe's Jev a map of typed `choice` / `score` / `noul` questions over a `state:` built from `${{ inputs }}` / `${{ outputs }}` / literal text / bounded read-only `{file}` leaves. Outputs are derived from `questions:` (never authored) and ride the structured-outputs spine; `decide.route` keys edge selection on a `choice` (with `min-confidence` + a declared `below:` route), `decide.outcome` thresholds a `noul` into success / fail so `goal_gate` / `retry:` compose. Reverses `outputs:` ⊕ `routes:` for `judge` only. No new fact, no `EVENT_CONTRACT_VERSION` bump; `ir_version` v4 identity converter, E047–E048 / W020–W021, `ctx.judge` + `provider_credentials('typesafe')`. Grounded in one live call; accuracy unmeasured. |
-| [`tool-outputs.md`](tool-outputs.md) | **shipped** (#80) | Typed `outputs:` on `tool` steps — the deferred follow-on 3 of `structured-outputs.md`. Emission through a `$FRAGUA_OUTPUT` scratch file allocated by a new optional `ExecutionEnvironment.createScratchFile` capability and read back through a retained fd, so a child that swaps a symlink/FIFO/device onto the path fails closed. Reuses the whole write-side spine — type grammar, outputs index, `fact.node_completed.payload.outputs`, blob spill, `${{ outputs.X.f }}`. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; `ir_version` bump (v5) + identity converter, parser gate widened with E053. Reverses the tool-production ban in SPEC §3.8. |
-| [`workflow-as-step.md`](workflow-as-step.md) | draft (panel not converged) | `type: workflow` — a workflow invoked as a step: one child run per step over the Model M spawn/park/join spine at N=1, the child's run-level `outputs:` as the step's outputs, `--base` as the worktree hand-off, signoff kept a top-level HITL. Motivating example: `converge.yaml` (work → review → fix → review). Open demands in [`workflow-as-step.critique.md`](workflow-as-step.critique.md). |
-| [`workflow-ir.md`](workflow-ir.md) | (A)+(C) shipped, (B) deferred | (B) — `sha = hash(canonical IR core)` — waits until the graph feature set is complete. §8 is the freeze gate + canonicalization checklist. |
-| [`worktree-opt-out.md`](worktree-opt-out.md) | draft (parked, unsound) | `--no-worktree` / in-place execution. Direction viable but draft refuted on its core `no-bump` claim (it IS an `EVENT_CONTRACT_VERSION` bump) and carries a real orphan+in-place crash-replay safety gap; both blocking. |
+| [`workflow-as-step.md`](workflow-as-step.md) | draft (panel not converged) | `type: workflow` — a workflow invoked as a step: one child run per step over the spawn/park/join spine at N=1, the child's run-level `outputs:` as the step's outputs, `--base` as the worktree hand-off, signoff kept a top-level HITL. The composition direction after the executor refactors landed. Open demands in [`workflow-as-step.critique.md`](workflow-as-step.critique.md). |
+| [`ernesto-interop.md`](ernesto-interop.md) | sketch | Two engines, one contract: the shared `fact.*` taxonomy spec + Ernesto's `kind: 'fragua'` step. **v1 runner spec = subprocess** (`fragua ci --json`, ships today); the in-process embed is deferred. Prerequisite (run-level outputs) has shipped. The load-bearing half is [`fact-taxonomy.md`](fact-taxonomy.md). |
+| [`fact-taxonomy.md`](fact-taxonomy.md) | sketch (v0) | The shared `fact.*` event contract fragua + Ernesto both implement. Stance: **converge, don't reconcile**. The v0 convergence target (one `fact.run_terminated { status }`, `fact.run_paused { reason }`) has shipped on the fragua side; open: the status string set and the cross-repo copy at the same `taxonomy_version`. |
+| [`deterministic-thread-id.md`](deterministic-thread-id.md) | partially shipped | E043 bars an explicit `thread:` on a branch, and synthetic thread ids are pass-qualified (`messages.pass` scopes threadless rehydration). The `messages.thread_id` stamp-on-write column + thread-filtered reads remain designed, not built. Small; pairs with any transcript-touching brief. |
+| [`judge-step.md`](judge-step.md) | MVP built; provider record in #129 | `type: judge` — turn-less typed decisions from a System One model over `state:` + `questions:`; `decide.route` / `decide.outcome`, `for-each` + `keep`, `composite:`. Moves to the archive when #129 merges and the §Open items are either shipped or filed as briefs. |
 
 ## Archived
 
-See [`archive/README.md`](archive/README.md). Shipped: `cli-topology.md`,
-`event-contract-version.md`, `bundles.md`, `large-run-inputs.md`,
-`reactive-frontier.md`, `fan-out-nodes.md`, `mcp-tools.md`,
-`reversible-migrations.md`, `typed-routing-struct.md`. Superseded:
-`db-import.md`.
+See [`archive/README.md`](archive/README.md) for the state of each. Shipped:
+`cli-topology.md`, `event-contract-version.md`, `bundles.md`,
+`large-run-inputs.md`, `reactive-frontier.md`, `fan-out-nodes.md`,
+`mcp-tools.md`, `reversible-migrations.md`, `typed-routing-struct.md`,
+`concurrency.md`, `structured-outputs.md`, `tool-outputs.md` (+ critique),
+`pi-085-auth-migration.md`, `secret-scrubbing.md` (experimental),
+`workflow-ir.md` (A + C). Superseded: `db-import.md`. Parked without a
+sponsor: `tool-exec-variant.md`, `hitl-channel.md`, `cache-retention.md`,
+`fan-out-runs.md`, `worktree-opt-out.md`.

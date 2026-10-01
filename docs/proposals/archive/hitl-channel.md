@@ -9,7 +9,7 @@ parent: cli-topology.md (archived)
 
 # Pluggable HITL channel
 
-> Child of [`cli-topology.md`](archive/cli-topology.md) (archived). An additive
+> Child of [`cli-topology.md`](./cli-topology.md) (archived). An additive
 > tail; blocks nothing. The resolver seam + queue resolver can land alone;
 > concrete channels host on fragua ci (shipped) and cli-store-client (shipped).
 >
