@@ -58,7 +58,7 @@ see `docs/ARCHITECTURE.md` and `docs/SPEC.md`.
 ## What fragua does not deliver today
 
 - **Multi-machine deployment** — single SQLite is the coordination surface; no story for multiple daemons across machines
-- **Token auth on the harness API** — localhost-only, no token auth in v0; revisit for shared/remote cases. A same-origin gate (Origin + Host allow-list, plus a JSON-only content-type requirement on bodied requests) does run before every route, so a web page open in the operator's browser on another origin cannot drive the control plane and DNS rebinding is blocked; the residual exposure is a compromised process on the same host, not a browser tab
+- **Token auth on the harness API** — localhost-only, no token auth in v0; revisit for shared/remote cases. A same-origin gate (Origin + Host allow-list, plus a JSON-only content-type requirement on bodied requests) does run before every route, so a web page open in the operator's browser on another origin cannot drive the control plane and DNS rebinding is blocked; the residual exposure is a compromised process on the same host, not a browser tab. The threat model is `docs/SECURITY.md`
 - **Watchdog for stuck-but-alive daemons** — resumability covers crash-restart but not fiber deadlock; planned heartbeat metric, deferred until foreground harness UX has soaked
 - **Postgres or non-SQLite backing** — `IEventStore` is synchronous; not a drop-in port
 - **Workflow hot-reload for in-flight runs** — `workflow_sha` is pinned at enqueue time

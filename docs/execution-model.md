@@ -85,29 +85,27 @@ order, `allowed_tools` order, or server response order.
 
 ---
 
-## 2c. Bash env-strip — provider credentials never reach shell steps
+## 2c. Bash env is deny-by-default — a shell sees only what the operator allowed
 
-Every `bash` call spawns `/bin/sh -c` with a filtered copy of the daemon's
-`process.env`. Under `fragua daemon` (and hence `fragua harness`) the filter
-strips, by default, every variable whose **name** ends in one of eight
-secret-shaped suffixes (the `CI_ENV_SECRET_SUFFIXES` set, matched
-case-insensitively): `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`,
-`*_CREDENTIAL`, `*_PASS`, `*_AUTH`, `*_PASSPHRASE` — plus the env-var names of
-any provider the daemon holds credentials for in its store. This is the same
-rule `fragua ci` applies, so a workflow's shell steps can't read the operator's
-LLM-provider keys. Note the strip is **broader than provider credentials
-alone**: generic secrets like `DATABASE_PASSWORD`, `REDIS_AUTH`,
-`VAULT_PASSPHRASE`, `S3_ACCESS_KEY`, `MYSQL_PASS`, or `SIGNING_KEY` are removed
-too (empty values included), with no diagnostic. The strip is applied at spawn
-time, so a secret-named variable set *after* the daemon started is still removed.
+Every `bash` call (and every `tool`-node `run:`) spawns `/bin/sh -c` with an
+environment **built from an allow-list**, not a filtered copy of the daemon's
+`process.env`. The baseline a shell always receives is `PATH`, `HOME`, `TMPDIR`,
+`TERM`, `SHELL`, `USER`, `LANG`, and every `LC_*`. Everything else is absent
+unless the operator names it: under `fragua daemon` / `fragua harness` through
+`bash.env-passthrough` in `.fragua/config.yaml` (below), under `fragua ci`
+through `--allow-env NAME` (see [CI.md](CI.md)). Provider-credential names are
+refused from both lists. Engine variables a step needs (`FRAGUA_OUTPUT` for a
+`tool` producer) are injected per step through the explicit per-call env, never
+admitted by an ambient prefix. The allow-list is applied at spawn time, so the
+daemon's own environment changing mid-run changes nothing a shell sees.
 
-The **worktree bootstrap command runs under this same strip** — `init()` shells
-the bootstrap through the same filtered environment as every `bash` step. So a
-`bun install` that needs `NPM_TOKEN`, a `gh auth login` needing `GITHUB_TOKEN`,
-or a `pip install` against a `*_PASSWORD`-shaped index URL silently loses those
-variables. To re-admit one, add its name to `bash.env-passthrough` (below) — or,
-for an actual provider credential, migrate it into the store via `fragua
-providers` (passthrough refuses provider credentials).
+The **worktree bootstrap command runs under the same allow-list** — `init()`
+shells the bootstrap through the same environment as every `bash` step. So a
+`bun install` that needs `NPM_TOKEN` or a `gh` call that needs `GH_TOKEN` sees
+neither unless it is named. To admit one, add its name to `bash.env-passthrough`
+(below); for an actual provider credential, hold it in the store via `fragua
+providers` (passthrough refuses provider credentials). What this does and does
+not defend is spelled out in [SECURITY.md](SECURITY.md) §4–§5.
 
 To re-admit a specific non-credential variable — e.g. `GH_TOKEN` for a step that
 shells out to `gh` — list it under `bash.env-passthrough` in
