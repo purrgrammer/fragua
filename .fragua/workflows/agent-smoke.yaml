@@ -1,0 +1,31 @@
+# agent-smoke.yaml — the smallest run that exercises the opt-in `agent` tool
+# end to end: one caller turn delegates two disjoint file writes to two
+# workers (concurrent, same worktree, typed outputs back), then reports.
+# Cheap by construction: haiku everywhere, a tight budget, no repo reads.
+#
+#   bun run fragua run agent-smoke
+name: agent-smoke
+goal: Prove the agent tool runs a worker in the caller's worktree and hands typed outputs back.
+
+budget: 0.50
+budget-policy: stop
+
+defaults:
+  provider: anthropic
+  model: claude-haiku-4-5
+
+steps:
+  orchestrate:
+    type: llm
+    allowed-tools: [read, write, agent]
+    timeout-minutes: 5
+    prompt: |
+      Delegate two tasks to two separate `agent` calls IN THE SAME MESSAGE so
+      they run concurrently. Each worker: `allowed_tools: ["write"]`, an
+      `outputs` schema of `{ "path": { "type": "string" } }`.
+        1. Write the file `smoke/alpha.txt` containing exactly `alpha`.
+        2. Write the file `smoke/beta.txt` containing exactly `beta`.
+      When both return, `read` both files yourself and reply with one line per
+      worker: `<worker status> <outputs.path> <file contents>`. Do not write
+      the files yourself.
+    next: exit

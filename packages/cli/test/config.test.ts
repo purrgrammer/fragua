@@ -55,6 +55,42 @@ judge:
     expect((await load()).judge).toEqual({ provider: "ollaya", model: "jev-1.13.0" });
   });
 
+  test("agent: parses kebab keys and merges one level deep, project over global", async () => {
+    await writeGlobal(`
+agent:
+  max-cost: 1.5
+  max-turns: 40
+  timeout-minutes: 10
+  concurrency: 4
+`);
+    await write(`
+agent:
+  max-cost: 3
+  concurrency: 2
+`);
+    // Project scalars win; the global max-turns / timeout-minutes survive.
+    expect((await load()).agent).toEqual({
+      "max-cost": 3,
+      "max-turns": 40,
+      "timeout-minutes": 10,
+      concurrency: 2,
+    });
+  });
+
+  test("an unknown key under agent: is warned about and stripped, not carried", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await write(`
+agent:
+  max-cost: 1
+  maxCost: 9
+`);
+      expect((await load()).agent).toEqual({ "max-cost": 1 });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("an unknown key under judge: is warned about and stripped, not carried", async () => {
     // Records are defined by `provider_config` rows; this block only selects,
     // so a `baseUrl` here is a mistake worth naming rather than honouring.

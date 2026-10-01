@@ -73,7 +73,10 @@ export function selectAndGateTools(
   const mcpPrefixes = declaredMcpServers.map((s) => mcpToolPrefix(s));
   const willMaterialise = (name: string): boolean =>
     isMcpToolName(name) && mcpPrefixes.some((p) => normalizeMcpToolRef(name).startsWith(p));
-  const gateAllow = allow?.filter((a) => !willMaterialise(a));
+  // `agent` is synthesised per-call by the backend (not a registry tool), on
+  // the same terms as `route` / `emit_output` — exempt it from the
+  // empty-registry gate so `allowed-tools: [agent]` alone is legal.
+  const gateAllow = allow?.filter((a) => !willMaterialise(a) && a !== "agent");
   // An `mcp__*` allow entry lands in `gateAllow` only when its server ISN'T in
   // `mcp-servers:` (a declared server's tools are exempted via `willMaterialise`),
   // so it can NEVER resolve. Trip on that regardless of whether a core tool was
@@ -242,8 +245,12 @@ export function assembleAgentTools(args: {
   effectiveEnv: ExecutionEnvironment;
   nodeRoutes: string[] | undefined;
   outputsDecl: OutputsDecl | undefined;
+  /** Synthesised `agent` tool, present iff the node opted in via
+   * `allowed-tools: [agent]`. Appended like `route` / `emit_output` but
+   * callable any number of times (not a terminating exit). */
+  agentTool?: AgentTool;
 }): { tools: AgentTool[]; fraguaContext: FraguaToolContext & { skillCatalog?: readonly Skill[] } } {
-  const { input, finalTools, effectiveEnv, nodeRoutes, outputsDecl } = args;
+  const { input, finalTools, effectiveEnv, nodeRoutes, outputsDecl, agentTool } = args;
   // Per-run fragua context. `skillCatalog` is patched in after the system
   // prompt resolves; tools captured by `toAgentTool` close over this same
   // object reference, so the later patch is visible to every tool call.
@@ -271,6 +278,7 @@ export function assembleAgentTools(args: {
   } else if (outputsDecl !== undefined) {
     tools.push(buildEmitOutputTool(outputsDecl));
   }
+  if (agentTool !== undefined) tools.push(agentTool);
   // Canonical tool order: definitions head the provider's prompt-cache prefix,
   // so sorting by name makes the segment a pure function of the effective tool
   // SET regardless of how the tools were assembled.

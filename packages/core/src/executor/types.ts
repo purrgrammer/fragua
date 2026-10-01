@@ -53,8 +53,12 @@ export interface LlmInput {
    * The handler-bridge wires it to `ctx.messages.append` so rows land
    * in the `messages` table (§I9 — JSON, unbounded, distinct from the
    * 4KB event payload cap §I7). When omitted, messages don't land
-   * anywhere — fine for tests that only care about events. */
-  persistMessage?: (message: AgentMessage) => void;
+   * anywhere — fine for tests that only care about events.
+   *
+   * `opts.nodeId` overrides the row's node id — the `agent` tool passes a
+   * synthetic `__agent.*` id so a worker's transcript lands off the caller's
+   * node and out of every hydration path. */
+  persistMessage?: (message: AgentMessage, opts?: { nodeId?: string }) => void;
   /** Per-run shell + filesystem environment. When set, the backend
    * uses this for tool execution (read/write/edit/bash) and context-
    * file loads instead of falling back to its construction-time env.

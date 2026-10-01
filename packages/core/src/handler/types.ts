@@ -102,8 +102,13 @@ export interface MessagesApi {
   /** Append an LLM-visible message row. Stores the full pi-agent-core
    * `AgentMessage` shape (including tool_use / tool_result / thinking
    * block structure, signatures, custom types). Round-trips through
-   * JSON losslessly. */
-  append(message: AgentMessage): { ordinal: number };
+   * JSON losslessly.
+   *
+   * `opts.nodeId` overrides the dispatch's node id for this row — used by the
+   * `agent` tool to persist a worker's transcript under its reserved synthetic
+   * node id (`__agent.*`) rather than the caller's, so neither hydration path
+   * absorbs it. Omit for normal handler messages. */
+  append(message: AgentMessage, opts?: { nodeId?: string }): { ordinal: number };
   recent(n: number): HandlerMessage[];
   since(ordinal: number): HandlerMessage[];
 }

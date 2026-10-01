@@ -7,7 +7,7 @@
 //                                      Overlays global; project keys win.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `judge`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`)
+// (`defaults`, `judge`, `agent`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`)
 // merge one
 // level deep so a project config can override `defaults.model` without losing
 // the global `summariser` block. (`bash.env-passthrough` is an array, replaced
@@ -53,6 +53,21 @@ const Defaults = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     permissions: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** Caps + defaults for the opt-in `agent` tool (orchestrator-workers). Threaded
+ * to the llm backend like `judge:`. Kebab keys, matching `bash.env-passthrough`
+ * / `auto-title`. `max-cost` bounds one worker's spend (a per-call `max_cost_usd`
+ * argument overrides it); `max-turns` / `timeout-minutes` bound a worker that
+ * spends little but never stops; `concurrency` caps concurrent workers per turn. */
+const Agent = Type.Object(
+  {
+    "max-cost": Type.Optional(Type.Number({ minimum: 0 })),
+    "max-turns": Type.Optional(Type.Integer({ minimum: 1 })),
+    "timeout-minutes": Type.Optional(Type.Number({ minimum: 0 })),
+    concurrency: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );
@@ -160,6 +175,8 @@ export const FraguaConfigSchema = Type.Object(
     defaults: Type.Optional(Defaults),
     // Default judge (System One) backend. See the `Judge` schema above.
     judge: Type.Optional(Judge),
+    // Caps + defaults for the opt-in `agent` tool. See the `Agent` schema above.
+    agent: Type.Optional(Agent),
     // Weak-model summariser. Powers async run-title generation (auto-title)
     // and per-node `summary=low|medium|high` transcript compression. Always
     // cheaper than the primary coding model. Omit to disable both paths.

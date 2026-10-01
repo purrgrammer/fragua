@@ -331,6 +331,39 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
+  // E058: an authored step id starting with `__` collides with the reserved
+  // synthetic node-id prefix (`__summary.*`, `__agent.*`). The parser never
+  // mints a `__`-prefixed node, so any such id is author-declared — reject it
+  // so a step can never shadow a summariser / worker transcript.
+  for (const n of nodes) {
+    if (!n.id.startsWith("__")) continue;
+    diags.push({
+      severity: "error",
+      code: "E058",
+      message: `node id "${n.id}" starts with "__", reserved for synthetic node ids (__summary.*, __agent.*) — rename this step`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
+  // W023: `allowed-tools` names `agent` on a node that can reach no mutator
+  // tool. Legal — a read-only researcher — but usually the author meant a
+  // `parallel` node (cheaper to reason about, read-only by construction). A
+  // worker that only reads produces nothing back except its `outputs`; if that
+  // is the intent, say so, otherwise this is a mis-shaped fan-out.
+  for (const n of nodes) {
+    if (n.type !== "llm") continue;
+    if (!(n.attrs.allowed_tools ?? []).includes("agent")) continue;
+    if (writeReachableTools(n.attrs).length > 0) continue;
+    diags.push({
+      severity: "warning",
+      code: "W023",
+      message: `node "${n.id}" allows \`agent\` but reaches no mutator tool (bash / write / edit) — its workers can only read; if you meant a read-only fan-out a \`parallel\` node is cheaper, otherwise give it a write-class tool`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
   // E030: `${{ inputs.x }}` references an input not declared in the
   // workflow's `inputs:` block. Substitution would silently collapse the
   // placeholder to "" at runtime, so catch the typo / missing declaration

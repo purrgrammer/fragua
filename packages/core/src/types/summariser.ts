@@ -100,3 +100,35 @@ export function summarySyntheticNodeId(callerNodeId: string, iteration?: { n: nu
   const base = `${SYNTHETIC_NODE_PREFIX}.${callerNodeId}`;
   return iteration ? `${base}#${iteration.n}` : base;
 }
+
+/** Reserved prefix for `agent`-tool worker transcripts. Joins `__summary`
+ * as a synthetic node-id prefix: worker messages persist under this id so
+ * neither hydration path (explicit-thread `node_id` match, threadless
+ * `(nodeId, iteration, pass)` match) can absorb a worker transcript. */
+export const AGENT_SYNTHETIC_NODE_PREFIX = "__agent";
+
+/** Synthetic node id for one `agent`-tool worker: `__agent.<caller>#<n>/<toolCallId>`.
+ * `iteration` and `toolCallId` make it unique per caller per call, so N
+ * concurrent workers under one turn never collide. */
+export function agentSyntheticNodeId(callerNodeId: string, iteration: { n: number }, toolCallId: string): string {
+  return `${AGENT_SYNTHETIC_NODE_PREFIX}.${callerNodeId}#${iteration.n}/${toolCallId}`;
+}
+
+/** True when `nodeId` is a reserved synthetic node id (`__summary.*` /
+ * `__agent.*`). The one predicate the hydration loaders and the graph-routing
+ * guards share so a synthetic transcript never enters an LLM's context. A real
+ * workflow step id can never start with `__` (validator E058 / E028 / E029). */
+export function isSyntheticNodeId(nodeId: string | null | undefined): boolean {
+  return typeof nodeId === "string" && nodeId.startsWith("__");
+}
+
+/** The caller node id of an `agent`-tool worker's synthetic node id
+ * (`__agent.<caller>#<n>/<call>`), or `undefined` for any other id. Shared by
+ * the steps projection (nesting) and the web Cost breakdown (labels); lives on
+ * the browser-safe main entry so the web bundle never pulls the read plane. */
+export function agentWorkerCaller(nodeId: string): string | undefined {
+  if (!nodeId.startsWith(`${AGENT_SYNTHETIC_NODE_PREFIX}.`)) return undefined;
+  const rest = nodeId.slice(AGENT_SYNTHETIC_NODE_PREFIX.length + 1);
+  const hash = rest.indexOf("#");
+  return hash > 0 ? rest.slice(0, hash) : undefined;
+}

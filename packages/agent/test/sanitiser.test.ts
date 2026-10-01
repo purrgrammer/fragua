@@ -392,3 +392,46 @@ describe("sanitiseUnpairedToolCalls", () => {
     expect(out[0]?.role).toBe("user");
   });
 });
+
+describe("sanitiseUnpairedToolCalls — agent tool", () => {
+  test("a dangling `agent` call (never in the registry) becomes an error toolResult, never a re-run", async () => {
+    const registry = new ToolRegistry();
+    const messages: AgentMessage[] = [
+      { role: "user", content: "orchestrate", timestamp: 0 } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc_agent", name: "agent", arguments: { task: "write the migration" } }],
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+        api: "stub",
+        timestamp: 0,
+      } as unknown as AgentMessage,
+    ];
+    const out = await sanitiseUnpairedToolCalls(messages, {
+      toolRegistry: registry,
+      env: new LocalEnvironment({ cwd: "/tmp" }),
+      fraguaContext: freshFraguaContext(),
+    });
+    expect(out.length).toBe(messages.length + 1);
+    const tail = out[out.length - 1] as AgentMessage & {
+      role: "toolResult";
+      toolCallId: string;
+      isError: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(tail.role).toBe("toolResult");
+    expect(tail.toolCallId).toBe("tc_agent");
+    expect(tail.isError).toBe(true);
+    expect(tail.content[0]?.text).toContain("interrupted by a daemon restart");
+    expect(tail.content[0]?.text).toContain("'agent'");
+  });
+});

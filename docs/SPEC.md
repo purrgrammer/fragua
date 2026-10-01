@@ -86,7 +86,7 @@ A workflow is a YAML document with `name:` and a `steps:` map at the root (GitHu
 | `parallel` | fork-all into ≥2 concurrent branch sub-pipelines, joined by `wait_all` (§3.1.1) |
 | `exit` | reserved graceful-halt sink |
 
-`start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`).
+`start` is synthesized by the parser (the entry node pointing at the first declared step) and is never authored; `exit` is the reserved sink. Declaring a step named `start` or `exit` with a mismatched type is rejected (`E029` / `E028`). Step ids beginning with `__` are reserved for synthetic node ids (`__summary.*` for the summariser / auto-titler, `__agent.*` for `agent`-tool worker transcripts) and are rejected (`E058`).
 
 Most steps run one handler to completion before the next dispatches. The **one** concurrent-dispatch primitive is the `parallel` node (§3.1.1); everything else is sequential.
 
@@ -354,7 +354,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **A blocking interviewer interface.** Human input is `human` nodes (`type: human`) plus the `intent.human_input` event — the executor parks the run, it never blocks on a person.
 - **An `auto_status` node attribute.** Fragua handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **A `loop_restart` edge attribute.** Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
-- **Non-`wait_all` joins, cross-run fan-in, and dynamic forks.** The intra-run `parallel` fork-all → `wait_all` primitive ships (§3.1.1), but `wait_any` / `race` / `quorum` joins are excluded **by design** — they break the single-entry/single-exit invariant that keeps dominance (and thus budget / goal-gate scoping) well-defined. Fan-*in* across runs is likewise out of scope: composition across runs stays artifact-sharing, not a graph join. And a runtime-sized fork is out: a branch set is materialised at parse time, never streamed during dispatch.
+- **Non-`wait_all` joins, cross-run fan-in, and dynamic forks.** The intra-run `parallel` fork-all → `wait_all` primitive ships (§3.1.1), but `wait_any` / `race` / `quorum` joins are excluded **by design** — they break the single-entry/single-exit invariant that keeps dominance (and thus budget / goal-gate scoping) well-defined. Fan-*in* across runs is likewise out of scope: composition across runs stays artifact-sharing, not a graph join. And a runtime-sized fork is out: a branch set is materialised at parse time, never streamed during dispatch. A runtime-sized fan-out is available *inside* an `llm` turn via the `agent` tool; it is a tool call, not a fork — the graph sees one node.
 
 **Surfaced as warnings, not errors:**
 

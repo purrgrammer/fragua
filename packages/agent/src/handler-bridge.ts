@@ -9,6 +9,7 @@
 import {
   type EventType,
   getContext,
+  isSyntheticNodeId,
   type LlmBackend,
   type Node,
   type Outcome,
@@ -232,20 +233,26 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
       ...(ctx.judge !== undefined ? { judge: ctx.judge } : {}),
       ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
-      persistMessage: (message) => {
-        // Dedup system + initial-user messages against the most
-        // recent persisted ones for this (run, nodeId). See the
-        // seed block above for the rationale.
-        if (message.role === "system" && typeof message.content === "string") {
-          if (lastPersistedSystem === message.content) return;
-          lastPersistedSystem = message.content;
-        } else if (message.role === "user") {
-          const serialised = JSON.stringify(message.content);
-          if (lastPersistedUser === serialised) return;
-          lastPersistedUser = serialised;
+      persistMessage: (message, persistOpts) => {
+        // A worker (`agent` tool) persists under a synthetic node id — skip the
+        // caller-scoped dedup memo entirely (its rows are keyed off a different
+        // node) and stamp the override on append.
+        const appendOpts = persistOpts?.nodeId !== undefined ? { nodeId: persistOpts.nodeId } : undefined;
+        if (appendOpts === undefined) {
+          // Dedup system + initial-user messages against the most
+          // recent persisted ones for this (run, nodeId). See the
+          // seed block above for the rationale.
+          if (message.role === "system" && typeof message.content === "string") {
+            if (lastPersistedSystem === message.content) return;
+            lastPersistedSystem = message.content;
+          } else if (message.role === "user") {
+            const serialised = JSON.stringify(message.content);
+            if (lastPersistedUser === serialised) return;
+            lastPersistedUser = serialised;
+          }
         }
         try {
-          ctx.messages.append(message);
+          ctx.messages.append(message, appendOpts);
           return;
         } catch (err) {
           if (!(err instanceof MessageTooLargeError)) throw err;
@@ -267,11 +274,14 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
             : `[message too large (${err.sizeBytes} bytes); spill failed]`;
           void emit("agent.warning", { message: detail });
           try {
-            ctx.messages.append({
-              role: message.role,
-              content: [{ type: "text", text: detail }],
-              timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
-            } as AgentMessage);
+            ctx.messages.append(
+              {
+                role: message.role,
+                content: [{ type: "text", text: detail }],
+                timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
+              } as AgentMessage,
+              appendOpts,
+            );
           } catch {
             // Placeholder somehow also over-limit — drop silently, the
             // warning event already landed.
@@ -398,7 +408,11 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
  *
  * Returns `undefined` when nothing is persisted. */
 function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly AgentMessage[] | undefined {
-  const graphLevel = ctx.messages.since(0);
+  // Synthetic worker rows (`__agent.*`) / summariser rows (`__summary.*`) never
+  // enter an LLM's context — exclude them BEFORE the graph-level fallback so a
+  // worker transcript can't be absorbed by a thread member (its own node or a
+  // sibling sharing the thread) whose id happens to match nothing.
+  const graphLevel = ctx.messages.since(0).filter((m) => !isSyntheticNodeId(m.nodeId));
   const byNode = graphLevel.filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : graphLevel;
   if (rows.length === 0) return undefined;
@@ -420,7 +434,10 @@ const NON_LLM_CONTEXT_ROLES: ReadonlySet<string> = new Set(["system", "tool_node
 function loadPriorMessagesForNode(ctx: HandlerContext, pass: number): readonly AgentMessage[] | undefined {
   const rows = ctx.messages
     .since(0)
-    .filter((m) => m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass);
+    .filter(
+      (m) =>
+        !isSyntheticNodeId(m.nodeId) && m.nodeId === ctx.nodeId && m.iteration === ctx.iteration && m.pass === pass,
+    );
   if (rows.length === 0) return undefined;
   const messages = rows.map((row) => row.content).filter((m) => !NON_LLM_CONTEXT_ROLES.has(m.role));
   return messages.length > 0 ? messages : undefined;

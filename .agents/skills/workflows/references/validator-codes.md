@@ -55,6 +55,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | E057 | A step sets `retry_target` but is not a goal gate (no `goal_gate` / not authored via `retry:`). `retry_target` only drives goal-gate retargeting (SPEC §3.7); a plain step's failure routes via `on: {fail: …}` (bounded by `max-retries`, SPEC §3.1). Author the gate with `retry: <step>`, or use a `fail` edge. |
 | E055 | A `judge` step's `provider:` names a backend no record is configured for. Built-ins are `typesafe` and `ollaya`; add others as a `judge:<id>` row in `provider_config`. Offline (`fragua validate`) this is a warning, since a row may exist in a store this process cannot see. |
 | E056 | A `judge` step resolves to a provider that declares no default model and names no `model:`. Model ids do not cross providers, so there is nothing to fall back to. |
+| E058 | An authored step id starts with `__`, reserved for synthetic node ids (`__summary.*`, `__agent.*`). Rename the step. |
 
 ## Warnings
 
@@ -74,6 +75,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W020 | A `judge` routes on a ≥ 3-way `choice` with no floor — a spread distribution routes silently; add `min-confidence` or `min-probability` + `below:` to escalate torn cases. |
 | W021 | A `judge` carries more than 16 KiB of literal `state:` text — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately. |
 | W022 | A `for-each` judge question writes `item.<field>` outside backticks — only a backticked path is re-aimed at the current item; the model sees the literal words. |
+| W023 | A step lists `agent` in `allowed-tools` but reaches no mutator tool (`bash` / `write` / `edit`) — its workers can only read. Legal (read-only researchers), but usually a read-only fan-out is cheaper as a `parallel` node; give it a write-class tool if the workers are meant to write. |
 
 ## Removed codes — these no longer fire
 

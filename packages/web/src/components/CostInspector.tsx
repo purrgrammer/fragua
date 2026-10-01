@@ -22,6 +22,7 @@
 //     premium. Both are shown as their own breakdown lines so the
 //     popover communicates exactly where the run's spend went.
 
+import { agentWorkerCaller } from "@fragua/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
 import { Fragment, useEffect, useMemo } from "react";
@@ -259,7 +260,8 @@ function ParallelCostGroup({
     })
     .map((e) => e.b);
   const now = useNow(1_000, groupTicking);
-  const ParallelIcon = nodeTypeIcon(nodeTypes.get(parentNodeId) ?? "parallel");
+  const isWorkerGroup = branches.length > 0 && branches.every((b) => agentWorkerCaller(b.nodeId) !== undefined);
+  const ParallelIcon = nodeTypeIcon(nodeTypes.get(parentNodeId) ?? (isWorkerGroup ? "llm" : "parallel"));
   let costUsd = 0;
   let anyCost = false;
   let minStart = Number.POSITIVE_INFINITY;
@@ -286,6 +288,11 @@ function ParallelCostGroup({
         <span className="flex items-center gap-2 truncate text-sm font-semibold text-sw-text">
           <ParallelIcon className="size-3.5 shrink-0 text-sw-muted" aria-hidden />
           <span className="truncate">{parentNodeId}</span>
+          {isWorkerGroup && (
+            <span className="font-mono text-xs text-sw-muted" data-testid={`worker-group-${parentNodeId}`}>
+              {branches.length === 1 ? "1 worker" : `${branches.length} workers`}
+            </span>
+          )}
         </span>
         <span className={`${chip} justify-self-end`}>
           {spanMs !== undefined && (
@@ -321,7 +328,7 @@ function ParallelCostGroup({
             )}
             <StepCostRow
               step={b}
-              nodeType={nodeTypes.get(b.nodeId)}
+              nodeType={nodeTypes.get(b.nodeId) ?? (isWorkerGroup ? "llm" : undefined)}
               // A branch has no sequential "next" — its successor is the join sink
               // after the barrier, not the sibling that happens to start next. So a
               // still-running branch ticks live instead of freezing at the gap to a
@@ -438,6 +445,15 @@ function useStepModel(provider: string | undefined, modelId: string | undefined)
 }
 
 const COST_RATE_DIVISOR = 1_000_000;
+
+/** Display name for a step row. An `agent`-tool worker's synthetic node id
+ * (`__agent.<caller>#<n>/<toolCallId>`) is addressable, not readable: show
+ * it as `worker · <call suffix>` under its caller's group. */
+function stepLabel(nodeId: string): string {
+  if (agentWorkerCaller(nodeId) === undefined) return nodeId;
+  const call = nodeId.slice(nodeId.lastIndexOf("/") + 1);
+  return `worker · ${call.length > 8 ? call.slice(-8) : call}`;
+}
 
 function StepCostRow({
   step,
@@ -558,7 +574,7 @@ function StepCostRow({
     <div data-testid={`step-${step.stepIdx}`} data-branch={indent ? "true" : undefined} className={rowGridClass}>
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
         <TypeIcon className="size-3.5 shrink-0 text-sw-muted" aria-hidden />
-        <span className="truncate">{step.nodeId}</span>
+        <span className="truncate">{stepLabel(step.nodeId)}</span>
         {/* Model the step ran on — only llm steps carry one. */}
         {step.model && <ModelBadge provider={step.provider} model={step.model} className="text-sw-xs" />}
         {step.iteration && (

@@ -1,7 +1,7 @@
 ---
 title: "`agent` tool — orchestrator-workers inside an `llm` turn"
 summary: "An opt-in LLM-callable tool, `agent({ task, … })`, that runs a bounded worker agent loop INSIDE the calling `llm` turn: same run, same worktree, fresh context, a tool subset of the caller's, its own cost cap, its own addressable transcript, and typed outputs back. It is the orchestrator-workers pattern — fan-out whose width the model decides at runtime — placed in the one region of the engine that is already non-deterministic (the handler), so the graph still sees one node, one turn, one `fact.node_completed`. NOT a child run: the motivating consumer (`work::implement` delegating disjoint packages of one plan) needs workers writing into ONE tree, which the Model M child-run spine (isolated worktree per child) cannot hand back without a merge step. Synthesised per call in `@fragua/agent` beside `route` / `emit_output` (workspace cannot see the backend). Worker messages persist in the parent run's `messages` under a reserved synthetic node id, `__agent.<caller>#<iteration>/<tool-call-id>`, the same device the summariser and auto-titler already use for their event envelopes (`__summary.*`), so neither hydration path (`node_id`-matched explicit threads, `(nodeId, iteration, pass)`-matched synthetic threads) can absorb a worker transcript, and the UI folds each worker under its tool call. Cost lands as `cost.recorded` on the calling node through the same emit, so the daemon's existing per-node / per-run enforcement hook counts worker spend live; a per-worker cap is a tool argument with a config-cascade default. Crash mid-worker surfaces to the caller as a dangling non-idempotent tool call (existing `sanitiseUnpairedToolCalls` path), never a silent re-run. No new fact type, no `EVENT_CONTRACT_VERSION`, `ir_version`, or `schema_version` bump; one reserved node-id prefix, one `agent:` config block, one validator warning and one error. Depth is 1 (the worker's toolset strips `agent`). The call takes the `llm` step's own knobs (tools, model / provider / effort, skills, context files, typed `outputs:`, caps), each clamped to the caller's; typed outputs ship in v1, returned in the tool result through the same forced `emit_output` + TypeBox validation an `llm` step uses. Doors: indexed worker outputs, resumable workers, `agent({ workflow })` as runtime Model M, depth > 1, targeted steer."
-status: proposal
+status: implemented
 maturity: sketch
 last-reviewed: 2026-09-30
 ---
@@ -273,11 +273,11 @@ spend to the worker's model.
   wires it to `worker.abort()` exactly as `executePromptLoop` does for the
   caller. Pause / cancel / budget are run-global and reach the worker in one
   hop.
-- **Steer.** `SteeringRegistry` already holds a live set per run so that
-  multiple agents each calling `beginRun(runId, agent)` coexist. Workers
-  register with a `SteerTarget` carrying the caller's `{ nodeId, iteration }`
-  plus the worker id. v1 delivers an `intent.steer` to the **caller only** (the
-  worker's context is the caller's to manage); targeting a worker is a Door.
+- **Steer.** Workers are deliberately **not** registered in the
+  `SteeringRegistry`. An operator steer is addressed to the caller's context:
+  it aborts the caller's turn, and that abort reaches every worker through the
+  tool-call `signal` (below). Injecting the steer text into N worker contexts
+  would misdirect them. Targeting a worker is a Door.
 - **Crash mid-worker.** The `agent` tool is `idempotent: false`,
   `idempotentOnReplay: false`. On daemon restart the caller rehydrates with an
   unpaired `agent` toolCall; `sanitiseUnpairedToolCalls` does what it does for
@@ -293,8 +293,9 @@ spend to the worker's model.
 pi-agent-core runs an assistant message's tool calls in parallel unless a tool
 declares `executionMode: "sequential"`. The `agent` tool does **not** declare
 it: an orchestrator that emits four `agent` calls in one message gets four
-concurrent workers, bounded by `agent.concurrency` (config, default 4; excess
-calls queue). They share one worktree. `write` / `edit` already serialise per
+concurrent workers, bounded by `agent.concurrency` (config, default 4) through a
+per-turn counting semaphore; excess calls wait for a slot and return `aborted`
+if the caller's signal fires while they wait. They share one worktree. `write` / `edit` already serialise per
 path through the env's mutation queue; `bash` does not serialise anything.
 Partitioning is the prompt's job ("one package per worker"), exactly as it is
 for a human lead handing out tickets. This is weaker than `parallel`'s

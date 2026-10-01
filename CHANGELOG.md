@@ -32,6 +32,29 @@ guarantee.
 
 ### Added
 
+- **Orchestrator-workers via the opt-in `agent` tool.** An `llm` step that lists
+  `agent` in `allowed-tools` can delegate a self-contained sub-task to a worker
+  agent that runs inside the calling turn: same run, same worktree, a fresh
+  context, a tool subset of the caller's, and its own cost cap. Every call knob
+  (`task`, `allowed_tools`, `denied_tools`, `model`, `provider`, `effort`,
+  `skills`, `context_files`, `outputs`, `max_cost_usd`, `max_tokens`,
+  `timeout_minutes`) is clamped to the caller's effective set; the worker returns
+  `{ text, outputs?, cost_usd, turns, tool_calls, worker_id, status }`, with typed
+  `outputs` validated the same way an llm step's are. The model decides how many
+  workers to fan out at runtime (concurrent `agent` calls run concurrent workers
+  over the shared tree — partition the work in the prompt). Worker spend counts
+  against the caller's per-node and per-run budgets, and worker transcripts are
+  addressable but excluded from the caller's context. Caps default from an
+  `agent:` config block (`max-cost`, `max-turns`, `timeout-minutes`,
+  `concurrency`) and can be overridden per call. New validator diagnostics: W023
+  (`agent` allowed on a step that reaches no mutator tool) and E058 (a step id
+  starting with the reserved `__` prefix).
+  The run conversation renders each delegation as a card: worker status, the
+  delegated task, typed outputs, cost and turn counts, and the worker's own
+  transcript as a collapsed mini-conversation, live while it runs.
+  Each worker is its own step in the Cost breakdown, nested under the caller
+  with its model, turns, duration and spend; the caller's row shows only the
+  caller's own turns.
 - **`type: judge` steps can name a backend.** `provider:` on a judge step picks
   which System One model answers, and `judge: {provider, model}` in
   `~/.fragua/config.yaml` sets the default. Two backends ship: `typesafe`
