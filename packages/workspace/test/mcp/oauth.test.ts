@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { type McpOAuthStore, parseOAuthBlob, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
+import type { OAuthTokens } from "@earendil-works/pi-mcp/oauth";
+import {
+  type McpOAuthStore,
+  makeMcpOAuthProvider,
+  makeMcpOAuthStateStore,
+  parseOAuthBlob,
+  persistClientInformation,
+} from "../../src/mcp/oauth.ts";
 
 /** In-memory fake port — one payload string per URL, like the real store row. */
 function fakeStore(): McpOAuthStore & { dump(): Map<string, string> } {
@@ -23,127 +29,71 @@ function tokens(): OAuthTokens {
   return { access_token: "at-123", token_type: "Bearer", refresh_token: "rt-456", expires_in: 3600 };
 }
 
-describe("StoredOAuthProvider", () => {
-  test("state() is idempotent within a flow — repeated calls return the first value", () => {
-    const p = new StoredOAuthProvider({
-      url: URL_A,
-      store: fakeStore(),
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    const first = p.state();
-    expect(p.state()).toBe(first); // not regenerated
-    expect(p.expectedAuthState()).toBe(first);
+function provider(store: McpOAuthStore, client?: { clientId: string; clientSecret?: string }) {
+  return makeMcpOAuthProvider({
+    url: URL_A,
+    store,
+    redirectUrl: "http://localhost:8888/callback",
+    onRedirect: () => {},
+    ...(client ? { client } : {}),
   });
+}
 
-  test("saveTokens clears the single-use PKCE verifier from the persisted blob", () => {
+describe("makeMcpOAuthProvider", () => {
+  test("saveTokens round-trips and persists across a fresh provider instance", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    provider.saveCodeVerifier("verifier-abc");
-    expect(provider.codeVerifier()).toBe("verifier-abc");
-    provider.saveTokens(tokens());
-    // Verifier gone from the persisted row; tokens remain.
-    expect(JSON.parse(store.dump().get(URL_A) ?? "{}").codeVerifier).toBeUndefined();
-    expect(provider.tokens()).toEqual(tokens());
-  });
+    const p = provider(store);
 
-  test("saveTokens round-trips and persists across a fresh provider instance", () => {
-    const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-
-    expect(provider.tokens()).toBeUndefined();
-    provider.saveTokens(tokens());
-    expect(provider.tokens()).toEqual(tokens());
+    expect(await p.tokens()).toBeUndefined();
+    await p.saveTokens(tokens());
+    expect(await p.tokens()).toEqual(tokens());
 
     // A new provider sharing the same store reads the persisted tokens.
-    const reborn = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    expect(reborn.tokens()).toEqual(tokens());
+    const reborn = provider(store);
+    expect(await reborn.tokens()).toEqual(tokens());
   });
 
-  test("saveClientInformation round-trips through the payload", () => {
+  test("saveClientInformation round-trips through the payload", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
+    const p = provider(store);
 
-    expect(provider.clientInformation()).toBeUndefined();
-    provider.saveClientInformation({ client_id: "dcr-client", client_secret: "dcr-secret" });
-    expect(provider.clientInformation()).toEqual({ client_id: "dcr-client", client_secret: "dcr-secret" });
+    expect(await p.clientInformation()).toBeUndefined();
+    await p.saveClientInformation({ client_id: "dcr-client", client_secret: "dcr-secret" });
+    expect(await p.clientInformation()).toEqual({ client_id: "dcr-client", client_secret: "dcr-secret" });
   });
 
-  test("preset confidential client is returned and drives client_secret_post", () => {
+  test("preset confidential client is returned and drives client_secret_post", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-      client: { clientId: "preset-id", clientSecret: "preset-secret" },
-    });
+    const p = provider(store, { clientId: "preset-id", clientSecret: "preset-secret" });
 
-    expect(provider.clientInformation()).toEqual({ client_id: "preset-id", client_secret: "preset-secret" });
-    expect(provider.clientMetadata.token_endpoint_auth_method).toBe("client_secret_post");
+    expect(await p.clientInformation()).toEqual({ client_id: "preset-id", client_secret: "preset-secret" });
+    expect(p.clientMetadata.token_endpoint_auth_method).toBe("client_secret_post");
   });
 
-  test("preset public client (no secret) uses token_endpoint_auth_method none", () => {
+  test("preset public client (no secret) uses token_endpoint_auth_method none", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-      client: { clientId: "public-id" },
-    });
+    const p = provider(store, { clientId: "public-id" });
 
-    expect(provider.clientInformation()).toEqual({ client_id: "public-id" });
-    expect(provider.clientMetadata.token_endpoint_auth_method).toBe("none");
+    expect(await p.clientInformation()).toEqual({ client_id: "public-id" });
+    expect(p.clientMetadata.token_endpoint_auth_method).toBe("none");
   });
 
-  test("saveCodeVerifier persists; codeVerifier() throws when none saved", () => {
+  test("saveCodeVerifier persists; codeVerifier() throws when none saved; survives a fresh instance", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
+    const p = provider(store);
 
-    expect(() => provider.codeVerifier()).toThrow(/no PKCE code verifier/);
-    provider.saveCodeVerifier("pkce-verifier-xyz");
-    expect(provider.codeVerifier()).toBe("pkce-verifier-xyz");
+    expect(p.codeVerifier()).rejects.toThrow();
+    await p.saveCodeVerifier("pkce-verifier-xyz");
+    expect(await p.codeVerifier()).toBe("pkce-verifier-xyz");
 
-    // Survives across a fresh instance (must persist across the redirect).
-    const reborn = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    expect(reborn.codeVerifier()).toBe("pkce-verifier-xyz");
+    const reborn = provider(store);
+    expect(await reborn.codeVerifier()).toBe("pkce-verifier-xyz");
   });
 
   test("redirectToAuthorization invokes onRedirect with the URL", async () => {
     const store = fakeStore();
     let seen: URL | undefined;
-    const provider = new StoredOAuthProvider({
+    const p = makeMcpOAuthProvider({
       url: URL_A,
       store,
       redirectUrl: "http://localhost:8888/callback",
@@ -153,13 +103,13 @@ describe("StoredOAuthProvider", () => {
     });
 
     const authUrl = new URL("https://auth.example.com/authorize?client_id=x");
-    await provider.redirectToAuthorization(authUrl);
+    await p.redirectToAuthorization(authUrl);
     expect(seen).toBe(authUrl);
   });
 
   test("a throwing onRedirect (daemon mode) propagates", async () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
+    const p = makeMcpOAuthProvider({
       url: URL_A,
       store,
       redirectUrl: "http://localhost:8888/callback",
@@ -168,73 +118,71 @@ describe("StoredOAuthProvider", () => {
       },
     });
 
-    expect(() => provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"))).toThrow(
+    expect(p.redirectToAuthorization(new URL("https://auth.example.com/authorize"))).rejects.toThrow(
       /interactive auth required/,
     );
   });
 
   test("clientMetadata carries the expected redirect_uris and grant/response types", () => {
     const store = fakeStore();
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
+    const p = provider(store);
 
-    const meta = provider.clientMetadata;
+    const meta = p.clientMetadata;
     expect(meta.redirect_uris).toEqual(["http://localhost:8888/callback"]);
     expect(meta.client_name).toBe("fragua");
     expect(meta.grant_types).toEqual(["authorization_code", "refresh_token"]);
     expect(meta.response_types).toEqual(["code"]);
     expect(meta.token_endpoint_auth_method).toBe("none");
-    expect(provider.redirectUrl).toBe("http://localhost:8888/callback");
+    expect(p.redirectUrl).toBe("http://localhost:8888/callback");
   });
 
-  test("corrupt payload folds to empty (tolerated)", () => {
+  test("state() generates the CSRF value and persists it into the blob as oauthState", async () => {
     const store = fakeStore();
-    store.save(URL_A, "{not valid json");
-    const provider = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-
-    expect(provider.tokens()).toBeUndefined();
-    expect(provider.clientInformation()).toBeUndefined();
-    // A mutation after a corrupt read writes a clean object.
-    provider.saveTokens(tokens());
-    expect(provider.tokens()).toEqual(tokens());
-  });
-
-  test("state() is per-instance in memory — never persisted, so a concurrent instance can't clobber it", () => {
-    const store = fakeStore();
-    const p1 = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    const s = p1.state();
+    const p = provider(store);
+    const s = await p.state();
     expect(typeof s).toBe("string");
     expect(s.length).toBeGreaterThan(0);
-    // The SAME instance (which handles both the authorize build and the in-process
-    // callback) reads it back.
-    expect(p1.expectedAuthState()).toBe(s);
-    // A DISTINCT instance (a concurrent `mcp check` / second login) does NOT share
-    // it and — crucially — did not overwrite p1's state in the store.
-    const p2 = new StoredOAuthProvider({
-      url: URL_A,
-      store,
-      redirectUrl: "http://localhost:8888/callback",
-      onRedirect: () => {},
-    });
-    expect(p2.expectedAuthState()).toBeUndefined();
-    p2.state();
-    expect(p1.expectedAuthState()).toBe(s); // p2's state didn't touch p1
-    // And nothing CSRF-related was written to the shared store row.
-    expect(store.load(URL_A)).toBeUndefined();
+    // The persisted blob carries it back so the login callback's CSRF check can read it.
+    expect(parseOAuthBlob(store.dump().get(URL_A))?.oauthState).toBe(s);
+    // Idempotent within a flow — the same instance returns the first value.
+    expect(await p.state()).toBe(s);
+  });
+
+  test("corrupt payload folds to empty (tolerated)", async () => {
+    const store = fakeStore();
+    store.save(URL_A, "{not valid json");
+    const p = provider(store);
+
+    expect(await p.tokens()).toBeUndefined();
+    expect(await p.clientInformation()).toBeUndefined();
+    await p.saveTokens(tokens());
+    expect(await p.tokens()).toEqual(tokens());
+  });
+});
+
+describe("makeMcpOAuthStateStore", () => {
+  test("backfills serverUrl from the key for a legacy (pre-pi-mcp) blob", async () => {
+    const store = fakeStore();
+    store.save(URL_A, JSON.stringify({ tokens: { access_token: "x", token_type: "Bearer" } }));
+    const loaded = await makeMcpOAuthStateStore(store, URL_A).load();
+    expect(loaded?.serverUrl).toBe(URL_A); // filled from the key, not the (missing) field
+    expect(loaded?.tokens?.access_token).toBe("x");
+  });
+
+  test("preserves a serverUrl already present in a new-shape blob", async () => {
+    const store = fakeStore();
+    store.save(URL_A, JSON.stringify({ serverUrl: URL_A, tokens: { access_token: "y", token_type: "Bearer" } }));
+    expect((await makeMcpOAuthStateStore(store, URL_A).load())?.serverUrl).toBe(URL_A);
+  });
+});
+
+describe("persistClientInformation", () => {
+  test("writes a preset confidential client through the port so the daemon can read it", () => {
+    const store = fakeStore();
+    persistClientInformation(store, URL_A, { client_id: "conf-id", client_secret: "conf-secret" });
+    const blob = parseOAuthBlob(store.dump().get(URL_A));
+    expect(blob?.clientInformation).toEqual({ client_id: "conf-id", client_secret: "conf-secret" });
+    expect(blob?.serverUrl).toBe(URL_A);
   });
 });
 
@@ -244,5 +192,17 @@ describe("parseOAuthBlob", () => {
     expect(parseOAuthBlob(undefined)).toBeUndefined();
     expect(parseOAuthBlob("not json{")).toBeUndefined();
     expect(parseOAuthBlob(JSON.stringify(["array"]))).toBeUndefined();
+  });
+
+  test("an old-shape blob (no serverUrl) still reports its tokens — login carries over without re-login", () => {
+    const old = JSON.stringify({ tokens: { access_token: "legacy-at" }, clientInformation: { client_id: "c" } });
+    expect(parseOAuthBlob(old)?.tokens?.access_token).toBe("legacy-at");
+    expect(parseOAuthBlob(old)?.serverUrl).toBeUndefined();
+  });
+
+  test("a new McpOAuthState blob with serverUrl parses", () => {
+    const fresh = JSON.stringify({ serverUrl: URL_A, tokens: { access_token: "new-at", token_type: "Bearer" } });
+    expect(parseOAuthBlob(fresh)?.tokens?.access_token).toBe("new-at");
+    expect(parseOAuthBlob(fresh)?.serverUrl).toBe(URL_A);
   });
 });

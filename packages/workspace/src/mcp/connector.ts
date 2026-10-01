@@ -13,12 +13,17 @@
 //
 // See docs/proposals/mcp-tools.md.
 
+import {
+  type CallToolResult,
+  McpClient,
+  type McpTransport,
+  StdioTransport,
+  StreamableHttpTransport,
+  type Tool,
+  toLlmContent,
+} from "@earendil-works/pi-mcp";
+import { adaptOAuthProvider, type McpOAuthProvider } from "@earendil-works/pi-mcp/oauth";
 import { byName } from "@fragua/core";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "@sinclair/typebox";
 import type { AnyTool, ToolOutput } from "../types.ts";
 import {
@@ -40,6 +45,41 @@ const CLOSE_DEADLINE_MS = 5_000;
 const MAX_TOOL_NAME_LEN = 128;
 const MCP_OUTPUT_MAX_CHARS = 100_000;
 const STDERR_TAIL_MAX = 2_000;
+
+// The safe base environment handed to every stdio MCP child. pi-mcp has no
+// `getDefaultEnvironment()` equivalent, so we reproduce the MCP SDK's
+// DEFAULT_INHERITED_ENV_VARS allowlist verbatim: a stdio server inherits only
+// these keys from the daemon's environment (never provider API keys), then
+// `server.env` is layered on top with `inheritEnv:false`.
+const DEFAULT_INHERITED_ENV_VARS =
+  process.platform === "win32"
+    ? [
+        "APPDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOCALAPPDATA",
+        "PATH",
+        "PROCESSOR_ARCHITECTURE",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "USERNAME",
+        "USERPROFILE",
+      ]
+    : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
+
+/** The allowlisted base env for a stdio child: each DEFAULT_INHERITED_ENV_VARS
+ * key that is set and not a bash function export (`() {`). Mirrors the SDK's
+ * `getDefaultEnvironment()` so daemon secrets never reach a third-party binary. */
+function defaultInheritedEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of DEFAULT_INHERITED_ENV_VARS) {
+    const value = process.env[key];
+    if (value === undefined || value.startsWith("()")) continue;
+    env[key] = value;
+  }
+  return env;
+}
 
 export interface McpMaterializeOptions {
   /** Project cwd — `<cwd>/.mcp.json` is the server registry. */
@@ -75,13 +115,13 @@ export interface McpConnector {
 }
 
 /** Injected dependencies for the connector. Kept store-free — the connector
- * sees only the SDK `OAuthClientProvider` type and this factory, never
+ * sees only pi-mcp's `McpOAuthProvider` type and this factory, never
  * @fragua/store. */
 export interface McpConnectorDeps {
   /** Given a remote server URL, return an OAuth provider to drive interactive
    * auth + token persistence, or `undefined` to skip OAuth for it. Consulted
    * only for http servers with no static `Authorization` header. */
-  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined;
+  oauthProviderFor?: (url: string) => McpOAuthProvider | undefined;
 }
 
 /** Decide whether a resolved server should authenticate through an injected
@@ -91,7 +131,7 @@ export interface McpConnectorDeps {
  * testable without a live server. */
 export function needsOAuthProvider(
   server: ResolvedMcpServer,
-  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined,
+  oauthProviderFor?: (url: string) => McpOAuthProvider | undefined,
 ): boolean {
   if (server.transport !== "http") return false;
   if (oauthProviderFor === undefined) return false;
@@ -164,26 +204,17 @@ export function normalizeMcpToolRef(name: string): string {
   return mcpToolName(rest.slice(0, sep), rest.slice(sep + 2));
 }
 
-interface McpContentBlock {
-  type: string;
-  text?: string;
+/** Flatten a tool result to text via pi-mcp's `toLlmContent` (text and embedded
+ * text resources pass through; images, audio, resource links and binary blobs
+ * become placeholders), then collapse the image placeholders to plain text for
+ * fragua's text-only `ToolOutput`. */
+function renderContent(result: CallToolResult): string {
+  return toLlmContent(result)
+    .map((block) => (block.type === "text" ? block.text : "[image content omitted]"))
+    .join("\n");
 }
 
-/** Render an MCP tool result's content array to plain text for the LLM. Text
- * blocks pass through; non-text blocks (image / audio / resource) collapse to a
- * short placeholder — rich-content forwarding is deferred (MVP). */
-function renderContent(content: unknown): string {
-  if (content == null) return "";
-  if (!Array.isArray(content)) return typeof content === "string" ? content : JSON.stringify(content);
-  const parts: string[] = [];
-  for (const block of content as McpContentBlock[]) {
-    if (block && block.type === "text" && typeof block.text === "string") parts.push(block.text);
-    else if (block && typeof block.type === "string") parts.push(`[${block.type} content omitted]`);
-  }
-  return parts.join("\n");
-}
-
-function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client, callTimeoutMs: number): AnyTool {
+function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: McpClient, callTimeoutMs: number): AnyTool {
   return {
     name: mcpToolName(server, mcpTool.name),
     description: mcpTool.description ?? `MCP tool "${mcpTool.name}" from server "${server}".`,
@@ -195,15 +226,11 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
     idempotent: false,
     truncation: { max_chars: MCP_OUTPUT_MAX_CHARS, mode: "tail" },
     async execute(args, _env, opts): Promise<ToolOutput> {
-      const requestOptions: { timeout: number; signal?: AbortSignal } = { timeout: callTimeoutMs };
+      const requestOptions: { timeoutMs: number; signal?: AbortSignal } = { timeoutMs: callTimeoutMs };
       if (opts?.signal) requestOptions.signal = opts.signal;
-      let result: unknown;
+      let result: CallToolResult;
       try {
-        result = await client.callTool(
-          { name: mcpTool.name, arguments: (args ?? {}) as Record<string, unknown> },
-          undefined,
-          requestOptions,
-        );
+        result = await client.callTool(mcpTool.name, (args ?? {}) as Record<string, unknown>, requestOptions);
       } catch (err) {
         // A transport error / timeout / server crash becomes a tool-error result
         // the LLM can react to, not an uncaught throw that halts the whole run.
@@ -212,8 +239,8 @@ function toFraguaTool(server: string, mcpTool: McpToolDescriptor, client: Client
       // MCP servers are operator opt-in (declared in .mcp.json), so their output
       // is trusted like any first-party tool — returned as-is (the `truncation`
       // policy above caps it downstream), no untrusted-content envelope.
-      const out: ToolOutput = { text: renderContent((result as { content?: unknown }).content) };
-      if ((result as { isError?: boolean }).isError === true) out.is_error = true;
+      const out: ToolOutput = { text: renderContent(result) };
+      if (result.isError === true) out.is_error = true;
       return out;
     },
   };
@@ -229,21 +256,50 @@ function mcpParameters(inputSchema: unknown): TSchema {
   return { type: "object" } as unknown as TSchema;
 }
 
-interface McpToolDescriptor {
-  name: string;
-  description?: string;
-  inputSchema?: unknown;
-}
+type McpToolDescriptor = Tool;
 
 interface OpenConnection {
-  client: Client;
-  /** Kept so teardown can SIGKILL a hung stdio child (http transports have no pid). */
-  transport: Transport;
+  client: McpClient;
+  /** Kept for diagnostics / the stdio `pid`; teardown runs through `client.close()`,
+   * which tears the transport down (StdioTransport SIGKILLs a hung child itself). */
+  transport: McpTransport;
 }
 
 type ServerResult =
   | { name: string; error: string; connection?: undefined; descriptors?: undefined }
   | { name: string; error?: undefined; connection: OpenConnection; descriptors: McpToolDescriptor[] };
+
+// `McpClient.connect` takes no timeout/signal, so bound it ourselves: race the
+// connect against the connect-timeout and the run's abort signal. On loss the
+// caller's catch closes the half-open client (StdioTransport reaps any child).
+async function connectWithDeadline(
+  client: McpClient,
+  transport: McpTransport,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const races: Promise<unknown>[] = [
+    client.connect(transport),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`connect timed out after ${timeoutMs}ms`)), timeoutMs);
+      timer.unref?.();
+    }),
+  ];
+  if (signal) {
+    races.push(
+      new Promise<never>((_, reject) => {
+        if (signal.aborted) return reject(new Error("aborted"));
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    );
+  }
+  try {
+    await Promise.race(races);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function connectServer(
   name: string,
@@ -252,14 +308,13 @@ async function connectServer(
   listTimeoutMs: number,
   defaultCwd: string,
   signal?: AbortSignal,
-  oauthProviderFor?: (url: string) => OAuthClientProvider | undefined,
+  oauthProviderFor?: (url: string) => McpOAuthProvider | undefined,
 ): Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }> {
-  const client = new Client({ name: `fragua-${name}`, version: "0.1.0" }, { capabilities: {} });
+  const client = new McpClient({ name: `fragua-${name}`, version: "0.1.0", capabilities: {} });
   // Only stdio carries a child + stderr; http has neither.
   let stderrTail = "";
-  // Hoisted out of the try so the catch's `closeWithDeadline` can reach the
-  // transport (to SIGKILL a hung stdio child).
-  let transport: Transport | undefined;
+  // Hoisted out of the try so the catch's `closeWithDeadline` can reach the client.
+  let transport: McpTransport | undefined;
   // Close on ANY failure — a post-connect listTools throw would otherwise leak
   // an stdio child (or a dangling http session) for the daemon's lifetime.
   try {
@@ -285,41 +340,38 @@ async function connectServer(
       // (on the daemon) throws on redirect so an un-authed server is skipped
       // via the connect-failure path rather than hanging.
       const provider = needsOAuthProvider(server, oauthProviderFor) ? oauthProviderFor?.(server.url) : undefined;
-      transport = new StreamableHTTPClientTransport(parsedUrl, {
-        ...(provider ? { authProvider: provider } : {}),
-        requestInit: { headers: server.headers },
-      }) as Transport;
+      transport = new StreamableHttpTransport({
+        url: parsedUrl,
+        headers: server.headers,
+        ...(provider ? { authProvider: adaptOAuthProvider(provider) } : {}),
+      });
     } else {
-      const stdio = new StdioClientTransport({
+      transport = new StdioTransport({
         command: server.command,
         args: server.args,
-        // SDK allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
-        // provider keys must not leak into a third-party binary. Only `server.env` added.
-        env: { ...getDefaultEnvironment(), ...server.env },
+        // Allowlist (HOME/PATH/USER/…) as the base, NOT the daemon's full env —
+        // provider keys must not leak into a third-party binary. Only `server.env`
+        // is added on top; `inheritEnv:false` keeps pi-mcp from adding anything else.
+        env: { ...defaultInheritedEnv(), ...server.env },
+        inheritEnv: false,
         // Run in the project dir (where mcp.json lives) by default, not the daemon's
         // launch dir; an author can override per-server via `cwd` in mcp.json.
         cwd: server.cwd ?? defaultCwd,
         // Piped so a spawn/handshake failure carries the child's own diagnostics.
+        // Keep the rolling TAIL, not the head — the last lines before a crash are the
+        // useful diagnostic; a verbose-then-crashing server would otherwise show only
+        // its startup banner.
         stderr: "pipe",
+        onStderr: (chunk) => {
+          stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_MAX);
+        },
       });
-      // Listener stays attached for the connection's lifetime: it drains the pipe
-      // continuously (a paused pipe would fill its OS buffer and stall the child).
-      // Keep the rolling TAIL, not the head — the last lines before a crash are the
-      // useful diagnostic; a verbose-then-crashing server would otherwise show only
-      // its startup banner.
-      stdio.stderr?.on("data", (chunk: unknown) => {
-        stderrTail = (stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX);
-      });
-      transport = stdio;
     }
-    await client.connect(transport, { timeout: connectTimeoutMs, ...(signal ? { signal } : {}) });
-    const listed = (await client.listTools(undefined, {
-      timeout: listTimeoutMs,
-      ...(signal ? { signal } : {}),
-    })) as { tools?: McpToolDescriptor[] };
-    return { connection: { client, transport }, tools: listed.tools ?? [] };
+    await connectWithDeadline(client, transport, connectTimeoutMs, signal);
+    const listed = await client.listTools({ timeoutMs: listTimeoutMs, ...(signal ? { signal } : {}) });
+    return { connection: { client, transport }, tools: listed };
   } catch (err) {
-    await closeWithDeadline(client, transport);
+    await closeWithDeadline(client);
     // Redact resolved `server.env` values from the stderr tail BEFORE it becomes
     // the diagnostic — a stdio server that echoes its environment on a failed
     // start would otherwise write a credential (a token supplied via env, whose
@@ -364,18 +416,18 @@ function redactSecrets(text: string, server: ResolvedMcpServer): string {
   return out;
 }
 
-// Deadline-bounded so a dead child's never-draining `close()` can't wedge teardown.
-async function closeWithDeadline(client: Client, transport?: Transport): Promise<void> {
+// Deadline-bounded so a dead child's never-draining `close()` can't wedge
+// teardown. `McpClient.close()` tears the transport down, and `StdioTransport`
+// escalates SIGTERM→SIGKILL on a child that ignores stdin-close (its own
+// `closeTimeoutMs`), so no manual `process.kill` is needed here — the deadline
+// only guards against `close()` itself never resolving.
+async function closeWithDeadline(client: McpClient): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
   try {
     await Promise.race([
       client.close().catch(() => {}),
       new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve();
-        }, CLOSE_DEADLINE_MS);
+        timer = setTimeout(resolve, CLOSE_DEADLINE_MS);
         timer.unref?.();
       }),
     ]);
@@ -384,19 +436,6 @@ async function closeWithDeadline(client: Client, transport?: Transport): Promise
     // otherwise stay live (unref'd, but one per connection per step — noise in
     // leak-hunts). `dispose()` fans this out over every open connection.
     if (timer) clearTimeout(timer);
-  }
-  // `close()` is still hung on a child that ignored SIGTERM — SIGKILL it so we
-  // don't orphan the process + its pipes + the stderr listener for the daemon's
-  // lifetime. Only stdio transports have a pid; http returns undefined (no-op).
-  if (timedOut) {
-    const pid = (transport as { pid?: number | null } | undefined)?.pid;
-    if (typeof pid === "number") {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already exited — nothing to kill.
-      }
-    }
   }
 }
 
@@ -511,7 +550,7 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
         dispose: async () => {
           if (disposed) return;
           disposed = true;
-          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client, c.transport)));
+          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client)));
         },
       };
     },

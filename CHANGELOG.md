@@ -55,6 +55,19 @@ guarantee.
 
 ### Changed
 
+- **MCP client now runs on `@earendil-works/pi-mcp`.** fragua's remote and
+  stdio MCP support is rebuilt on the standalone pi-mcp package; the official
+  `@modelcontextprotocol/sdk` is no longer a runtime dependency. `.mcp.json`
+  loading, tool naming/collision hashing, allow/deny gating, and store-backed
+  OAuth logins are unchanged. Stored MCP OAuth logins carry over without
+  re-login. One behaviour change: a tool result that returns non-text content
+  (embedded resources, audio, resource links, binary blobs) is now rendered for
+  the model by pi-mcp's `toLlmContent` — embedded text resources become text and
+  other non-text blocks become a short placeholder — which can change the exact
+  text of such results.
+- **Updated the agent runtime (`pi-ai` / `pi-agent-core`) to 0.99.2.** No change
+  to how workflows are authored. The bundled default model per provider for
+  fireworks, together, and opencode-go moved to its catalogue successor.
 - **`review` resolves its target and posts its verdict with tool steps.**
   Turning a free-form `--input target` into a diff spec, a path list, and a PR
   number is mechanism, and so is choosing between `--approve`,
