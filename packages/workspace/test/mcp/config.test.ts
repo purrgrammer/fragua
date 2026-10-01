@@ -142,6 +142,16 @@ describe("resolveMcpServer", () => {
     expect(r.missing).toContain("ABSENT");
   });
 
+  test("a header var that is set but EMPTY counts as missing (no empty bearer goes out)", () => {
+    const r = resolveMcpServer(
+      { transport: "http", url: "https://api.example.com/mcp", headers: { Authorization: "Bearer ${PAT}" } },
+      { PAT: "   " },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected err");
+    expect(r.missing).toEqual(["PAT"]);
+  });
+
   test("unset referenced var → ok:false listing the missing names", () => {
     const r = resolveMcpServer(
       { transport: "stdio", command: "npx", env: { AUTH: "${TOKEN}", OTHER: "${MISSING}" } },

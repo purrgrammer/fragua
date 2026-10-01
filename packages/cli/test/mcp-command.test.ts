@@ -92,6 +92,22 @@ describe("mcp ls", () => {
     expect(out()).not.toContain("no fragua store");
   });
 
+  test("http server whose static-auth var is set but empty shows missing-env, not ready", async () => {
+    const cwd = project({
+      mcpServers: {
+        gh: { type: "http", url: "https://x/mcp", headers: { Authorization: "Bearer ${FRAGUA_TEST_EMPTY_VAR}" } },
+      },
+    });
+    process.env["FRAGUA_TEST_EMPTY_VAR"] = "";
+    try {
+      expect(await mcpLsCommand({ cwd, dbPath: "/nonexistent/never.db" })).toBe(0);
+    } finally {
+      delete process.env["FRAGUA_TEST_EMPTY_VAR"];
+    }
+    expect(out()).toContain("missing env: FRAGUA_TEST_EMPTY_VAR");
+    expect(out()).not.toContain("ready  ready");
+  });
+
   test("a ${VAR} supplied only via .env.local resolves as ready (mirrors the connector's env view)", async () => {
     const cwd = project({
       mcpServers: { gh: { command: "true", env: { TOK: "${FRAGUA_DOTENV_ONLY_VAR}" } } },
