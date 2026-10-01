@@ -166,6 +166,22 @@ export function clearTransientOAuthState(store: McpOAuthStore, url: string): voi
   store.save(url, JSON.stringify({ ...rest, serverUrl: rest.serverUrl ?? url }));
 }
 
+/** A copy of a persisted blob fit for an EPHEMERAL store (`fragua ci`): the
+ * access token and client registration only. The refresh token goes — a
+ * refresh rotates it, and a rotation landing in a throwaway store would leave
+ * the operator's row holding a dead one. The per-login transients go too.
+ * `undefined` when there is nothing usable to copy: no access token, or one
+ * already expired (the copy can never refresh, so it would only fail later). */
+export function portableOAuthBlob(payload: string, now: number): string | undefined {
+  const current = parseOAuthBlob(payload);
+  const access = current?.tokens?.access_token;
+  if (current === undefined || access === undefined) return undefined;
+  if (current.tokensExpireAt !== undefined && current.tokensExpireAt <= now) return undefined;
+  const { refresh_token: _refresh, ...tokens } = current.tokens ?? {};
+  const { codeVerifier: _verifier, oauthState: _state, ...rest } = current;
+  return JSON.stringify({ ...rest, tokens });
+}
+
 /** A headless provider for non-interactive contexts (the daemon connector, and
  * `mcp check`): it reads stored tokens and refreshes silently, but a flow that
  * would need a browser throws instead of opening one. Single source of the

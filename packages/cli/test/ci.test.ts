@@ -95,6 +95,40 @@ function readArtifact(): { status: string; types: string[] } {
   }
 }
 
+describe("ciCommand — a pre-existing --db store", () => {
+  test("is used as-is: nothing seeded over it, credential tables and rows kept", async () => {
+    writeFileSync(wfPath, "name: ci-smoke\nsteps:\n  done: {type: exit}\n");
+    const URL = "https://mcp.example.com/mcp";
+    const pre = new SqliteStore({ path: dbPath });
+    pre.upsertProviderCredential({
+      provider: "openai",
+      kind: "api_key",
+      payload: JSON.stringify({ type: "api_key", key: "sk-operator-row" }),
+    });
+    pre.upsertMcpOAuth(URL, JSON.stringify({ serverUrl: URL, tokens: { access_token: "AT" } }));
+    pre.close();
+    const saved = process.env["MISTRAL_API_KEY"];
+    process.env["MISTRAL_API_KEY"] = "env-key-that-must-not-be-seeded";
+    try {
+      expect(await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env["MISTRAL_API_KEY"];
+      else process.env["MISTRAL_API_KEY"] = saved;
+    }
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      expect((store.getProviderCredential("openai")?.payload as { key?: string } | undefined)?.key).toBe(
+        "sk-operator-row",
+      );
+      expect(store.getMcpOAuth(URL)).toBeDefined();
+      expect(store.getProviderCredential("mistral")).toBeNull();
+      expect(store.listProviderCredentials().map((r) => r.provider)).toEqual(["openai"]);
+    } finally {
+      store.close();
+    }
+  });
+});
+
 describe("ciCommand", () => {
   test("drives a no-op (exit-only) workflow to completed; exit 0; .db holds the terminal fact", async () => {
     writeFileSync(wfPath, "name: ci-smoke\nsteps:\n  done: {type: exit}\n");

@@ -7,6 +7,7 @@ import {
   makeMcpOAuthStateStore,
   parseOAuthBlob,
   persistClientInformation,
+  portableOAuthBlob,
 } from "../../src/mcp/oauth.ts";
 
 /** In-memory fake port — one payload string per URL, like the real store row. */
@@ -204,6 +205,43 @@ describe("clearTransientOAuthState", () => {
     store.save(URL_A, settled);
     clearTransientOAuthState(store, URL_A);
     expect(store.dump().get(URL_A)).toBe(settled);
+  });
+});
+
+describe("portableOAuthBlob", () => {
+  const now = 1_700_000_000_000;
+  test("keeps the access token + client registration, drops refresh material and transients", () => {
+    const out = portableOAuthBlob(
+      JSON.stringify({
+        serverUrl: URL_A,
+        clientInformation: { client_id: "c", client_secret: "s" },
+        tokens: { access_token: "AT", refresh_token: "RT", token_type: "Bearer", expires_in: 3600 },
+        tokensExpireAt: now + 1000,
+        codeVerifier: "CV",
+        oauthState: "ST",
+        discovery: { authorizationServerUrl: "https://auth" },
+      }),
+      now,
+    );
+    expect(out).toBeDefined();
+    const blob = JSON.parse(out ?? "{}");
+    expect(blob.tokens).toEqual({ access_token: "AT", token_type: "Bearer", expires_in: 3600 });
+    expect(blob.clientInformation).toEqual({ client_id: "c", client_secret: "s" });
+    expect(blob.discovery).toEqual({ authorizationServerUrl: "https://auth" });
+    expect(blob.codeVerifier).toBeUndefined();
+    expect(blob.oauthState).toBeUndefined();
+  });
+  test("nothing usable → undefined: no access token, expired token, corrupt blob", () => {
+    expect(
+      portableOAuthBlob(JSON.stringify({ serverUrl: URL_A, clientInformation: { client_id: "c" } }), now),
+    ).toBeUndefined();
+    expect(
+      portableOAuthBlob(JSON.stringify({ tokens: { access_token: "AT" }, tokensExpireAt: now }), now),
+    ).toBeUndefined();
+    expect(portableOAuthBlob("{not json", now)).toBeUndefined();
+  });
+  test("a legacy blob without tokensExpireAt is copied (expiry unknown, not expired)", () => {
+    expect(portableOAuthBlob(JSON.stringify({ tokens: { access_token: "AT" } }), now)).toBeDefined();
   });
 });
 
