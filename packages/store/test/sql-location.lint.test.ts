@@ -17,10 +17,7 @@ import ts from "typescript";
 const SRC_DIR = join(__dirname, "..", "src");
 
 /** Non-`*-queries.ts` files permitted to hold SQL, each with a reason. */
-const ALLOWLIST = new Map<string, string>([
-  ["migrations.ts", "schema DDL + schema_version bookkeeping"],
-  ["store.ts", "backup/scrub maintenance: sqlite_master introspection + table drops"],
-]);
+const ALLOWLIST = new Map<string, string>([["migrations.ts", "schema DDL + schema_version bookkeeping"]]);
 
 /** Table DML/DQL that must be centralised in a `*-queries.ts`. */
 const SQL_RE =
