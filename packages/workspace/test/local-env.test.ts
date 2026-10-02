@@ -220,17 +220,18 @@ describe("LocalEnvironment", () => {
     });
   });
 
-  describe("envDenyNames", () => {
-    const TEST_VAR = "MY_SECRET_TOKEN";
-    const TEST_VAR_VALUE = "leak-canary-value-xyz";
+  describe("envAllowNames (deny-by-default)", () => {
+    const SEEDED = ["GITHUB_TOKEN", "AWS_ACCESS_KEY_ID", "MY_SECRET_TOKEN", "PUBLIC_VAR_NOTASECRET"] as const;
     let savedVars: Record<string, string | undefined>;
+    let savedHome: string | undefined;
 
     beforeEach(() => {
       savedVars = {};
-      for (const k of [TEST_VAR, "PUBLIC_VAR_NOTASECRET", "DENY_ME"] as const) {
+      for (const k of SEEDED) {
         savedVars[k] = process.env[k];
         delete process.env[k];
       }
+      savedHome = process.env["HOME"];
     });
 
     afterEach(() => {
@@ -238,61 +239,63 @@ describe("LocalEnvironment", () => {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+      if (savedHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = savedHome;
     });
 
-    test("(a) deny-listed var is absent from the spawned subprocess env", async () => {
-      process.env[TEST_VAR] = TEST_VAR_VALUE;
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyNames: new Set([TEST_VAR]),
-      });
-      const r = await denyEnv.exec(`echo "X=${"$"}{${TEST_VAR}:-MISSING}"`);
-      expect(r.stdout).toContain("X=MISSING");
-      expect(r.stdout).not.toContain(TEST_VAR_VALUE);
+    test("(a) a seeded GITHUB_TOKEN / AWS_ACCESS_KEY_ID is absent from the shell unless allow-listed", async () => {
+      process.env["GITHUB_TOKEN"] = "ghp-must-not-leak-abcdef";
+      process.env["AWS_ACCESS_KEY_ID"] = "AKIA-must-not-leak-abcdef";
+      const env = new LocalEnvironment({ cwd: scratch });
+      const r = await env.exec('echo "G=${GITHUB_TOKEN:-MISSING} A=${AWS_ACCESS_KEY_ID:-MISSING}"');
+      expect(r.stdout).toContain("G=MISSING");
+      expect(r.stdout).toContain("A=MISSING");
+      expect(r.stdout).not.toContain("must-not-leak");
     });
 
-    test("(b) non-denied vars stay visible — PATH is intact, opts.env extras pass through", async () => {
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyNames: new Set([TEST_VAR]),
-      });
-      const r = await denyEnv.exec("echo P=$PATH F=${FOO:-NONE}", { env: { FOO: "bar" } });
-      expect(r.stdout).toContain("F=bar");
-      expect(r.stdout).toMatch(/P=[^/\s]*\//);
+    test("(b) an allow-listed var passes through, and a non-listed sibling stays hidden", async () => {
+      process.env["GITHUB_TOKEN"] = "ghp-allowed-visible-abcdef";
+      process.env["AWS_ACCESS_KEY_ID"] = "AKIA-still-hidden-abcdef";
+      const env = new LocalEnvironment({ cwd: scratch, envAllowNames: new Set(["GITHUB_TOKEN"]) });
+      const r = await env.exec('echo "G=${GITHUB_TOKEN:-MISSING} A=${AWS_ACCESS_KEY_ID:-MISSING}"');
+      expect(r.stdout).toContain("G=ghp-allowed-visible-abcdef");
+      expect(r.stdout).toContain("A=MISSING");
     });
 
-    test("(b') opts.env leak of a deny-listed name is also stripped (delete-after-merge)", async () => {
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyNames: new Set(["DENY_ME"]),
-      });
-      const r = await denyEnv.exec("echo D=${DENY_ME:-GONE}", { env: { DENY_ME: "should-not-survive" } });
-      expect(r.stdout).toContain("D=GONE");
-      expect(r.stdout).not.toContain("should-not-survive");
+    test("(c) a converge-style shell sees PATH and HOME but not a seeded GITHUB_TOKEN", async () => {
+      process.env["HOME"] = "/tmp/fake-home-for-converge";
+      process.env["GITHUB_TOKEN"] = "ghp-must-not-leak-abcdef";
+      const env = new LocalEnvironment({ cwd: scratch });
+      const r = await env.exec('echo "P=${PATH:-MISSING} H=${HOME:-MISSING} G=${GITHUB_TOKEN:-MISSING}"');
+      expect(r.stdout).toMatch(/P=[^\s]*\//);
+      expect(r.stdout).toContain("H=/tmp/fake-home-for-converge");
+      expect(r.stdout).toContain("G=MISSING");
     });
 
-    test("(c) default LocalEnvironment (no envDenyNames) inherits the full env", async () => {
-      process.env["PUBLIC_VAR_NOTASECRET"] = "kept";
-      const plainEnv = new LocalEnvironment({ cwd: scratch });
-      const r = await plainEnv.exec("echo $PUBLIC_VAR_NOTASECRET");
-      expect(r.stdout).toContain("kept");
-    });
-
-    test("(d) FRAGUA_OUTPUT survives the secret-name deny set and a CI-style suffix predicate", async () => {
-      // The `$FRAGUA_OUTPUT` channel a producing tool reads must never be
-      // stripped by the env-deny filter (secret-suffix rule + name set).
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyNames: new Set(["MY_SECRET_TOKEN"]),
-        envDenyPredicate: (name) => /_(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PASS|AUTH|PASSPHRASE)$/.test(name),
-      });
-      const r = await denyEnv.exec("echo O=${FRAGUA_OUTPUT:-STRIPPED}", { env: { FRAGUA_OUTPUT: "/tmp/scratch-x" } });
+    test("(d) engine-set FRAGUA_OUTPUT (via opts.env) always passes the allow-filter", async () => {
+      // The `$FRAGUA_OUTPUT` channel a producing tool reads is supplied through
+      // opts.env, not inherited from the ambient env, so it always survives.
+      const env = new LocalEnvironment({ cwd: scratch });
+      const r = await env.exec("echo O=${FRAGUA_OUTPUT:-STRIPPED}", { env: { FRAGUA_OUTPUT: "/tmp/scratch-x" } });
       expect(r.stdout).toContain("O=/tmp/scratch-x");
+    });
+
+    test("(e) an ambient FRAGUA_* var passes by baseline prefix", async () => {
+      const prev = process.env["FRAGUA_TEST_BASELINE"];
+      process.env["FRAGUA_TEST_BASELINE"] = "engine-set-visible";
+      try {
+        const env = new LocalEnvironment({ cwd: scratch });
+        const r = await env.exec("echo F=${FRAGUA_TEST_BASELINE:-MISSING}");
+        expect(r.stdout).toContain("F=engine-set-visible");
+      } finally {
+        if (prev === undefined) delete process.env["FRAGUA_TEST_BASELINE"];
+        else process.env["FRAGUA_TEST_BASELINE"] = prev;
+      }
     });
   });
 
-  describe("envDenyPredicate", () => {
-    const LATE_VAR = "LATE_CI_TOKEN";
+  describe("envAllowPredicate", () => {
+    const LATE_VAR = "LATE_CI_WIDGET";
     let savedLate: string | undefined;
 
     beforeEach(() => {
@@ -305,56 +308,28 @@ describe("LocalEnvironment", () => {
       else process.env[LATE_VAR] = savedLate;
     });
 
-    test("(d) a secret-named var SET AFTER LocalEnvironment construction is still stripped from a spawned subprocess", async () => {
-      // Construct the environment BEFORE setting the late var.
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyPredicate: (n) => n.endsWith("_TOKEN"),
-      });
-      // Set the var AFTER construction — a fixed Set would have missed this.
-      process.env[LATE_VAR] = "late-secret-value-abcdef";
-      const r = await denyEnv.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
+    test("(f) a var admitted by envAllowPredicate SET AFTER construction reaches the subprocess", async () => {
+      const env = new LocalEnvironment({ cwd: scratch, envAllowPredicate: (n) => n.startsWith("LATE_CI_") });
+      // Set the var AFTER construction — the predicate is applied at spawn time.
+      process.env[LATE_VAR] = "late-visible-value-abcdef";
+      const r = await env.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
+      expect(r.stdout).toContain("V=late-visible-value-abcdef");
+    });
+
+    test("(g) a var NOT matched by the predicate stays hidden", async () => {
+      process.env[LATE_VAR] = "should-stay-hidden-abcdef";
+      const env = new LocalEnvironment({ cwd: scratch, envAllowPredicate: (n) => n === "SOMETHING_ELSE" });
+      const r = await env.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
       expect(r.stdout).toContain("V=MISSING");
-      expect(r.stdout).not.toContain("late-secret-value-abcdef");
-    });
-
-    test("(e) envDenyPredicate composes with envDenyNames — a name in either is stripped", async () => {
-      process.env[LATE_VAR] = "late-secret-value-abcdef";
-      const ALSO_DENY = "ALSO_DENY_ME_STATIC";
-      process.env[ALSO_DENY] = "name-set-value";
-      const saved = process.env[ALSO_DENY];
-      try {
-        const denyEnv = new LocalEnvironment({
-          cwd: scratch,
-          envDenyNames: new Set([ALSO_DENY]),
-          envDenyPredicate: (n) => n.endsWith("_TOKEN"),
-        });
-        const r = await denyEnv.exec(`echo "T=${"$"}{${LATE_VAR}:-MISSING} S=${"$"}{${ALSO_DENY}:-MISSING}"`);
-        expect(r.stdout).toContain("T=MISSING");
-        expect(r.stdout).toContain("S=MISSING");
-      } finally {
-        if (saved === undefined) delete process.env[ALSO_DENY];
-        else process.env[ALSO_DENY] = saved;
-      }
-    });
-
-    test("(f) default LocalEnvironment (no predicate, no names) still inherits the full env", async () => {
-      process.env[LATE_VAR] = "visible-value";
-      const plainEnv = new LocalEnvironment({ cwd: scratch });
-      const r = await plainEnv.exec(`echo "V=${"$"}{${LATE_VAR}:-MISSING}"`);
-      expect(r.stdout).toContain("V=visible-value");
+      expect(r.stdout).not.toContain("should-stay-hidden");
     });
   });
 
-  // The daemon assembly (see `daemonEnvDeny` in @fragua/cli) wires a
-  // provider-credential-name predicate into every worktree's LocalEnvironment.
-  // This exercises that shape without importing the CLI (dep-direction rule):
-  // a var named like a provider key is stripped; a passthrough-listed var
-  // survives.
-  // Exercises the _API_KEY / _TOKEN subset only; the full provider-credential
-  // suffix coverage (OAuth tokens, provider-prefix gate, etc.) lives in
-  // packages/cli/test/env-creds.test.ts.
-  describe("daemon-style provider-credential env-strip (_API_KEY / _TOKEN subset)", () => {
+  // The daemon / ci assemblies (see `daemonEnvAllow` in @fragua/cli) refuse
+  // provider-credential names before they reach the allow-list, so a provider
+  // key is never allowed and never reaches the shell. This exercises the
+  // resulting shape without importing the CLI (dep-direction rule).
+  describe("provider-credential exclusion (allow-list model)", () => {
     const CRED_VAR = "ANTHROPIC_API_KEY";
     const PASS_VAR = "GH_TOKEN";
     let savedCred: string | undefined;
@@ -372,26 +347,18 @@ describe("LocalEnvironment", () => {
       else process.env[PASS_VAR] = savedPass;
     });
 
-    test("(g) a var named like ANTHROPIC_API_KEY is absent from the bash subprocess", async () => {
+    test("(h) a provider cred not on the allow-list is absent from the bash subprocess", async () => {
       process.env[CRED_VAR] = "sk-ant-must-not-leak-abcdef";
-      const passthrough = new Set([PASS_VAR]);
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyPredicate: (n) => !passthrough.has(n) && (n.endsWith("_API_KEY") || n.endsWith("_TOKEN")),
-      });
-      const r = await denyEnv.exec(`echo "V=${"$"}{${CRED_VAR}:-MISSING}"`);
+      const env = new LocalEnvironment({ cwd: scratch, envAllowNames: new Set([PASS_VAR]) });
+      const r = await env.exec(`echo "V=${"$"}{${CRED_VAR}:-MISSING}"`);
       expect(r.stdout).toContain("V=MISSING");
       expect(r.stdout).not.toContain("sk-ant-must-not-leak-abcdef");
     });
 
-    test("(h) a passthrough-listed var IS visible in the bash subprocess", async () => {
+    test("(i) an allow-listed GH_TOKEN IS visible in the bash subprocess", async () => {
       process.env[PASS_VAR] = "ghs-passthrough-visible-abcdef";
-      const passthrough = new Set([PASS_VAR]);
-      const denyEnv = new LocalEnvironment({
-        cwd: scratch,
-        envDenyPredicate: (n) => !passthrough.has(n) && (n.endsWith("_API_KEY") || n.endsWith("_TOKEN")),
-      });
-      const r = await denyEnv.exec(`echo "V=${"$"}{${PASS_VAR}:-MISSING}"`);
+      const env = new LocalEnvironment({ cwd: scratch, envAllowNames: new Set([PASS_VAR]) });
+      const r = await env.exec(`echo "V=${"$"}{${PASS_VAR}:-MISSING}"`);
       expect(r.stdout).toContain("V=ghs-passthrough-visible-abcdef");
     });
   });

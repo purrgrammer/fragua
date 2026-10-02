@@ -107,15 +107,15 @@ const Web = Type.Object(
 
 const Bash = Type.Object(
   {
-    // Env var names re-allowed into bash-tool subprocesses under the daemon
-    // (and hence the harness). By default the daemon strips every
-    // provider-credential-named var (API keys, tokens, secrets, plus the
-    // env-var names of providers configured in the store) so a workflow's
-    // shell steps can't read the operator's credentials. List a name here to
-    // re-admit it — e.g. `GH_TOKEN` for a workflow that shells out to `gh`.
-    // Provider credentials are never re-admitted (the spawn-time predicate
-    // strips them regardless). Merged as a whole-array replace: a project
-    // list overrides the global list, it does not append.
+    // Bash-tool env ALLOW-LIST additions under the daemon (and hence the
+    // harness). bash subprocesses inherit DENY-BY-DEFAULT: only the built-in
+    // baseline (PATH, HOME, TMPDIR, TERM, SHELL, USER, LANG, LC_*, FRAGUA_*)
+    // plus the names listed here reach a workflow's shell steps — everything
+    // else, including the operator's credentials, is dropped. List a name to
+    // allow it — e.g. `GH_TOKEN` for a workflow that shells out to `gh`.
+    // Provider credentials are never allowed (refused with a warning). Merged as
+    // a whole-array replace: a project list overrides the global list, it does
+    // not append.
     "env-passthrough": Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
@@ -248,9 +248,10 @@ export function resolveTimeouts(cfg: FraguaConfig): ResolvedTimeouts {
   return out;
 }
 
-/** Resolve the set of env var names re-allowed into bash-tool subprocesses.
- * Empty when unset. Consumed by `daemonEnvDeny` to exempt these names from
- * the default provider-credential strip (`fragua daemon` / harness). */
+/** Resolve the set of env var names allowed into bash-tool subprocesses on top
+ * of the built-in baseline. Empty when unset. Consumed by `daemonEnvAllow`,
+ * which refuses any provider-credential name before it reaches the allow-list
+ * (`fragua daemon` / harness). */
 export function resolveEnvPassthrough(cfg: FraguaConfig): Set<string> {
   return new Set(cfg.bash?.["env-passthrough"] ?? []);
 }

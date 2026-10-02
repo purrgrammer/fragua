@@ -24,7 +24,7 @@
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback or a same-file helper it calls |
+| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback, a `SAVEPOINT`-wrapped closure (the startup sweep's `sweepRun`), or any same-file helper reachable from one to full transitive depth |
 | **I2** | No handler state outside the projection | HandlerContext API; pure-function handler signature |
 | **I3** | Intents always-appendable; facts OCC-checked | Two distinct store methods (`appendIntent`, `appendFact`) |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract | HandlerContext carries signal; pre-wired LLM/HTTP clients auto-propagate |
@@ -281,7 +281,9 @@ The single-transaction mutation surface (shares the SQLite writer connection, ru
 
 ### 4.2 IEventReader
 
-Read-only run-level reads — run state + enumeration (`getState`, `listRunIds`, `listRunSummaryRows`, `runStateCounts`), the event log (per-run, by-type, snapshot-scrubber feed, the three global-feed cursor variants, unapplied intents), messages (full + the narrow wire shape + thread listing), per-run cost/step aggregates, the outputs index, raw blob reads, scoped artifact reads, and the workflow catalog + emergent-paths project/cwd listings. Includes the daemon's wake-pending sweep helpers (`getWakeCandidates`, `getNextPendingIntent`, `findOrphanSideEffects`, `getInboxActionCandidates`, `getGcEligibleSnapshotRuns`) so the daemon never reaches for `db` directly. See `packages/store/src/types.ts`.
+Read-only run-level reads — run state + enumeration (`getState`, `listRunIds`, `listRunSummaryRows`, `runStateCounts`), the event log (per-run, by-type, snapshot-scrubber feed, the three global-feed cursor variants, unapplied intents, the bounded `getLatestHumanPause` gate read), messages (full + the narrow wire shape + thread listing), per-run cost/step aggregates, the outputs index, raw blob reads, scoped artifact reads, and the workflow catalog + emergent-paths project/cwd listings. Includes the daemon's wake-pending sweep helpers (`getWakeCandidates`, `getNextPendingIntent`, `findOrphanSideEffects`, `getInboxActionCandidates`, `getGcEligibleSnapshotRuns`) so the daemon never reaches for `db` directly. See `packages/store/src/types.ts`. HTTP run-read clients don't consume this surface directly: the run-read route handlers project through the shared read plane (`@fragua/core/read-plane`), and a read-discipline lint (`packages/server/test/read-plane-discipline.test.ts`) fails the build on a raw `deps.store.<reader>()` call inside a run-read route body unless it carries the `read-discipline-allow:` marker — so the read plane is the enforced seam, not a convention.
+
+**Read-plane projections (`@fragua/core/read-plane`).** Beyond the summary / detail / steps / messages / events / snapshots / diff / streaming projections, the plane fronts the control surface with three bounded reads so the routes stop scanning raw state: `pauseRoutes(runId)` recovers a paused run's declared route enum from `getLatestHumanPause` (folds the v4 `fact.run_paused{reason:"human"}` and the LEGACY `fact.run_paused_human`) for the `POST /runs/:id/human` enum precheck; `controlState(runId)` returns the lean `{status, inboxStatus, cwd, baseGitSha}` slice backing the accept/discard gate, the SSE close-check, and the HITL status precheck; `projects()` fronts the identity projection. `globalMetrics` / `globalModelBreakdown` front `GET /metrics/global` when the plane is built with an optional `analytics` reader. The `worktreePath` on `RunDetail` is resolved at the `GET /runs/:id` HTTP boundary (which probes the filesystem), NOT in the projection — the read plane stays pure so every read client fans out through it without a hidden syscall.
 
 ### 4.3 IAnalyticsReader
 
@@ -353,8 +355,9 @@ Handlers never compute `argsHash` themselves. The framework owns canonicalisatio
 ### Enforced at review
 The discipline lints are AST scans (not regex over source text), so a forbidden call can't slip past by renaming or by routing through a helper:
 - Handler discipline (`packages/core/test/handler/discipline.test.ts`): no `node:*`/`undici` import, `fetch`/`globalThis.fetch`, `Bun.*`, or `process.env` inside `handlers/` — I/O routes through `ctx`. A biome `noRestrictedImports` rule bans `node:fs`/`node:child_process`/`undici` there as a pre-commit backstop.
-- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback or a same-file helper it calls.
+- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback, a `SAVEPOINT`-wrapped closure (the startup sweep's `sweepRun`), or any same-file helper reachable from one — followed to full transitive depth, not one level.
 - Browser safety (same file): no `node:`/`bun:`/`@fragua/store` value import transitively reachable from `packages/core/src/index.ts`.
+- Read discipline: run-read route handlers project through the read plane, not raw store reads — `packages/server/test/read-plane-discipline.test.ts` fails on a `deps.store.<reader>()` (or aliased-`store`) call in a run-read route body; `packages/core/test/read-plane/discipline.test.ts` fails on a `node:fs` sync call (`existsSync`/`statSync`/`readFileSync`) inside `packages/core/src/read-plane/`. Both honour the `read-discipline-allow:` marker. The read plane is pure — the `RunDetail.worktreePath` filesystem probe lives at the `GET /runs/:id` route boundary, not the projection.
 - SQL location (`packages/store/test/sql-location.lint.test.ts`): table DML/DQL lives only in `*-queries.ts` (a named maintenance allowlist aside).
 - Inline imports (`packages/server/test/inline-import-discipline.test.ts`): no dynamic `import()`/`require()` in production source across `packages/*/src` + `cli/bin`.
 - Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for llm-style handlers that self-bound via cost/tokens), include replay property test for external tools.
@@ -368,6 +371,8 @@ The boot sequence (`daemonMain`): acquire the `daemon_lock` — if it's held but
 The executor loop (`runExecutor`) claims the next run (`claimNextRun(MAX_CONCURRENT_RUNS)`, sleeping 50 ms when the queue is empty) and dispatches each into `runOne` concurrently.
 
 `runOne` is the per-run turn loop. It re-reads `run_state` each turn and returns on any terminal/paused/quarantined status (it does not re-read `daemon_lock` — a TTL-reclaimed zombie is fenced only when its next fact commit fails OCC, then halts via `occ_exhausted`; §1.6). It then checks the contract-version gate — an out-of-`[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` pin pauses with `engine_incompatible` and returns (§1.11). Otherwise it folds unapplied intents (`cancel` wins — commits the cancel fact and returns), builds the node's abort signal as `AbortSignal.any` of the steer controller ∪ shutdown ∪ (when `maxMs` is set) a timeout, dispatches the handler (bounded by a `maxMs + LEAK_GRACE_MS` race when applicable, unbounded for llm), maps the result (or a caught error) to facts, and appends them under OCC — retrying the turn on `ConcurrencyError`. See `packages/daemon/src/executor.ts`.
+
+If a throw escapes the per-turn body entirely (outside the inner try that wraps only the handler — a fold / graph-load / commit failure), `runOne`'s outer safety-net catch terminates the run **in-process** rather than leaving it stranded `running` for the next restart to sweep. It captures the crash-terminal (`fact.run_terminated{errored}`) append's OCC result and, on a lost race (a sibling advanced the version between the catch's read and its write), re-reads fresh `run_state` and retries under a fresh OCC controller (`commitParkOrTerminal` semantics), bounded by `HALT_APPEND_MAX_ATTEMPTS`, escalating to `occ_exhausted` at the ceiling. `startupSweep` is now only a last-resort backstop for a process that dies mid-recovery, not the primary recovery path for a mid-turn crash.
 
 ### 6.1 Executor module decomposition
 
@@ -424,13 +429,25 @@ each owning one concern and reaching only into the store API:
 - `occ-append.ts` — `tryAppendFact` (the OCC append primitive, conflict →
   `false`), `makeOccController` (the per-`runOne` conflict controller:
   warn at 2, halt with `occ_exhausted` at 3, with the halt append itself
-  retried against fresh state), and the single `commitParkOrTerminal` shared by
-  the linear and fan-out paths: it commits a run-parking / terminal fact
-  HONESTLY — on a lost OCC race it re-reads (return terminal if the run already
-  left `running`), else drives the controller (halt `occ_exhausted` at the
-  ceiling, else park the facts for a re-commit next turn). No call site discards
-  a commit result, so a conflicted halt/pause can no longer strand the run
-  `running` (§1.6). Owns `DispatchOutcome`, re-exported from `executor.ts`.
+  retried against fresh state), and the single `commitWithOcc` commit arm shared
+  by *every* append site on both the linear and fan-out paths. It commits
+  through a caller-supplied primitive (`occAppendOnce` on the linear path, the
+  serialized `commitFanoutFact` on the fan-out path) and routes the three
+  outcomes uniformly: success (run the caller's success side-effects, then a
+  configured `terminal` / `continue` / proceed outcome), the run leaving
+  `running` under us (`status`), and a genuine OCC conflict → drive the
+  controller (halt `occ_exhausted` at the ceiling, else park the facts for a
+  re-commit next turn). The fan-out arms additionally hook it to abort + drain
+  the in-flight pool on a non-halting exit. `commitParkOrTerminal` is now a thin
+  wrapper over `commitWithOcc` pinning terminal-on-success / terminal-on-status
+  (the run-parking / terminal case). No call site discards
+  a commit result — including `runOne`'s outer crash catch, which drives its
+  crash-terminal append through the same `commitParkOrTerminal` + fresh OCC
+  controller so a conflicted mid-turn crash recovers in-process rather than
+  stranding the run `running` (§1.6, §6). The bounded terminal-append retry
+  shares the exported `HALT_APPEND_MAX_ATTEMPTS` ceiling with the controller's
+  `occ_exhausted` escalation. Owns `DispatchOutcome`, re-exported from
+  `executor.ts`.
 - `snapshot-service.ts` — `captureBoundarySnapshot` (per-step / HITL Diff
   snapshots) and `disposeTerminalWorktree` (terminal snapshot then dispose,
   gated on the `fact.snapshot_recorded` append landing).
@@ -448,6 +465,7 @@ A `type: parallel` node hands control to `runFanout` (in `executor.ts`), which d
 - **The frontier is a fold of the log.** `fact.fanout_started` seeds the active set (`routing["internal.active_nodes"]`); each branch's `fact.node_completed` removes its node while a bundled `fact.dispatch_started` adds the successor; `fact.node_aborted` is a no-op on the set (the branch stays active to re-dispatch). The live frontier and a from-scratch `deriveRunState` fold therefore agree by construction — the active set is **diagnostic, derived, never an authority**; the scalar `run_state.status` is the lifecycle truth that claim / sweep / SSE read.
 - **Reactive pool, not a batch.** Branches dispatch concurrently into a `Promise.race` pool; the instant one settles, its fact commits and its successor dispatches — a fast branch never waits on a slow sibling (no head-of-line blocking). This is why the **commit unit is the branch-step, not a superstep**: there is no per-superstep barrier, and the log is legitimately interleaved.
 - **One writer, OCC intact.** Every branch commits through the single daemon writer's serialized lane (`commitFanoutFact`), re-reading the live `version` per attempt and retrying the *append* (never re-executing the handler) on a sibling-moved-version conflict. K concurrent branches are OCC-contention-free because only one writer ever commits; `fanout_joined` is the linearization point that closes the region. A commit that fails because the run left `running` (operator pause / cancel) is classified `status`, not OCC, so it never spuriously feeds the conflict counter.
+- **Planner-driven fact-selection, symmetric with the linear path.** The fan-out driver (`fanout.ts`) chooses *no* facts of its own: the seed (`planSeedFanout`), the join / deferred-pause transition (`planJoin`), the per-branch settlement (`planBranchSettlement` — the run-level-vs-branch fact partition, the fail-closed branch-terminal halt via `planBranchTerminal`, and the bundled successor `dispatch_started`), the run-budget disposition (`planBudgetDisposition`), and the frontier step (`planFanoutStep`) are all pure functions in `fanout-planner.ts`, exactly as the linear path delegates to `predispatch-/transition-/abort-planner.ts`. The driver reads the store, calls the planner, and commits the returned facts — and every OCC conflict arm on both paths goes through the one shared `commitWithOcc` helper (§6.1), so the two paths can't drift on how a fact is chosen or how a lost race is handled. `fanout-planner.ts` is covered by the decision-core purity lint (no store handle, clock, or RNG).
 - **Two-level recovery.** A mid-region stop recovers at two granularities. **Frontier-level:** a sub-node that already committed `node_completed` is gone from the active set, so recovery re-dispatches only the unfinished sub-nodes — no re-execution of completed work, and **no barrier is needed to know it**, because each branch's cursor *is* its position in the folded active set (so an asymmetric crash — branch A deep, branch B shallow — recovers each branch independently). **Transcript-level:** an interrupted sub-node rehydrates its own thread (`node:<id>#<iter>`) and continues from where it died, exactly like a linear node's resume (an abort does not bump the iteration).
 - **Pause is run-global.** There is no per-branch pause seam (and none will be built until there is demand). The operator's pause / cancel — or a budget breach detected at any branch commit — trips the run's one shared `AbortSignal`, aborting every in-flight branch; on resume each branch re-enters from its logged checkpoint. A branch that hard-fails every turn trips a **per-branch** abort-loop ceiling (process-local, like the linear counter — it resets on restart; the durable backstops are the per-branch wall-clock timeout and the run budget). The supervisor's per-handler watchdog reclaims a leaked branch (one that ignores its signal) via `fact.handler_timeout_leaked`, and an early-terminal pool bail aborts the still-in-flight branches rather than leaving them burning cost.
 - **Bounded routing.** The branch set is **static per run** — materialised at parse time, never grown during dispatch — and the frontier holds at most one node per branch. So a fan-out's `routing` footprint scales with the (static) branch width, not with runtime dispatch; realistic fan-outs sit far under I6 (`routing` < 8 KB), and the column CHECK enforces it at the seed `fanout_started` append. There is no *max*-branch validator bound today (only E036's ≥2 minimum), so a pathologically wide fan-out fails its seed loudly (`PayloadTooLargeError`) rather than corrupting — a latent validator gap to close if very wide fan-outs become real, not an active risk. A hypothetical dynamic ("fork N at runtime") variant would still materialise the full branch set at plan time, never stream branches during dispatch.

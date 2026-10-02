@@ -690,4 +690,112 @@ steps:
     expect(s.status).toBe("paused");
     r.cleanup();
   });
+
+  test("mid-turn crash whose terminal fact loses one OCC race recovers in-process (no restart/sweep)", async () => {
+    // A non-OCC throw on the transition commit escapes into runOne's outer
+    // crash catch. The crash-terminal append then loses ONE OCC race (a
+    // sibling advanced the version between the catch's read and its write) and
+    // the retry lands — all on the SAME store/executor, no reopen + sweep.
+    const r = makeRig(`name: t\nsteps:\n  work: {type: llm, prompt: x}\n`);
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "crash-occ-1");
+
+    const origAppend = r.store.appendFact.bind(r.store);
+    let crashed = false;
+    let terminalConflicts = 0;
+    r.store.appendFact = (runId, facts, version, appendOpts) => {
+      const f = facts[0];
+      if (!crashed && f?.type === "fact.node_completed") {
+        crashed = true;
+        throw new Error("injected mid-turn crash");
+      }
+      if (f?.type === "fact.run_terminated" && terminalConflicts < 1) {
+        terminalConflicts++;
+        throw new ConcurrencyError(version, version + 1);
+      }
+      return origAppend(runId, facts, version, appendOpts);
+    };
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 2000);
+    r.store.claimNextRun(1);
+    await runOne("crash-occ-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      shutdownSignal: ac.signal,
+    }).catch(() => undefined);
+
+    expect(crashed).toBe(true);
+    expect(terminalConflicts).toBe(1);
+    const final = r.store.getState("crash-occ-1")!;
+    expect(final.status).toBe("halted");
+    const terminals = r.store.getEvents("crash-occ-1").filter((e) => e.type === "fact.run_terminated");
+    expect(terminals).toHaveLength(1);
+    expect((terminals[0]!.payload as { reason: string }).reason).toBe("error");
+    r.cleanup();
+  });
+
+  test("mid-turn crash escalates to occ_exhausted when the terminal append conflicts repeatedly", async () => {
+    // Same crash trigger, but the crash-terminal `error` append conflicts on
+    // EVERY attempt. The fresh OCC controller escalates to occ_exhausted at
+    // the ceiling — in-process, not a silent rethrow that strands the run.
+    const r = makeRig(`name: t\nsteps:\n  work: {type: llm, prompt: x}\n`);
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "crash-occ-2");
+
+    const origAppend = r.store.appendFact.bind(r.store);
+    let crashed = false;
+    let errorConflicts = 0;
+    r.store.appendFact = (runId, facts, version, appendOpts) => {
+      const f = facts[0];
+      if (!crashed && f?.type === "fact.node_completed") {
+        crashed = true;
+        throw new Error("injected mid-turn crash");
+      }
+      if (f?.type === "fact.run_terminated" && (f.payload as { reason?: string }).reason === "error") {
+        errorConflicts++;
+        throw new ConcurrencyError(version, version + 1);
+      }
+      return origAppend(runId, facts, version, appendOpts);
+    };
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 2000);
+    r.store.claimNextRun(1);
+    await runOne("crash-occ-2", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      shutdownSignal: ac.signal,
+    }).catch(() => undefined);
+
+    expect(crashed).toBe(true);
+    expect(errorConflicts).toBe(3); // OCC_CEILING error-terminal attempts before escalation
+    const final = r.store.getState("crash-occ-2")!;
+    expect(final.status).toBe("halted");
+    const events = r.store.getEvents("crash-occ-2");
+    const terminal = events.find((e) => e.type === "fact.run_terminated");
+    expect((terminal!.payload as { reason: string }).reason).toBe("occ_exhausted");
+    expect(events.filter((e) => e.type === "occ_conflict_warning").length).toBe(1);
+    r.cleanup();
+  });
 });

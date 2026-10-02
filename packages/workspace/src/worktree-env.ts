@@ -5,8 +5,11 @@
 // Layout:
 //   <repoRoot>/.fragua/worktrees/<run-id>/   ← the worktree (detached HEAD)
 //
-// Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
-// shared with the main repo. If the project needs dependencies installed,
+// Git-worktree isolation ONLY: untracked/ignored paths (node_modules, .env,
+// etc.) are NOT shared with the main repo — but this is a working-tree
+// boundary, NOT process / network / host-FS isolation. The bash tool runs
+// arbitrary code on the host (see docs/handler-contract.md § Agent tools); the
+// worktree does not sandbox it. If the project needs dependencies installed,
 // set `.fragua/config.yaml` `bootstrap` to the appropriate command
 // (e.g. `bun install --frozen-lockfile`, `pnpm install`, `pip install -r
 // requirements.txt`). The command runs inside the fresh worktree before the
@@ -20,7 +23,7 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
+import { isBaselineEnvAllowed, LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment, ScratchFile, ScratchKey } from "./types.ts";
 
 /** A shell command string, or a callback given the partially-initialized
@@ -74,8 +77,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly bootstrapTimeoutMs: number;
   private readonly envPassthroughHint: string | undefined;
   private readonly local: LocalEnvironment;
-  private readonly envDenyNames: ReadonlySet<string> | undefined;
-  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
+  private readonly envAllowNames: ReadonlySet<string> | undefined;
+  private readonly envAllowPredicate: ((name: string) => boolean) | undefined;
   private initialized = false;
   private disposed = false;
 
@@ -90,14 +93,14 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
     if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
     if (opts.envPassthroughHint !== undefined) this.envPassthroughHint = opts.envPassthroughHint;
-    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
-    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
+    if (opts.envAllowNames !== undefined) this.envAllowNames = opts.envAllowNames;
+    if (opts.envAllowPredicate !== undefined) this.envAllowPredicate = opts.envAllowPredicate;
     this.local = new LocalEnvironment({
       cwd: this.worktreePath,
       ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
       ...(opts.extraBlockedPatterns !== undefined ? { extraBlockedPatterns: opts.extraBlockedPatterns } : {}),
-      ...(opts.envDenyNames !== undefined ? { envDenyNames: opts.envDenyNames } : {}),
-      ...(opts.envDenyPredicate !== undefined ? { envDenyPredicate: opts.envDenyPredicate } : {}),
+      ...(opts.envAllowNames !== undefined ? { envAllowNames: opts.envAllowNames } : {}),
+      ...(opts.envAllowPredicate !== undefined ? { envAllowPredicate: opts.envAllowPredicate } : {}),
     });
   }
 
@@ -119,27 +122,17 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (!alreadyProvisioned) {
       const args = ["worktree", "add", "--detach", this.worktreePath];
       if (this.baseRef !== undefined) args.push(this.baseRef);
-      await runGit(this.repoRoot, args, undefined, this.envDenyNames, this.envDenyPredicate);
+      await runGit(this.repoRoot, args);
     }
 
-    const { stdout: headStdout } = await runGitCapture(
-      this.worktreePath,
-      ["rev-parse", "HEAD"],
-      this.envDenyNames,
-      this.envDenyPredicate,
-    );
+    const { stdout: headStdout } = await runGitCapture(this.worktreePath, ["rev-parse", "HEAD"]);
     this.baseGitSha = headStdout.trim();
 
     // Branch the source repo is on at provision — the post-run merge/commit
     // target default. The worktree is detached, so this is read from the
     // source repo, not the worktree. Detached / tag / unborn → null.
     try {
-      const { stdout: refStdout } = await runGitCapture(
-        this.repoRoot,
-        ["symbolic-ref", "--short", "HEAD"],
-        this.envDenyNames,
-        this.envDenyPredicate,
-      );
+      const { stdout: refStdout } = await runGitCapture(this.repoRoot, ["symbolic-ref", "--short", "HEAD"]);
       this.baseGitRef = refStdout.trim() || null;
     } catch {
       this.baseGitRef = null;
@@ -154,18 +147,20 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
         const cmd = this.bootstrap;
         const result = await this.local.exec(cmd, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
-          // The bootstrap ran under the bash env-strip. Only surface the strip
-          // as a suspect when the command actually names a stripped var. The
-          // daemon always populates envDenyNames with provider names, so any
-          // looser gate fires on every unrelated failure (network timeout,
-          // wrong cwd, typo'd command) and misattributes it to the strip.
-          const denied = this.envDenyNames ? [...this.envDenyNames] : [];
-          const referenced = denied.filter((n) => cmd.includes(n));
+          // The bootstrap ran under the bash env allow-list. Only surface the
+          // allow-list as a suspect when the command names an ambient var that
+          // the allow-list did NOT admit — a looser gate fires on every unrelated
+          // failure (network timeout, wrong cwd, typo'd command) and
+          // misattributes it to the allow-list.
+          const allow = this.envAllowNames;
+          const referenced = Object.keys(process.env).filter(
+            (n) => !isBaselineEnvAllowed(n) && !allow?.has(n) && cmd.includes(n),
+          );
           const hint = this.envPassthroughHint;
           let note = "";
           if (referenced.length > 0) {
             note =
-              `\n(note: bootstrap references env var(s) removed by the bash env-strip: ${referenced.join(", ")}` +
+              `\n(note: bootstrap references env var(s) not on the bash allow-list: ${referenced.join(", ")}` +
               (hint ? ` — re-admit a non-credential var via ${hint}` : "") +
               `)`;
           }
@@ -196,12 +191,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       return false;
     }
     try {
-      const { stdout } = await runGitCapture(
-        this.repoRoot,
-        ["worktree", "list", "--porcelain"],
-        this.envDenyNames,
-        this.envDenyPredicate,
-      );
+      const { stdout } = await runGitCapture(this.repoRoot, ["worktree", "list", "--porcelain"]);
       // `--porcelain` emits records separated by blank lines; each
       // starts with `worktree <path>`. Compare realpaths — on macOS
       // `/var/...` is a symlink to `/private/var/...` and git emits
@@ -236,13 +226,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (this.disposed || this.keepAfterDispose) return;
     this.disposed = true;
     try {
-      await runGit(
-        this.repoRoot,
-        ["worktree", "remove", "--force", this.worktreePath],
-        undefined,
-        this.envDenyNames,
-        this.envDenyPredicate,
-      );
+      await runGit(this.repoRoot, ["worktree", "remove", "--force", this.worktreePath]);
     } catch {
       // worktree may already be gone (removed out of band)
     }
@@ -294,33 +278,18 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   }
 }
 
-function buildGitEnv(
-  extraEnv?: Record<string, string>,
-  envDenyNames?: ReadonlySet<string>,
-  envDenyPredicate?: (name: string) => boolean,
-): NodeJS.ProcessEnv {
-  const merged: Record<string, string | undefined> =
-    extraEnv != null ? { ...process.env, ...extraEnv } : { ...process.env };
-  if (envDenyNames !== undefined) {
-    for (const name of envDenyNames) delete merged[name];
-  }
-  if (envDenyPredicate !== undefined) {
-    for (const name of Object.keys(merged)) {
-      if (envDenyPredicate(name)) delete merged[name];
-    }
-  }
-  return merged as NodeJS.ProcessEnv;
+/** Env for fragua's own git plumbing (worktree add / rev-parse / list /
+ *  remove). Trusted, non-agent code running a fixed command set, so it inherits
+ *  the full daemon env — the deny-by-default allow-list applies to the
+ *  AGENT-facing bash tool ({@link LocalEnvironment.exec}), not here. `git` needs
+ *  HOME/PATH for config + credential-helper lookup. */
+function buildGitEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
+  return (extraEnv != null ? { ...process.env, ...extraEnv } : { ...process.env }) as NodeJS.ProcessEnv;
 }
 
-function runGit(
-  cwd: string,
-  args: string[],
-  extraEnv?: Record<string, string>,
-  envDenyNames?: ReadonlySet<string>,
-  envDenyPredicate?: (name: string) => boolean,
-): Promise<void> {
+function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const env = buildGitEnv(extraEnv, envDenyNames, envDenyPredicate);
+    const env = buildGitEnv(extraEnv);
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
@@ -334,14 +303,9 @@ function runGit(
   });
 }
 
-function runGitCapture(
-  cwd: string,
-  args: string[],
-  envDenyNames?: ReadonlySet<string>,
-  envDenyPredicate?: (name: string) => boolean,
-): Promise<{ stdout: string; stderr: string }> {
+function runGitCapture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const env = buildGitEnv(undefined, envDenyNames, envDenyPredicate);
+    const env = buildGitEnv();
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let stdout = "";
     let stderr = "";

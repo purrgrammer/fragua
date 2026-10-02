@@ -7,6 +7,9 @@
 //   - P19: SSE replay via Last-Event-ID
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { SqliteStore, sha256Hex } from "@fragua/store";
 import { FEED_EVENT_KINDS, RUN_STATUSES } from "@fragua/types";
@@ -1096,6 +1099,23 @@ describe("reads", () => {
     expect(after1).toHaveLength(2);
     expect(after1[0]!.seq).toBeGreaterThan(1);
   });
+
+  test("coerces a non-numeric since to the default (0) instead of NaN", async () => {
+    store.enqueueRun({ runId: "rn", workflowSha: "wf" });
+    store.appendIntent("rn", { type: "intent.pause_requested", payload: {} });
+    const good = (await (await req("GET", "/runs/rn/events")).json()) as { seq: number }[];
+    const bad = (await (await req("GET", "/runs/rn/events?since=abc")).json()) as { seq: number }[];
+    expect(bad).toEqual(good);
+  });
+
+  test("coerces a non-numeric limit to the default cap instead of NaN", async () => {
+    store.enqueueRun({ runId: "rl", workflowSha: "wf" });
+    store.appendIntent("rl", { type: "intent.pause_requested", payload: {} });
+    const good = (await (await req("GET", "/runs/rl/events")).json()) as { seq: number }[];
+    const bad = (await (await req("GET", "/runs/rl/events?limit=abc")).json()) as { seq: number }[];
+    expect(bad).toEqual(good);
+    expect(bad.length).toBeGreaterThan(0);
+  });
 });
 
 describe("GET /metrics/global", () => {
@@ -1153,6 +1173,57 @@ describe("GET /metrics/global", () => {
     expect(pro).toBeDefined();
     expect(pro!.tokens).toBe(100);
     expect(pro!.cost_usd).toBeCloseTo(0.02, 6);
+  });
+
+  test("coerces a non-numeric windowHours to the 720h default instead of NaN", async () => {
+    store.enqueueRun({ runId: "rw1", workflowSha: "wf" });
+    const s = store.getState("rw1")!;
+    store.appendFact(
+      "rw1",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s.contractVersion, startNode: "a" },
+        },
+      ],
+      s.version,
+    );
+    const def = (await (await req("GET", "/metrics/global")).json()) as { total_runs: number };
+    const bad = (await (await req("GET", "/metrics/global?windowHours=abc")).json()) as { total_runs: number };
+    expect(bad.total_runs).toBe(def.total_runs);
+    expect(bad.total_runs).toBe(1);
+  });
+
+  test("windowHours is clamped to a year, so an oversized window cannot force a full-history scan", async () => {
+    store.enqueueRun({ runId: "old1", workflowSha: "wf" });
+    // A clock 400 days ahead: the run is inside an unbounded window but
+    // outside the clamped one-year window.
+    const ahead = createRoutes({ store, workflowReader, now: () => Date.now() + 400 * 24 * 3_600_000 });
+    const get = async (q: string) =>
+      (await (await ahead.request(`/metrics/global${q}`)).json()) as { total_runs: number };
+    expect((await get("")).total_runs).toBe(0);
+    expect((await get("?windowHours=99999999")).total_runs).toBe(0);
+    expect((await get(`?windowHours=${24 * 500}`)).total_runs).toBe(0);
+  });
+});
+
+describe("GET /runs/:id — worktreePath resolution", () => {
+  test("sets worktreePath when the worktree dir exists and omits it otherwise", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    const cwd = await mkdtemp(join(tmpdir(), "fragua-routes-wt-"));
+    try {
+      store.enqueueRun({ runId: "wt-absent", workflowSha: "wf", cwd });
+      const absent = (await (await app.request("/runs/wt-absent")).json()) as { worktreePath?: string };
+      expect(absent.worktreePath).toBeUndefined();
+
+      store.enqueueRun({ runId: "wt-present", workflowSha: "wf", cwd });
+      await mkdir(join(cwd, ".fragua", "worktrees", "wt-present"), { recursive: true });
+      const present = (await (await app.request("/runs/wt-present")).json()) as { worktreePath?: string };
+      expect(present.worktreePath).toBe(join(cwd, ".fragua", "worktrees", "wt-present"));
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

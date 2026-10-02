@@ -3,13 +3,18 @@
 // `runFanout` reads, calls, then applies.
 
 import { describe, expect, test } from "bun:test";
+import { type BudgetDecision, retryCountKey } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import {
   type FanoutFrontier,
   noteDisposition,
   planBranchAbortLoop,
+  planBranchSettlement,
   planBranchTerminal,
+  planBudgetDisposition,
   planFanoutStep,
+  planJoin,
+  planSeedFanout,
 } from "../src/fanout-planner.ts";
 
 const frontier = (over: Partial<FanoutFrontier>): FanoutFrontier => ({
@@ -174,5 +179,175 @@ describe("planBranchAbortLoop", () => {
 
   test("no branch at the ceiling → undefined", () => {
     expect(planBranchAbortLoop(new Map([["a", 1]]), 5)).toBeUndefined();
+  });
+});
+
+describe("planBudgetDisposition", () => {
+  const decision = (over: Partial<BudgetDecision>): BudgetDecision => ({
+    events: [],
+    shouldHalt: false,
+    newlyWarned: [],
+    ...over,
+  });
+
+  test("shouldHalt → fact.run_terminated{budget} carrying haltReason as detail", () => {
+    expect(planBudgetDisposition(decision({ shouldHalt: true, haltReason: "run cost 1.50 > 1.00" }), "p")).toEqual({
+      type: "fact.run_terminated",
+      payload: { status: "errored", reason: "budget", detail: "run cost 1.50 > 1.00" },
+    });
+  });
+
+  test("shouldHalt with empty haltReason → no detail field", () => {
+    expect(planBudgetDisposition(decision({ shouldHalt: true }), "p")).toEqual({
+      type: "fact.run_terminated",
+      payload: { status: "errored", reason: "budget" },
+    });
+  });
+
+  test("pauseBreach → fact.run_paused{budget} with scope/metric/limit/actual and nodeId", () => {
+    expect(
+      planBudgetDisposition(decision({ pauseBreach: { scope: "node", metric: "cost", limit: 1, actual: 2 } }), "p"),
+    ).toEqual({
+      type: "fact.run_paused",
+      payload: { reason: "budget", nodeId: "p", scope: "node", metric: "cost", limit: 1, actual: 2 },
+    });
+  });
+
+  test("no breach → undefined", () => {
+    expect(planBudgetDisposition(decision({}), "p")).toBeUndefined();
+  });
+});
+
+describe("planSeedFanout", () => {
+  test("emits one fact.fanout_started over the branch list with iteration/pass", () => {
+    expect(planSeedFanout({ nodeId: "p", iteration: 1, pass: 2, branches: ["a", "b"] })).toEqual([
+      { type: "fact.fanout_started", payload: { nodeId: "p", iteration: 1, pass: 2, branches: ["a", "b"] } },
+    ]);
+  });
+
+  test("pass 0 is omitted from the payload", () => {
+    expect(planSeedFanout({ nodeId: "p", iteration: 0, pass: 0, branches: ["a"] })).toEqual([
+      { type: "fact.fanout_started", payload: { nodeId: "p", iteration: 0, branches: ["a"] } },
+    ]);
+  });
+});
+
+describe("planJoin", () => {
+  test("deferredPause → run_paused{operator}", () => {
+    expect(
+      planJoin({ deferredPause: true, nodeId: "p", iteration: 0, pass: 0, nextNode: "j", branchesCompleted: 2 }),
+    ).toEqual({ type: "fact.run_paused", payload: { reason: "operator", nodeId: "p" } });
+  });
+
+  test("else → fanout_joined with nextNode/branchesCompleted", () => {
+    expect(
+      planJoin({ deferredPause: false, nodeId: "p", iteration: 1, pass: 3, nextNode: "j", branchesCompleted: 2 }),
+    ).toEqual({
+      type: "fact.fanout_joined",
+      payload: { nodeId: "p", iteration: 1, pass: 3, nextNode: "j", branchesCompleted: 2 },
+    });
+  });
+});
+
+const nodeCompleted = (nodeId: string, nextNode: string): FactEvent => ({
+  type: "fact.node_completed",
+  payload: { nodeId, iteration: 0, tokens: 0, costUsd: 0, nextNode },
+});
+
+describe("planBranchSettlement", () => {
+  type Args = Parameters<typeof planBranchSettlement>[0];
+  const args = (over: Partial<Args>): Args => ({
+    nodeId: "b0",
+    facts: [],
+    nextNode: undefined,
+    join: "synth",
+    graphNodes: { b0: {}, n1: {}, synth: {} },
+    pass: 0,
+    liveRouting: {},
+    routingPatch: undefined,
+    disposition: undefined,
+    ...over,
+  });
+
+  test("completed run_terminated → branchTerminal, disposition captured, no successor", () => {
+    const done: FactEvent = { type: "fact.run_terminated", payload: { status: "completed", finalNode: "synth" } };
+    const r = planBranchSettlement(args({ facts: [done], nextNode: "n1" }));
+    expect(r.terminal).toBe(true);
+    expect(r.successor).toBeUndefined();
+    expect(r.branchFacts).toEqual([]);
+    expect(r.disposition).toEqual(planBranchTerminal("b0"));
+  });
+
+  test("run_paused/run_terminated branch facts route to disposition, node facts to branchFacts", () => {
+    const paused: FactEvent = { type: "fact.run_paused", payload: { reason: "operator", nodeId: "b0" } };
+    const completed = nodeCompleted("b0", "synth");
+    const r = planBranchSettlement(args({ facts: [paused, completed], nextNode: "synth" }));
+    expect(r.disposition).toBe(paused);
+    expect(r.branchFacts).toEqual([completed]);
+    expect(r.successor).toBeUndefined();
+    expect(r.terminal).toBe(false);
+  });
+
+  test("live successor (≠ join, present in graph) → bundled dispatch_started", () => {
+    const completed = nodeCompleted("b0", "n1");
+    const r = planBranchSettlement(args({ facts: [completed], nextNode: "n1", pass: 2 }));
+    expect(r.successor).toBe("n1");
+    expect(r.terminal).toBe(false);
+    expect(r.branchFacts).toEqual([
+      completed,
+      { type: "fact.dispatch_started", payload: { nodeId: "n1", iteration: 0, pass: 2, resumeOf: "fresh" } },
+    ]);
+  });
+
+  test("successor iteration reads the merged live routing + routingPatch", () => {
+    const completed = nodeCompleted("b0", "n1");
+    const r = planBranchSettlement(
+      args({ facts: [completed], nextNode: "n1", routingPatch: { [retryCountKey("n1")]: 5 } }),
+    );
+    expect(r.branchFacts[1]).toEqual({
+      type: "fact.dispatch_started",
+      payload: { nodeId: "n1", iteration: 5, resumeOf: "fresh" },
+    });
+  });
+
+  test("successor missing from the graph → fail closed to branchTerminal", () => {
+    const completed = nodeCompleted("b0", "ghost");
+    const r = planBranchSettlement(args({ facts: [completed], nextNode: "ghost" }));
+    expect(r.terminal).toBe(true);
+    expect(r.successor).toBeUndefined();
+    expect(r.disposition).toEqual(planBranchTerminal("b0"));
+    expect(r.branchFacts).toEqual([completed]);
+  });
+
+  test("null graphNodes (graph absent) → any successor fails closed", () => {
+    const completed = nodeCompleted("b0", "n1");
+    const r = planBranchSettlement(args({ facts: [completed], nextNode: "n1", graphNodes: null }));
+    expect(r.terminal).toBe(true);
+    expect(r.successor).toBeUndefined();
+  });
+
+  test("node_started facts are dropped, not committed", () => {
+    const started: FactEvent = { type: "fact.node_started", payload: { nodeId: "b0", iteration: 0 } };
+    const completed = nodeCompleted("b0", "synth");
+    const r = planBranchSettlement(args({ facts: [started, completed], nextNode: "synth" }));
+    expect(r.branchFacts).toEqual([completed]);
+  });
+
+  test("halt-over-pause precedence: incoming disposition halt survives a branch pause", () => {
+    const halt: FactEvent = { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } };
+    const paused: FactEvent = { type: "fact.run_paused", payload: { reason: "operator", nodeId: "b0" } };
+    const r = planBranchSettlement(args({ facts: [paused], nextNode: "synth", disposition: halt }));
+    expect(r.disposition).toBe(halt);
+  });
+
+  test("pure: same input ⇒ same output, inputs unmutated", () => {
+    const input = args({ facts: [nodeCompleted("b0", "n1")], nextNode: "n1", routingPatch: { x: 1 } });
+    const factsSnapshot = structuredClone([...input.facts]);
+    const routingSnapshot = structuredClone(input.liveRouting);
+    const first = planBranchSettlement(input);
+    const second = planBranchSettlement(input);
+    expect(first).toEqual(second);
+    expect(input.facts).toEqual(factsSnapshot);
+    expect(input.liveRouting).toEqual(routingSnapshot);
   });
 });

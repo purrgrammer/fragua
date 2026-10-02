@@ -138,6 +138,46 @@ in the UI is immediately visible to the CLI and vice versa.
 
 ---
 
+## What a workflow's shell can see — the bash env allow-list
+
+The `bash` tool and every `tool`-node `run:` execute **arbitrary shell commands on
+your machine** — they are not sandboxed. What they cannot see by default is your
+environment: a shell inherits a **deny-by-default** env, so a workflow can't read
+your provider keys or ambient secrets just by running `env`.
+
+The shell always inherits this baseline allow-list, verbatim, with no config:
+
+- `PATH`
+- `HOME`
+- `TMPDIR`
+- `TERM`
+- `SHELL`
+- `USER`
+- `LANG`
+- every `LC_*` (locale)
+- every `FRAGUA_*` (engine-set, e.g. `FRAGUA_OUTPUT`)
+
+`HOME` is on the list on purpose: `git` and `gh` read their config and credential
+helpers from `$HOME`, so worktree operations and `gh` steps keep working.
+
+To let a workflow's shell see one more variable — e.g. `GH_TOKEN` for a step
+that shells out to `gh` — add it to `bash.env-passthrough` in
+`~/.fragua/config.yaml` (global) or `<project>/.fragua/config.yaml` (project;
+replaces the global list):
+
+```yaml
+bash:
+  env-passthrough:
+    - GH_TOKEN
+```
+
+Provider credentials are **never** admitted, even if listed: fragua reads them
+directly and refuses to pass them to a shell (a warning names the refused var and
+points you at `fragua providers`). Under `fragua ci`, the equivalent knob is the
+`--allow-env NAME` flag (see [docs/CI.md](CI.md)).
+
+---
+
 ## See also
 
 - **[docs/cli.md](cli.md)** — every `fragua` verb, flag, and exit code.

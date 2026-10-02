@@ -1,7 +1,7 @@
-// Regression: daemonEnvDeny is fed `deps.authStorage.list()` — which can
-// include custom/unknown provider names. pi-ai's `findEnvKeys` contract for
-// unknown names is not asserted in this package; if it throws, the exception
-// must not propagate out of daemonEnvDeny and crash daemon startup.
+// Regression: daemonEnvAllow is fed `deps.authStorage.list()` — which can
+// include custom/unknown provider names. Its provider-prefix scan must tolerate
+// a name pi-ai's registry can't resolve; even if pi-ai's `findEnvKeys` throws on
+// an unknown name, the exception must not propagate out and crash daemon startup.
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as pi from "@earendil-works/pi-ai/compat";
@@ -17,8 +17,8 @@ afterEach(() => {
   mock.module("@earendil-works/pi-ai/compat", () => pi);
 });
 
-describe("daemonEnvDeny (unknown/custom provider)", () => {
-  test("(unknown-provider) a findEnvKeys throw does not propagate out of daemonEnvDeny", async () => {
+describe("daemonEnvAllow (unknown/custom provider)", () => {
+  test("(unknown-provider) resolving an allow-list for a custom provider does not throw", async () => {
     mock.module("@earendil-works/pi-ai/compat", () => ({
       ...pi,
       getProviders: realGetProviders,
@@ -30,7 +30,7 @@ describe("daemonEnvDeny (unknown/custom provider)", () => {
         return realFindEnvKeys(provider);
       },
     }));
-    const { daemonEnvDeny } = await import("../src/env-creds.ts");
-    expect(() => daemonEnvDeny({ env: {}, storeProviders: ["custom-unknown-provider"] })).not.toThrow();
+    const { daemonEnvAllow } = await import("../src/env-creds.ts");
+    expect(() => daemonEnvAllow({ storeProviders: ["custom-unknown-provider"] })).not.toThrow();
   });
 });

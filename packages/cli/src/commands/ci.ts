@@ -34,10 +34,7 @@ import { buildCiResult, type CiRunResult } from "../ci-result.ts";
 import { CLI_EXIT, cliExitCode, type StopReason } from "../cli-exit.ts";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 import {
-  buildProviderCredentialContext,
   captureCiEnvSecrets,
-  ciEnvDenyNames,
-  ciEnvDenyPredicate,
   listGlobalStoreProviders,
   seedCredsFromEnv,
   seedCredsFromGlobalStore,
@@ -179,13 +176,12 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const onSig = () => shutdown.abort();
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
-  // Build pi-ai's registry context once and thread it through both deny sites
-  // so the strip name-set and the spawn-time predicate can't observe a
-  // registry that changed between the two adjacent calls.
-  const credCtx = buildProviderCredentialContext();
+  // Deny-by-default: the CI-side allow-list is `--allow-env` (provider creds
+  // already refused above by `unsafeAllowEnvNames`), unioned with the built-in
+  // baseline inside `LocalEnvironment`. The value is still captured as a scrub
+  // needle below (allow ≠ declassify).
   const provisioner = new WorktreeProvisioner({
-    envDenyNames: ciEnvDenyNames(process.env, allowEnv, credCtx),
-    envDenyPredicate: ciEnvDenyPredicate(allowEnv, credCtx),
+    envAllowNames: allowEnv,
     envPassthroughHint: "--allow-env",
   });
   let runId: string | undefined;

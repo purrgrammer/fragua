@@ -210,6 +210,30 @@ export function selectEventsByType(db: Database, runId: string, type: string): E
   return db.query<EventRow, [string, string]>(SELECT_EVENTS_BY_TYPE_SQL).all(runId, type);
 }
 
+// Newest human-pause gate for a run, bounded to one row. Folds the v4
+// `fact.run_paused{reason:"human"}` and the LEGACY (≤v3) `fact.run_paused_human`
+// (same HITL prompt/routes payload) so a run pinned at any contract version
+// resolves its declared routes without a full-log scan (MIN_COMPATIBLE_CONTRACT
+// still folds both). Covered by the `(run_id, seq)` primary key.
+const SELECT_LATEST_HUMAN_PAUSE_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE run_id = ?1
+     AND (
+       (type = 'fact.run_paused' AND json_extract(payload, '$.reason') = 'human')
+       OR type = 'fact.run_paused_human'
+     )
+   ORDER BY seq DESC
+   LIMIT 1
+`;
+
+/** The most recent human-pause gate fact for `runId`, or null when the run
+ *  never paused at a human node. Bounded to one row — the caller reads the
+ *  declared route enum without materialising the event log. */
+export function selectLatestHumanPause(db: Database, runId: string): EventRow | null {
+  return db.query<EventRow, [string]>(SELECT_LATEST_HUMAN_PAUSE_SQL).get(runId) ?? null;
+}
+
 /** All worktree-snapshot events for `runId` in seq order: both the
  *  per-step / HITL `snapshot.captured` observability events and the
  *  terminal `fact.snapshot_recorded` fact. These are the two event

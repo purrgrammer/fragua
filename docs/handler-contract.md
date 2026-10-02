@@ -239,13 +239,40 @@ The agent-callable tool surface is deliberately minimal:
 | `read` | Read a file. Text returns line-truncated content; image files (jpg/png/gif/webp) return as inline `ImageContent` blocks the model can see. macOS path quirks (NFD, AM/PM, curly quotes) resolve transparently. |
 | `write`| Write / overwrite a file. Atomic temp+rename via the env, serialized per-path through a mutation queue so concurrent writes can't interleave. Creates parent dirs. |
 | `edit` | Multi-edit exact-text replacement with fuzzy fallback (NFKC + smart-quote / dash / NBSP normalization). Per-edit `oldText` must be unique and non-overlapping; error messages reference `edits[i]` so the model can self-correct. `prepareArguments` recovers from JSON-stringified `edits` arrays and legacy `{oldText, newText}` flat shape. |
-| `bash` | Run a shell command. Detached process group + tree kill on timeout/abort. Rolling buffer + temp-file spill keeps the full transcript recoverable when output exceeds the truncation window — the spill path appears in the truncation notice and in `data.full_output_path`. Optional `onUpdate` streams partial output during execution. Blocklist refuses dangerous commands before spawn. |
+| `bash` | Run a shell command — **arbitrary code execution on the host filesystem and network**, not a sandbox (see the note below). Detached process group + tree kill on timeout/abort. Rolling buffer + temp-file spill keeps the full transcript recoverable when output exceeds the truncation window — the spill path appears in the truncation notice and in `data.full_output_path`. Optional `onUpdate` streams partial output during execution. |
 | `grep` | Native regex search across files via `env.glob` — no shell spawn, no `rg` dependency. Skips default-ignored directories (`node_modules/`, `.git/`, `dist/`, `build/`, `.fragua/`, `.next/`, `coverage/`, `*.pyc`, `*.min.js`), binary files (null byte in first 1KB), and files larger than 1MB. 100-match limit by default; lines longer than 500 chars are truncated. Schema: `{ pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }`. |
 | `find` | Native glob enumeration via `env.glob` — no shell spawn, no `fd` dependency. Default ignores honoured. 1000-result limit by default. Schema: `{ pattern, path?, limit? }`. |
 | `ls`   | Non-recursive directory listing via `env.listDir`. Sorted alphabetical case-insensitive; directories carry a `/` suffix; dotfiles included. 500-entry limit by default. Schema: `{ path?, limit? }`. |
 
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
+
+**`bash` is not a containment boundary.** It spawns `/bin/sh -c <command>` on
+the host with the run's cwd as working directory. The workflow's own YAML is the
+trust boundary (PR review gates the library; SPEC §1); the shell is not. There
+are exactly three guardrails, none of which is isolation:
+
+1. **An env allow-list.** The subprocess inherits from the host env only a
+   built-in baseline — `PATH`, `HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`,
+   `LANG`, every `LC_*`, every `FRAGUA_*` — plus the operator-declared
+   allow-list (`bash.env-passthrough` under the daemon/harness, `--allow-env`
+   under `fragua ci`). Everything else, including the operator's provider
+   credentials, is dropped by default (deny-by-default). Provider-credential
+   names are refused from the allow-list outright. This keeps secrets out of the
+   shell; it does **not** stop the command from reading the host filesystem or
+   reaching the network.
+2. **A small refuse-list blocklist** (`packages/workspace/src/blocklist.ts`) —
+   a handful of regexes for the most catastrophic patterns (`rm -rf /`, `sudo`,
+   piping a download into a shell, force-push to main, `mkfs`/`dd`, fork bomb).
+   It is a coarse backstop, trivially bypassed by an adversarial command; it is
+   not a security boundary.
+3. **A `cd`-escape backstop** that refuses `cd <abs-path-outside-cwd>` segments.
+
+The cwd jail applied to `read` / `write` / `edit` (via `resolvePath`) does **not**
+extend to the `bash` command body: `cat ~/.ssh/id_rsa` or a `curl` exfil runs.
+This is acceptable under fragua's single-user local-tool threat model (SPEC §5),
+where the operator owns the machine, the credentials, and the reviewed workflow
+library — but do not mistake the worktree or the blocklist for a sandbox.
 
 Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. `judge` (`packages/workspace/src/judge-tool.ts`) exposes the System One primitives — `choice` / `score` / `noul` over agent-gathered evidence, answers with probabilities — and is present in the default set only when the run carries a judge client (`ctx.judge`); the backend strips it otherwise. Its cost lands as `cost.recorded` on the calling node like any llm spend. The tools are deliberately powerful — streaming output,
 image content, rich diffs, fuzzy edits, atomic writes, native walks —

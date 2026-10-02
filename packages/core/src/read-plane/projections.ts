@@ -4,8 +4,6 @@
 // module projects a RunState + its event tail into the shapes the
 // `/runs` read endpoints hand to read clients.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { IEventReader, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@fragua/store";
 import {
   HALT_REASONS,
@@ -162,10 +160,9 @@ export function runStateToDetail(
 
   detail.projectId = state.projectId;
   detail.projectName = state.projectName;
-  if (state.cwd != null) {
-    const candidate = join(state.cwd, ".fragua", "worktrees", state.runId);
-    if (existsSync(candidate)) detail.worktreePath = candidate;
-  }
+  // `worktreePath` is resolved at the HTTP boundary (`GET /runs/:id`), which
+  // probes the filesystem; the projection stays pure so every read client
+  // fans out through it without a hidden syscall.
 
   if (state.baseGitRef != null && state.baseGitRef.length > 0) detail.baseGitRef = state.baseGitRef;
   if (state.baseGitSha != null && state.baseGitSha.length > 0) detail.baseGitSha = state.baseGitSha;

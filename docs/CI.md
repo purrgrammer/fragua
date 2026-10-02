@@ -92,10 +92,11 @@ whole run.
 
 Provider credentials are read by fragua itself. Everything else a workflow's
 `tool` steps need (e.g. `GH_TOKEN` for `gh`) goes through `--allow-env`,
-because `fragua ci` **strips secret-named env vars from tool subprocesses** by
-default: any var whose name ends in `_KEY`, `_SECRET`, `_TOKEN`, `_PASSWORD`,
-`_CREDENTIAL`, `_PASS`, `_AUTH`, or `_PASSPHRASE`, plus every known
-provider-credential var.
+because `fragua ci` gives tool subprocesses (and the `bash` tool) a
+**deny-by-default** env: a shell inherits only the built-in baseline — `PATH`,
+`HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `LANG`, every `LC_*`, and every
+`FRAGUA_*` engine var — plus the names you pass with `--allow-env`. Everything
+else in the CI job's environment, including the provider credentials, is dropped.
 
 ```yaml
 - run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN
@@ -108,10 +109,13 @@ provider-credential var.
   declassify. The value is still captured as a scrub needle and redacted from
   the exported bundle. Repeat the flag or comma-separate for multiple names.
 - Provider credentials are **refused**: `--allow-env ANTHROPIC_API_KEY` (or
-  any `*_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`) exits with a usage error. A
-  provider key must never reach a tool subprocess.
-- The strip applies at spawn time against the live env, so a secret-named var
-  set mid-run is still stripped.
+  any `*_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`, or a held custom provider's
+  prefixed cred) exits with a usage error. A provider key must never reach a
+  tool subprocess.
+- Deny-by-default is name-agnostic: a var is dropped unless it's on the baseline
+  or you `--allow-env` it, so a secret set mid-run never leaks either.
+- `bash.env-passthrough` in `.fragua/config.yaml` is the harness-side equivalent
+  of `--allow-env`: same baseline, same provider-credential refusal.
 
 ## Run bundles — export and import
 

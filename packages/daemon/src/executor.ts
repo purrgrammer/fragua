@@ -14,7 +14,7 @@
 // (run-turn-state.ts) records. See ARCHITECTURE.md §6.1.
 
 import type * as core from "@fragua/core/handler";
-import type { IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
+import type { FactEvent, IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -22,7 +22,7 @@ import { dispatchOne } from "./dispatch-turn.ts";
 import type { RunDeps } from "./dispatch-wiring.ts";
 import { errorMessage, sleep } from "./executor-helpers.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
-import { makeOccController, tryAppendFact } from "./occ-append.ts";
+import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { create as createTurnState } from "./run-turn-state.ts";
 import { disposeTerminalWorktree } from "./snapshot-service.ts";
@@ -223,24 +223,40 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
     await runOneInner(runId, opts, budget);
   } catch (err) {
     // Outer safety net: if the main body escaped without terminalising
-    // the run, append `fact.run_terminated{errored}` so the `running` capacity slot
+    // the run, terminate it IN-PROCESS so the `running` capacity slot
     // doesn't leak. Covers throws outside the existing inner try/catch
     // that wraps only `spec.handler(ctx)` — e.g. foldIntents / graphFor
-    // / selectEdge / tryAppendFact failures. Belt-and-suspenders: the
-    // store's startupSweep also requeues stuck `running` rows on
-    // daemon restart.
+    // / selectEdge / commit failures. The crash-terminal append can lose
+    // its own OCC race (a sibling advanced the version between our read
+    // and this write), so we drive it through a fresh OCC controller: on
+    // conflict we re-read fresh state and retry, bounded by
+    // HALT_APPEND_MAX_ATTEMPTS, escalating to `occ_exhausted` at the
+    // ceiling rather than silently rethrowing with the terminal fact
+    // lost. The store's startupSweep is only a last-resort backstop for a
+    // process that dies mid-recovery, not the primary recovery path.
     const state = opts.store.getState(runId);
     if (state != null && state.status === "running") {
-      await tryAppendFact(opts.store, runId, state.version, [
+      const nodeId = state.currentNode ?? "<no-node>";
+      const errorFacts: FactEvent[] = [
         {
           type: "fact.run_terminated",
           payload: {
             status: "errored",
             reason: "error",
-            detail: `executor crashed at ${state.currentNode ?? "<no-node>"}: ${errorMessage(err)}`,
+            detail: `executor crashed at ${nodeId}: ${errorMessage(err)}`,
           },
         },
-      ]);
+      ];
+      const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
+      for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
+        const fresh = opts.store.getState(runId);
+        if (fresh == null || fresh.status !== "running") break;
+        const outcome = await commitParkOrTerminal(
+          { store: opts.store, runId, occ, nodeId, iteration: 0, expectedVersion: fresh.version },
+          errorFacts,
+        );
+        if (outcome.kind === "terminal") break;
+      }
     }
     throw err;
   }

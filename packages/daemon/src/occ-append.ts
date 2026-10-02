@@ -51,6 +51,11 @@ const OCC_CEILING = 3;
 const OCC_WARN_AT = 2;
 const OCC_BACKOFF_CAP_MS = 16;
 
+/** Bound on retrying a terminal/parking fact append against fresh state when it
+ * loses its OCC race. Shared by the OCC controller's `occ_exhausted` escalation
+ * and the executor's mid-turn-crash recovery so both use the same ceiling. */
+export const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
+
 export interface OccController {
   /** Record an OCC conflict on an append. Backs off; warns once at
    * OCC_WARN_AT; at OCC_CEILING halts the run (`occ_exhausted`) and returns
@@ -86,7 +91,6 @@ export function makeOccController(deps: {
         // a bounded number of times so the run actually terminates instead
         // of returning `halted: true` while the halt fact never landed —
         // which left the run stranded `running`.
-        const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
         for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
           const fresh = store.getState(runId);
           // Already terminal (a concurrent writer halted/cancelled/completed
@@ -163,13 +167,102 @@ export interface ParkOrTerminalDeps {
   onPark?: (facts: FactEvent[] | undefined) => void;
 }
 
+/** The generalized OCC commit arm shared by every append site on both the
+ * linear and fan-out paths. It commits `facts` through `commit`, then routes the
+ * three outcomes uniformly so no arm can strand the run (ARCH §1.6):
+ *  - success → run `onSuccess` (which may itself return a `DispatchOutcome` to
+ *    override, e.g. an abort-loop pause commit), else return `successOutcome`;
+ *  - the run left `running` under us (`status`) → return `statusOutcome`;
+ *  - a genuine OCC conflict → drive the shared controller: halt `occ_exhausted`
+ *    at the ceiling (terminal), else park (`onPark`) for a re-commit next turn
+ *    (continue).
+ * `onFail` fires the instant a commit fails (before classifying) and `onNonHalt`
+ * before any non-halting continue/status exit — the fan-out arms use them to
+ * abort + drain the in-flight pool. */
+export interface OccCommitPlan {
+  occ: OccController;
+  nodeId: string;
+  iteration: number;
+  expectedVersion: number;
+  /** Fact-type label for the conflict record; defaults to `facts[0].type`. */
+  attemptedFactType?: string;
+  /** The commit primitive (`occAppendOnce` on the linear path, the serialized
+   *  `commitFanoutFact` on the fan-out path). */
+  commit: (facts: FactEvent[]) => Promise<CommitResult>;
+  /** Returned after a successful commit (post `onSuccess`). `undefined` means
+   *  "proceed" — the fan-out pool keeps draining rather than exiting the turn. */
+  successOutcome: DispatchOutcome | undefined;
+  /** Returned when the run left `running` under us. `undefined` proceeds. */
+  statusOutcome: DispatchOutcome | undefined;
+  /** Success side-effects. A returned `DispatchOutcome` overrides
+   *  `successOutcome` (e.g. a follow-on abort-loop pause commit); a void return
+   *  (side-effects only) falls through to `successOutcome`. */
+  // biome-ignore lint/suspicious/noConfusingVoidType: the callback may return an outcome or nothing
+  onSuccess?: () => DispatchOutcome | void | Promise<DispatchOutcome | void>;
+  /** Fires the instant a commit fails, before classifying occ vs status. */
+  onFail?: () => void | Promise<void>;
+  /** Fires before any non-halting exit (status-continue or occ-not-halted). */
+  onNonHalt?: () => void | Promise<void>;
+  /** Park/clear hook: called with the facts on a non-halted OCC conflict, and
+   *  with undefined when the park is cleared (commit landed / status / halted). */
+  onPark?: (facts: FactEvent[] | undefined) => void;
+}
+
+export function commitWithOcc(
+  plan: OccCommitPlan & { successOutcome: DispatchOutcome; statusOutcome: DispatchOutcome },
+  facts: FactEvent[],
+): Promise<DispatchOutcome>;
+export function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Promise<DispatchOutcome | undefined>;
+export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Promise<DispatchOutcome | undefined> {
+  const res = await plan.commit(facts);
+  if (res.ok) {
+    const override = (await plan.onSuccess?.()) as DispatchOutcome | undefined;
+    plan.onPark?.(undefined);
+    return override ?? plan.successOutcome;
+  }
+  await plan.onFail?.();
+  if (res.reason === "occ") {
+    const { halted } = await plan.occ.onConflict(
+      plan.attemptedFactType ?? facts[0]?.type ?? "fact.unknown",
+      plan.nodeId,
+      plan.iteration,
+      plan.expectedVersion,
+    );
+    if (halted) {
+      plan.onPark?.(undefined);
+      return { kind: "terminal" };
+    }
+    await plan.onNonHalt?.();
+    plan.onPark?.(facts);
+    return { kind: "continue" };
+  }
+  await plan.onNonHalt?.();
+  plan.onPark?.(undefined);
+  return plan.statusOutcome;
+}
+
+/** The linear path's commit primitive: any `ConcurrencyError` is an OCC conflict
+ * — the linear arms never re-read to tell a status-stop apart, they always feed
+ * the conflict controller (behaviour-preserving vs the pre-`commitWithOcc`
+ * arms). The fan-out path passes its serialized `commitFanoutFact` instead,
+ * which does make that distinction. */
+export function occAppendOnce(
+  store: IEventWriter & IEventReader,
+  runId: string,
+  expectedVersion: number,
+  appendOpts?: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number },
+): (facts: FactEvent[]) => Promise<CommitResult> {
+  return async (facts) =>
+    (await tryAppendFact(store, runId, expectedVersion, facts, appendOpts))
+      ? { ok: true }
+      : { ok: false, reason: "occ" };
+}
+
 /** Commit a run-parking or terminal fact batch HONESTLY — the run never stays
- * `running` with the fact silently lost on a lost OCC race (ARCH §1.6). On
- * success the turn ends. On an OCC conflict we re-read: if the run already left
- * `running`, someone else parked it (return terminal, append nothing); otherwise
- * drive the shared conflict controller — halt `occ_exhausted` at the ceiling
- * (terminal), else park the facts for a re-commit next turn (continue). Shared
- * by the linear and fan-out paths so neither can strand the run. */
+ * `running` with the fact silently lost on a lost OCC race (ARCH §1.6). Thin
+ * wrapper over `commitWithOcc` pinning terminal-on-success / terminal-on-status
+ * semantics (the run stopped). Shared by the linear and fan-out paths so neither
+ * can strand the run. */
 export async function commitParkOrTerminal(deps: ParkOrTerminalDeps, facts: FactEvent[]): Promise<DispatchOutcome> {
   const { store, runId, occ, nodeId, iteration, expectedVersion, onPark } = deps;
   const commit =
@@ -181,17 +274,15 @@ export async function commitParkOrTerminal(deps: ParkOrTerminalDeps, facts: Fact
       if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
       return { ok: false, reason: "occ" };
     });
-
-  const res = await commit(facts);
-  if (res.ok || res.reason === "status") {
-    onPark?.(undefined);
-    return { kind: "terminal" };
-  }
-  const { halted } = await occ.onConflict(facts[0]?.type ?? "fact.unknown", nodeId, iteration, expectedVersion);
-  if (halted) {
-    onPark?.(undefined);
-    return { kind: "terminal" };
-  }
-  onPark?.(facts);
-  return { kind: "continue" };
+  const plan: OccCommitPlan & { successOutcome: DispatchOutcome; statusOutcome: DispatchOutcome } = {
+    occ,
+    nodeId,
+    iteration,
+    expectedVersion,
+    commit,
+    successOutcome: { kind: "terminal" },
+    statusOutcome: { kind: "terminal" },
+  };
+  if (onPark !== undefined) plan.onPark = onPark;
+  return commitWithOcc(plan, facts);
 }

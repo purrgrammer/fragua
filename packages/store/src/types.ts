@@ -839,6 +839,14 @@ export interface IEventReader {
    */
   getLatestEvents(runId: string, limit: number): StoredEvent[];
   /**
+   * The most recent human-pause gate fact for `runId`, or null when the
+   * run never paused at a human node. Folds the v4
+   * `fact.run_paused{reason:"human"}` and the LEGACY `fact.run_paused_human`.
+   * Bounded to one row so the control surface reads a paused run's declared
+   * route enum without scanning the event log.
+   */
+  getLatestHumanPause(runId: string): StoredEvent | null;
+  /**
    * The last `opts.limit` events for `runId` strictly after
    * `opts.sinceSeq`, optionally filtered to types starting with
    * `opts.typePrefix`, oldest-first. The bound applies at SQL level to

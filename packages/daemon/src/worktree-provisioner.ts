@@ -43,11 +43,12 @@ export interface ResolvedRunBootstrap {
   bootstrapTimeoutMs?: number;
 }
 
-/** Env-strip pair resolved for a single run against its project root.
+/** Env allow-list pair resolved for a single run against its project root.
  * Mirrors `ResolvedRunBootstrap`: lets one daemon apply each project's own
  * `bash.env-passthrough` (merged over global) to the runs it serves, instead
- * of a single strip fixed at daemon-launch cwd. */
-export interface ResolvedRunEnvDeny {
+ * of a single allow-list fixed at daemon-launch cwd. `names` is the operator/CI
+ * allow-list ADDITIONS on top of the built-in baseline (PATH/HOME/…). */
+export interface ResolvedRunEnvAllow {
   names?: ReadonlySet<string>;
   predicate?: (name: string) => boolean;
 }
@@ -87,25 +88,25 @@ export interface WorktreeProvisionerOptions {
    * this run. Lets one daemon honour `<project>/.fragua/config.yaml`
    * for runs from many projects, with no global default leaking in. */
   resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
-  /** Set by `fragua ci` (full perimeter env-strip + scrub-needles) and, as the
-   * fallback when no `resolveRunEnvDeny` is supplied, by `fragua daemon` /
-   * harness (provider-credential-only strip, via `daemonEnvDeny`). Forwarded
-   * into each fresh `LocalEnvironment` / `WorktreeEnvironment` so the bash-tool
-   * subprocess never inherits the stripped env vars. */
-  envDenyNames?: ReadonlySet<string>;
-  /** Set alongside `envDenyNames` by the same writers (`fragua ci` and
-   * `fragua daemon` / harness). Applied at SPAWN TIME over the live merged env
-   * so a secret-named var set AFTER `envDenyNames` was captured is still
-   * stripped. `envDenyNames` is the value-capture path (drives scrub needles);
-   * this predicate is the live-rule path. */
-  envDenyPredicate?: (name: string) => boolean;
-  /** Resolve the per-run env-strip against the run's project root. Called once
-   * per fresh environment right before it is constructed. Authoritative when
-   * set: its return replaces the constructor `envDenyNames` / `envDenyPredicate`.
-   * Lets one daemon honour each project's `bash.env-passthrough`
-   * (`<run.cwd>/.fragua/config.yaml` merged over global) for runs from many
-   * projects, exactly as `resolveRunBootstrap` does for `bootstrap`. */
-  resolveRunEnvDeny?: (cwd: string) => Promise<ResolvedRunEnvDeny>;
+  /** Set by `fragua ci` (from `--allow-env`) and, as the fallback when no
+   * `resolveRunEnvAllow` is supplied, by `fragua daemon` / harness (from
+   * `bash.env-passthrough`, via `daemonEnvAllow`). The operator/CI allow-list
+   * ADDITIONS on top of the built-in baseline, forwarded into each fresh
+   * `LocalEnvironment` / `WorktreeEnvironment` so the bash-tool subprocess
+   * inherits only the baseline plus these names. */
+  envAllowNames?: ReadonlySet<string>;
+  /** Set alongside `envAllowNames` by the same writers. Applied at SPAWN TIME
+   * over the live `process.env` so a name that can't be enumerated ahead of time
+   * is still admitted when it returns true. */
+  envAllowPredicate?: (name: string) => boolean;
+  /** Resolve the per-run env allow-list against the run's project root. Called
+   * once per fresh environment right before it is constructed. Authoritative
+   * when set: its return replaces the constructor `envAllowNames` /
+   * `envAllowPredicate`. Lets one daemon honour each project's
+   * `bash.env-passthrough` (`<run.cwd>/.fragua/config.yaml` merged over global)
+   * for runs from many projects, exactly as `resolveRunBootstrap` does for
+   * `bootstrap`. */
+  resolveRunEnvAllow?: (cwd: string) => Promise<ResolvedRunEnvAllow>;
   /** Forwarded into each fresh `WorktreeEnvironment` as its bootstrap-failure
    * escape-hatch label. The daemon passes `bash.env-passthrough in
    * .fragua/config.yaml`; `fragua ci` passes `--allow-env`. Lets the workspace
@@ -156,9 +157,9 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly bootstrapTimeoutMs: number | undefined;
   private readonly defaultShellTimeoutMs: number | undefined;
   private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
-  private readonly envDenyNames: ReadonlySet<string> | undefined;
-  private readonly envDenyPredicate: ((name: string) => boolean) | undefined;
-  private readonly resolveRunEnvDeny: ((cwd: string) => Promise<ResolvedRunEnvDeny>) | undefined;
+  private readonly envAllowNames: ReadonlySet<string> | undefined;
+  private readonly envAllowPredicate: ((name: string) => boolean) | undefined;
+  private readonly resolveRunEnvAllow: ((cwd: string) => Promise<ResolvedRunEnvAllow>) | undefined;
   private readonly envPassthroughHint: string | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
@@ -176,24 +177,24 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.bootstrapTimeoutMs !== undefined) this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs;
     if (opts.defaultShellTimeoutMs !== undefined) this.defaultShellTimeoutMs = opts.defaultShellTimeoutMs;
     if (opts.resolveRunBootstrap !== undefined) this.resolveRunBootstrap = opts.resolveRunBootstrap;
-    if (opts.envDenyNames !== undefined) this.envDenyNames = opts.envDenyNames;
-    if (opts.envDenyPredicate !== undefined) this.envDenyPredicate = opts.envDenyPredicate;
-    if (opts.resolveRunEnvDeny !== undefined) this.resolveRunEnvDeny = opts.resolveRunEnvDeny;
+    if (opts.envAllowNames !== undefined) this.envAllowNames = opts.envAllowNames;
+    if (opts.envAllowPredicate !== undefined) this.envAllowPredicate = opts.envAllowPredicate;
+    if (opts.resolveRunEnvAllow !== undefined) this.resolveRunEnvAllow = opts.resolveRunEnvAllow;
     if (opts.envPassthroughHint !== undefined) this.envPassthroughHint = opts.envPassthroughHint;
   }
 
-  /** Resolve the env-strip pair for a fresh environment at `cwd`. When
-   * `resolveRunEnvDeny` is set its return is authoritative — no fallback to the
-   * constructor `envDenyNames` / `envDenyPredicate`, so each project served by
+  /** Resolve the env allow-list pair for a fresh environment at `cwd`. When
+   * `resolveRunEnvAllow` is set its return is authoritative — no fallback to the
+   * constructor `envAllowNames` / `envAllowPredicate`, so each project served by
    * one daemon gets its own `bash.env-passthrough`. When unset, the constructor
    * values are returned. Exposed for tests. */
-  async resolveEnvDenyFor(cwd: string): Promise<ResolvedRunEnvDeny> {
-    if (this.resolveRunEnvDeny !== undefined) {
-      return await this.resolveRunEnvDeny(cwd);
+  async resolveEnvAllowFor(cwd: string): Promise<ResolvedRunEnvAllow> {
+    if (this.resolveRunEnvAllow !== undefined) {
+      return await this.resolveRunEnvAllow(cwd);
     }
-    const out: ResolvedRunEnvDeny = {};
-    if (this.envDenyNames !== undefined) out.names = this.envDenyNames;
-    if (this.envDenyPredicate !== undefined) out.predicate = this.envDenyPredicate;
+    const out: ResolvedRunEnvAllow = {};
+    if (this.envAllowNames !== undefined) out.names = this.envAllowNames;
+    if (this.envAllowPredicate !== undefined) out.predicate = this.envAllowPredicate;
     return out;
   }
 
@@ -286,13 +287,13 @@ export class WorktreeProvisioner implements Provisioner {
       throw new Error("worktree provision: run has no cwd (imported / ephemeral runs must carry a cwd)");
     }
 
-    const envDeny = await this.resolveEnvDenyFor(repoRoot);
+    const envAllow = await this.resolveEnvAllowFor(repoRoot);
 
     if (!(await isGitRepo(repoRoot))) {
       const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };
       if (this.defaultShellTimeoutMs !== undefined) localOpts.defaultTimeoutMs = this.defaultShellTimeoutMs;
-      if (envDeny.names !== undefined) localOpts.envDenyNames = envDeny.names;
-      if (envDeny.predicate !== undefined) localOpts.envDenyPredicate = envDeny.predicate;
+      if (envAllow.names !== undefined) localOpts.envAllowNames = envAllow.names;
+      if (envAllow.predicate !== undefined) localOpts.envAllowPredicate = envAllow.predicate;
       return new LocalEnvironment(localOpts);
     }
 
@@ -307,8 +308,8 @@ export class WorktreeProvisioner implements Provisioner {
     if (bootstrap !== undefined) opts.bootstrap = bootstrap;
     if (bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
-    if (envDeny.names !== undefined) opts.envDenyNames = envDeny.names;
-    if (envDeny.predicate !== undefined) opts.envDenyPredicate = envDeny.predicate;
+    if (envAllow.names !== undefined) opts.envAllowNames = envAllow.names;
+    if (envAllow.predicate !== undefined) opts.envAllowPredicate = envAllow.predicate;
     if (this.envPassthroughHint !== undefined) opts.envPassthroughHint = this.envPassthroughHint;
     const env = new WorktreeEnvironment(opts);
     await env.init();

@@ -14,9 +14,7 @@ import {
   buildProviderCredentialContext,
   buildStoreProviderPrefixes,
   captureCiEnvSecrets,
-  ciEnvDenyNames,
-  ciEnvDenyPredicate,
-  daemonEnvDeny,
+  daemonEnvAllow,
   isDeniedEnvName,
   listGlobalStoreProviders,
   seedCredsFromEnv,
@@ -399,237 +397,106 @@ describe("captureCiEnvSecrets", () => {
   });
 });
 
-describe("ciEnvDenyNames", () => {
-  test("(d-name) returns the same name set as captureCiEnvSecrets for non-empty values — one list, two consumers", () => {
-    const env: NodeJS.ProcessEnv = {
-      MY_THING_TOKEN: "token-value-12345678",
-      MY_API_KEY: "key-value-12345678",
-      NODE_ENV: "production",
-      PATH: "/usr/bin:/bin",
-      GITHUB_REPOSITORY: "acme/repo",
-    };
-    const denySet = ciEnvDenyNames(env);
-    const capturedNames = captureCiEnvSecrets(env)
-      .map((c) => c.name)
-      .sort();
-    expect([...denySet].sort()).toEqual(capturedNames);
-  });
-
-  test("(d-strip) deny set includes secret-named vars with empty values that capture would skip", () => {
-    const env: NodeJS.ProcessEnv = { MY_TOKEN: "", MY_SECRET: "real-secret-value-12345678" };
-    const denySet = ciEnvDenyNames(env);
-    const capturedNames = captureCiEnvSecrets(env).map((c) => c.name);
-    expect(denySet.has("MY_TOKEN")).toBe(true);
-    expect(capturedNames).not.toContain("MY_TOKEN");
-    expect(denySet.has("MY_SECRET")).toBe(true);
-    expect(capturedNames).toContain("MY_SECRET");
-  });
-
-  test("(d-deny) NODE_ENV / PATH / GITHUB_REPOSITORY are NOT in the deny set", () => {
-    const env: NodeJS.ProcessEnv = {
-      NODE_ENV: "production",
-      PATH: "/usr/bin:/bin",
-      GITHUB_REPOSITORY: "acme/repo",
-      SOME_RANDOM_VAR: "hello",
-    };
-    const denySet = ciEnvDenyNames(env);
-    expect(denySet.has("NODE_ENV")).toBe(false);
-    expect(denySet.has("PATH")).toBe(false);
-    expect(denySet.has("GITHUB_REPOSITORY")).toBe(false);
-    expect(denySet.has("SOME_RANDOM_VAR")).toBe(false);
-  });
-
-  test("(new-suffixes) _PASS / _AUTH / _PASSPHRASE appear in deny set", () => {
-    const env: NodeJS.ProcessEnv = {
-      DB_PASS: "",
-      SMTP_AUTH: "smtp-auth-value-12345678",
-      GPG_PASSPHRASE: "",
-    };
-    const denySet = ciEnvDenyNames(env);
-    expect(denySet.has("DB_PASS")).toBe(true);
-    expect(denySet.has("SMTP_AUTH")).toBe(true);
-    expect(denySet.has("GPG_PASSPHRASE")).toBe(true);
-  });
-
-  test("(case-insensitive) lowercase secret-named vars are in deny set", () => {
-    const env: NodeJS.ProcessEnv = {
-      my_service_token: "lowercase-token-value-12345678",
-      my_api_key: "lowercase-key-value-12345678",
-    };
-    const denySet = ciEnvDenyNames(env);
-    expect(denySet.has("my_service_token")).toBe(true);
-    expect(denySet.has("my_api_key")).toBe(true);
-  });
-});
-
 // ---------------------------------------------------------------------------
-// --allow-env: exempt named secrets from the STRIP only (they still reach the
-// tool subprocess), while remaining scrub needles (redacted from the bundle).
+// --allow-env: allow-listed secrets reach the tool subprocess but remain scrub
+// needles (redacted from the bundle). Allow ≠ declassify. Under deny-by-default
+// the allow-list itself lives in LocalEnvironment (workspace tests); here we pin
+// the scrub-needle capture that is deliberately allow-agnostic.
 // ---------------------------------------------------------------------------
 
-describe("--allow-env (ciEnvDeny* allow-set)", () => {
-  test("(allow-name) an allowed var is dropped from the deny name set", () => {
-    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678", OTHER_TOKEN: "other-value-12345678" };
-    const denySet = ciEnvDenyNames(env, new Set(["GH_TOKEN"]));
-    expect(denySet.has("GH_TOKEN")).toBe(false);
-    expect(denySet.has("OTHER_TOKEN")).toBe(true);
-  });
-
-  test("(allow-predicate) the spawn-time predicate stops denying an allowed var", () => {
-    const deny = ciEnvDenyPredicate(new Set(["GH_TOKEN"]));
-    expect(deny("GH_TOKEN")).toBe(false);
-    expect(deny("OTHER_TOKEN")).toBe(true);
-  });
-
-  test("(allow-still-scrubbed) an allowed var is STILL captured as a scrub needle", () => {
-    // capture is deliberately allow-agnostic: --allow-env affects the strip, not
-    // the needle set, so an allowed secret's value is still redacted from the bundle.
+describe("--allow-env scrub needles (allow ≠ declassify)", () => {
+  test("(allow-still-scrubbed) an allow-listed var is STILL captured as a scrub needle", () => {
     const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678" };
     const names = captureCiEnvSecrets(env).map((c) => c.name);
     expect(names).toContain("GH_TOKEN");
   });
-
-  test("(allow-default) no allow-set behaves exactly as before", () => {
-    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678" };
-    expect(ciEnvDenyNames(env).has("GH_TOKEN")).toBe(true);
-    expect(ciEnvDenyPredicate()("GH_TOKEN")).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------------------
-// daemonEnvDeny — the default env-strip for `fragua daemon` / harness. Reuses
-// the ci secret-name rule; adds store-provider env-var names; honours the
-// `bash.env-passthrough` allow-set (but never re-admits provider creds).
+// daemonEnvAllow — the bash-tool env ALLOW-LIST for `fragua daemon` / harness
+// under deny-by-default. Returns the effective allow-list (requested
+// bash.env-passthrough minus refused provider creds) plus the refused names.
 // ---------------------------------------------------------------------------
 
-describe("daemonEnvDeny", () => {
-  test("(daemon-deny) strips ANTHROPIC_API_KEY and generic secret-suffixed names", () => {
-    const env: NodeJS.ProcessEnv = {
-      ANTHROPIC_API_KEY: "sk-ant-value-12345678",
-      MY_SECRET_TOKEN: "secret-value-12345678",
-      NODE_ENV: "production",
-    };
-    const { names, predicate } = daemonEnvDeny({ env });
-    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
-    expect(names.has("MY_SECRET_TOKEN")).toBe(true);
-    expect(names.has("NODE_ENV")).toBe(false);
-    // predicate catches a secret-named var set after capture.
-    expect(predicate("MY_SECRET_TOKEN")).toBe(true);
-    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
-    expect(predicate("NODE_ENV")).toBe(false);
+describe("daemonEnvAllow", () => {
+  test("(daemon-allow-passthrough) a non-credential passthrough name is allowed", () => {
+    const { allow, refused } = daemonEnvAllow({ passthrough: new Set(["GH_TOKEN", "CI"]) });
+    expect(allow.has("GH_TOKEN")).toBe(true);
+    expect(allow.has("CI")).toBe(true);
+    expect(refused).toEqual([]);
   });
 
-  test("(daemon-deny-passthrough) a passthrough-listed name is excluded from names and predicate", () => {
-    const env: NodeJS.ProcessEnv = { GH_TOKEN: "ghs_token_value_12345678", OTHER_TOKEN: "other-value-12345678" };
-    const { names, predicate } = daemonEnvDeny({ env, passthrough: new Set(["GH_TOKEN"]) });
-    expect(names.has("GH_TOKEN")).toBe(false);
-    expect(names.has("OTHER_TOKEN")).toBe(true);
-    expect(predicate("GH_TOKEN")).toBe(false);
-    expect(predicate("OTHER_TOKEN")).toBe(true);
-  });
-
-  test("(daemon-deny-store-creds) provider env var names from storeProviders are added to the deny set", () => {
-    const { names } = daemonEnvDeny({ env: {}, storeProviders: ["anthropic"] });
-    // pi-ai maps anthropic to ANTHROPIC_API_KEY (and OAuth token) — at least one
-    // anthropic env-var name lands in the strip even though env is empty.
-    expect([...names].some((n) => n.startsWith("ANTHROPIC_"))).toBe(true);
-  });
-
-  test("(daemon-deny-refuse-provider-cred) a provider credential in passthrough is refused — still stripped", () => {
-    const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: "sk-ant-value-12345678" };
-    const { names, predicate } = daemonEnvDeny({
-      env,
+  test("(daemon-allow-refuse-provider-cred) a provider credential in passthrough is refused", () => {
+    const { allow, refused } = daemonEnvAllow({
       storeProviders: ["anthropic"],
-      passthrough: new Set(["ANTHROPIC_API_KEY"]),
+      passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY"]),
     });
-    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
-    expect(predicate("ANTHROPIC_API_KEY")).toBe(true);
+    expect(allow.has("GH_TOKEN")).toBe(true);
+    expect(allow.has("ANTHROPIC_API_KEY")).toBe(false);
+    expect(refused).toContain("ANTHROPIC_API_KEY");
   });
 
-  test("(daemon-deny-oauth-token) a non-_API_KEY provider credential in passthrough is refused — still stripped", () => {
+  test("(daemon-allow-oauth-token) a non-_API_KEY provider credential in passthrough is refused", () => {
     // ANTHROPIC_OAUTH_TOKEN is caught registry-independently via ALWAYS_PROVIDER_CRED.
-    const env: NodeJS.ProcessEnv = { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-value-12345678" };
-    const { names, predicate } = daemonEnvDeny({
-      env,
-      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN"]),
-    });
-    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
-    expect(predicate("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
+    const { allow, refused } = daemonEnvAllow({ passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN"]) });
+    expect(allow.has("ANTHROPIC_OAUTH_TOKEN")).toBe(false);
+    expect(refused).toContain("ANTHROPIC_OAUTH_TOKEN");
   });
 
-  test("(daemon-deny-gate4-exact) gate 4 refuses an exact-prefix secret but not a prefix-prefixed one", () => {
+  test("(daemon-allow-gate4-exact) an exact-prefix secret is refused but a prefix-prefixed one is allowed", () => {
     // GROQ_SECRET = exact provider prefix (GROQ) + secret suffix → refused.
     // OPENAI_PROXY_AUTH = prefix OPENAI_PROXY (merely STARTS WITH a provider
-    // prefix) → NOT a provider credential, stays re-admittable.
-    const { passthrough } = daemonEnvDeny({
-      env: {},
+    // prefix) → NOT a provider credential, stays allowed. Without a matching
+    // storeProvider, ANTHROPIC_RATE_LIMIT_TOKEN is also allowed (gate 4 can't
+    // classify it).
+    const { allow } = daemonEnvAllow({
       passthrough: new Set(["GROQ_SECRET", "OPENAI_PROXY_AUTH", "ANTHROPIC_RATE_LIMIT_TOKEN"]),
     });
-    expect(passthrough.has("GROQ_SECRET")).toBe(false);
-    expect(passthrough.has("OPENAI_PROXY_AUTH")).toBe(true);
-    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
+    expect(allow.has("GROQ_SECRET")).toBe(false);
+    expect(allow.has("OPENAI_PROXY_AUTH")).toBe(true);
+    expect(allow.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
   });
 
-  test("(daemon-deny-store-custom) a store-only custom provider's non-_API_KEY cred is stripped", () => {
-    // customai is not in pi-ai's registry, so gate 1/3/4 all miss CUSTOMAI_OAUTH_TOKEN.
-    // The storeProviders prefix scan must still strip it (secret-shaped + prefix match),
-    // while leaving a non-secret var carrying the same prefix untouched.
-    const { names } = daemonEnvDeny({
-      env: { CUSTOMAI_OAUTH_TOKEN: "custom-oauth-value-12345678", CUSTOMAI_ENDPOINT: "https://api.example" },
+  test("(daemon-allow-store-custom) a store-only custom provider's non-_API_KEY cred is refused from passthrough", () => {
+    // customai is not in pi-ai's registry, so gate 1/3/4 all miss
+    // CUSTOMAI_OAUTH_TOKEN. The storeProviders prefix scan must still refuse it
+    // (secret-shaped + prefix match), while leaving a non-credential var untouched.
+    const { allow, refused } = daemonEnvAllow({
       storeProviders: ["customai"],
+      passthrough: new Set(["CUSTOMAI_OAUTH_TOKEN", "CI"]),
     });
-    expect(names.has("CUSTOMAI_OAUTH_TOKEN")).toBe(true);
-    expect(names.has("CUSTOMAI_ENDPOINT")).toBe(false);
+    expect(allow.has("CUSTOMAI_OAUTH_TOKEN")).toBe(false);
+    expect(refused).toContain("CUSTOMAI_OAUTH_TOKEN");
+    expect(allow.has("CI")).toBe(true);
   });
 
-  test("(daemon-deny-store-cred-ignores-passthrough) a store provider's credential is stripped even if passthrough-listed", () => {
-    // A provider credential surfaced by the storeProviders loop must be denied
-    // regardless of passthrough — the passthrough gate applies only to
-    // non-credential candidates, mirroring the refusal filter.
-    process.env["ANTHROPIC_OAUTH_TOKEN"] = "sk-ant-oat-FAKE123456";
-    const { names } = daemonEnvDeny({
-      env: { ANTHROPIC_OAUTH_TOKEN: "sk-ant-oat-FAKE123456" },
-      storeProviders: ["anthropic"],
-      passthrough: new Set(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
-    });
-    expect(names.has("ANTHROPIC_OAUTH_TOKEN")).toBe(true);
-    expect(names.has("ANTHROPIC_API_KEY")).toBe(true);
-  });
-
-  test("(daemon-deny-store-passthrough-agree) names and predicate agree on a <PROVIDER>_<WORD>_<SECRET-SUFFIX> passthrough entry for a storeProvider", () => {
-    // ANTHROPIC_RATE_LIMIT_TOKEN is a secret-shaped var carrying a held
-    // provider's prefix, but gate 4's exact-prefix match cannot classify it as
-    // a provider credential (prefix ANTHROPIC_RATE_LIMIT ≠ ANTHROPIC). Listing
-    // it in bash.env-passthrough must NOT let names and predicate disagree: the
-    // storeProviders prefix scan strips it, so both surfaces must deny it.
-    const env: NodeJS.ProcessEnv = { ANTHROPIC_RATE_LIMIT_TOKEN: "held-prefix-value-12345678" };
-    const { names, predicate, passthrough } = daemonEnvDeny({
-      env,
+  test("(daemon-allow-store-prefix-token) a <PROVIDER>_<WORD>_<SECRET-SUFFIX> passthrough entry for a storeProvider is refused", () => {
+    // ANTHROPIC_RATE_LIMIT_TOKEN carries a held provider's prefix; gate 4's
+    // exact-prefix match can't classify it, but the storeProviders prefix scan
+    // refuses it once anthropic is held.
+    const { allow, refused } = daemonEnvAllow({
       storeProviders: ["anthropic"],
       passthrough: new Set(["ANTHROPIC_RATE_LIMIT_TOKEN"]),
     });
-    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(predicate("ANTHROPIC_RATE_LIMIT_TOKEN"));
-    expect(names.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
-    expect(predicate("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(true);
-    expect(passthrough.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(false);
+    expect(allow.has("ANTHROPIC_RATE_LIMIT_TOKEN")).toBe(false);
+    expect(refused).toContain("ANTHROPIC_RATE_LIMIT_TOKEN");
   });
 
-  test("(daemon-deny-effective-passthrough) returns the post-refusal passthrough set", () => {
-    const { passthrough } = daemonEnvDeny({
-      env: {},
+  test("(daemon-allow-effective) returns the post-refusal allow set", () => {
+    const { allow } = daemonEnvAllow({
       passthrough: new Set(["GH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     });
-    expect(passthrough.has("GH_TOKEN")).toBe(true);
-    expect(passthrough.has("ANTHROPIC_API_KEY")).toBe(false);
-    expect(passthrough.has("ANTHROPIC_OAUTH_TOKEN")).toBe(false);
+    expect(allow.has("GH_TOKEN")).toBe(true);
+    expect(allow.has("ANTHROPIC_API_KEY")).toBe(false);
+    expect(allow.has("ANTHROPIC_OAUTH_TOKEN")).toBe(false);
   });
 
-  test("(daemon-deny-warn-refused) refused provider creds warn once naming each and pointing at `fragua providers`", () => {
+  test("(daemon-allow-warn-refused) refused provider creds warn once naming each and pointing at `fragua providers`", () => {
     const warnings: string[] = [];
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
     try {
-      daemonEnvDeny({ env: {}, passthrough: new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) });
+      daemonEnvAllow({ passthrough: new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) });
     } finally {
       console.warn = origWarn;
     }
@@ -794,19 +661,14 @@ describe("isDeniedEnvName (shared refusal gate)", () => {
   });
 });
 
-describe("daemonEnvDeny — COPILOT_AMBIENT_ENV survives a github store provider", () => {
-  test("GH_TOKEN / GITHUB_TOKEN stay re-admittable when a github provider is held", () => {
-    const env: NodeJS.ProcessEnv = {
-      GH_TOKEN: "ghs_token_value_12345678",
-      GITHUB_TOKEN: "ghs_github_value_12345678",
-    };
-    const { passthrough } = daemonEnvDeny({
-      env,
+describe("daemonEnvAllow — COPILOT_AMBIENT_ENV survives a github store provider", () => {
+  test("GH_TOKEN / GITHUB_TOKEN stay allow-listable when a github provider is held", () => {
+    const { allow } = daemonEnvAllow({
       storeProviders: ["github"],
       passthrough: new Set(["GH_TOKEN", "GITHUB_TOKEN"]),
     });
-    expect(passthrough.has("GH_TOKEN")).toBe(true);
-    expect(passthrough.has("GITHUB_TOKEN")).toBe(true);
+    expect(allow.has("GH_TOKEN")).toBe(true);
+    expect(allow.has("GITHUB_TOKEN")).toBe(true);
   });
 });
 

@@ -34,7 +34,7 @@ export { wakePending } from "./wake-pending.ts";
 export type {
   Provisioner,
   ProvisionOpts,
-  ResolvedRunEnvDeny,
+  ResolvedRunEnvAllow,
   WorktreeProvisionerOptions,
 } from "./worktree-provisioner.ts";
 export { WorktreeProvisioner } from "./worktree-provisioner.ts";

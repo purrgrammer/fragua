@@ -6,6 +6,8 @@
 // delegate to `readPlane.*`, so the HTTP surface and any other read client
 // share one projection.
 
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import type { IEventReader, RunStatus } from "@fragua/store";
 import { RUN_STATUSES } from "@fragua/types";
@@ -56,11 +58,24 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     return c.json(readPlane.runSummaries(queryOpts));
   });
 
-  app.get("/runs/:id", (c) => {
+  app.get("/runs/:id", async (c) => {
     const runId = c.req.param("id");
     const detail = readPlane.runDetail(runId);
     if (detail == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    // The worktree-path probe touches the filesystem, so it lives here at the
+    // HTTP boundary rather than in the pure read-plane projection. The path is
+    // deterministic (`<cwd>/.fragua/worktrees/<runId>`); surface it only when
+    // the directory actually exists (a disposed run's is gone).
+    if (detail.cwd != null) {
+      const candidate = join(detail.cwd, ".fragua", "worktrees", runId);
+      try {
+        await access(candidate);
+        detail.worktreePath = candidate;
+      } catch {
+        // no worktree on disk — leave worktreePath unset
+      }
     }
     return c.json(detail);
   });
