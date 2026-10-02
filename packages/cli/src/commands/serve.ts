@@ -15,7 +15,15 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuthStorage, defaultModelPerProvider, ModelRegistry, validateWorkflowModels } from "@fragua/agent";
+import {
+  AuthStorage,
+  defaultModelPerProvider,
+  loadJudgeProviders,
+  ModelRegistry,
+  validateWorkflowJudgeProviders,
+  validateWorkflowModels,
+} from "@fragua/agent";
+import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@fragua/server";
 import { SqliteStore } from "@fragua/store";
 import chalk from "chalk";
@@ -188,6 +196,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
       hasAnyAuth: () => modelRegistry.getAvailable().length > 0 || authStorage.list().length > 0,
     }),
     validateWorkflowModels: (yamlSource: string) => validateWorkflowModels(yamlSource, modelRegistry),
+    // Judge records are read per save rather than cached: a `judge:<id>` row
+    // added while the server is up should take effect on the next upload.
+    validateWorkflowJudge: (yamlSource: string) =>
+      validateWorkflowJudgeProviders(
+        yamlSource,
+        loadJudgeProviders(store).providers,
+        cfg.judge?.provider ?? JUDGE_DEFAULT_PROVIDER,
+      ),
     authStorage,
     modelRegistry,
     defaultModels: defaultModelPerProvider,

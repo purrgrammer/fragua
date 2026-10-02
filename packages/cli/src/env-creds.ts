@@ -51,6 +51,7 @@ const ALWAYS_PROVIDER_CRED: ReadonlySet<string> = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_OAUTH_TOKEN",
   "TYPESAFE_API_KEY",
+  "OLLAYA_API_KEY",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -377,10 +378,13 @@ export function daemonEnvDeny(
   return { names, predicate: ciEnvDenyPredicate(passthrough, ctx), passthrough };
 }
 
-/** Judge (System One) provider — not in pi-ai's registry, so its env var is
- * seeded explicitly alongside the pi-ai providers. */
+/** Judge (System One) providers — not in pi-ai's registry, so their env vars
+ * are seeded explicitly alongside the pi-ai providers. A local runtime usually
+ * enforces no key at all; the var matters when the operator set one, and the
+ * always-strip set keeps it out of a tool step's shell either way. */
 const JUDGE_ENV: ReadonlyArray<readonly [provider: string, envVar: string]> = [
   [JUDGE_DEFAULT_PROVIDER, "TYPESAFE_API_KEY"],
+  ["ollaya", "OLLAYA_API_KEY"],
 ];
 
 /**

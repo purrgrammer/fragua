@@ -29,10 +29,18 @@
 //
 // Llm nodes only — other handler kinds (start/exit/tool/human)
 // don't LLM-dispatch.
+//
+// Judge nodes get their own pair below (`validateWorkflowJudgeProviders` /
+// `…Offline`). They live here rather than in `core`'s graph validator because
+// the answer depends on `provider_config` rows, and that validator is pure by
+// design. Model MEMBERSHIP is deliberately unchecked: a local runtime's model
+// list changes under `ollaya pull` mid-session, so a static check would
+// manufacture failures. An unserved model is an honest runtime node fail.
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
-import { parseWorkflow } from "@fragua/core";
+import { JUDGE_DEFAULT_PROVIDER, parseWorkflow } from "@fragua/core";
+import { JUDGE_BUILTIN_PROVIDERS, type JudgeProviderRecord } from "@fragua/core/handler";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { findByBareId } from "./credentials/index.ts";
 
@@ -212,4 +220,101 @@ export function validateWorkflowModelsOffline(source: string): OfflineModelCheck
   }
 
   return { offenders };
+}
+
+// ---------------------------------------------------------------------------
+// Judge nodes
+// ---------------------------------------------------------------------------
+
+/** E055 — `provider:` names a backend no record is configured for.
+ *  E056 — the resolved backend declares no default model and the step names
+ *  none. Model ids do not cross providers, so there is nothing to fall back
+ *  to. */
+export interface JudgeProviderDiagnostic {
+  nodeId: string;
+  code: "E055" | "E056";
+  severity: "error" | "warning";
+  message: string;
+}
+
+interface JudgeDeclaration {
+  nodeId: string;
+  provider: string | undefined;
+  model: string | undefined;
+}
+
+function collectJudgeDeclarations(source: string): JudgeDeclaration[] | undefined {
+  let graph: ReturnType<typeof parseWorkflow>;
+  try {
+    graph = parseWorkflow(source);
+  } catch {
+    return undefined;
+  }
+  const out: JudgeDeclaration[] = [];
+  for (const node of Object.values(graph.nodes)) {
+    if (node.type !== "judge") continue;
+    out.push({
+      nodeId: node.id,
+      provider: typeof node.attrs.provider === "string" ? node.attrs.provider : undefined,
+      model: typeof node.attrs.model === "string" ? node.attrs.model : undefined,
+    });
+  }
+  return out;
+}
+
+function checkJudge(
+  source: string,
+  providers: Readonly<Record<string, JudgeProviderRecord>>,
+  defaultProvider: string,
+  unknownProviderSeverity: "error" | "warning",
+): JudgeProviderDiagnostic[] {
+  const declarations = collectJudgeDeclarations(source);
+  if (declarations === undefined) return [];
+  const known = Object.keys(providers).sort().join(", ");
+  const out: JudgeProviderDiagnostic[] = [];
+  for (const { nodeId, provider, model } of declarations) {
+    const id = provider ?? defaultProvider;
+    const record = providers[id];
+    if (record === undefined) {
+      out.push({
+        nodeId,
+        code: "E055",
+        severity: unknownProviderSeverity,
+        message:
+          unknownProviderSeverity === "error"
+            ? `judge step "${nodeId}" names provider "${id}", which has no record (known: ${known})`
+            : `judge step "${nodeId}" names provider "${id}", which is not built in; a \`judge:${id}\` config row is checked at enqueue`,
+      });
+      continue;
+    }
+    if (model === undefined && record.defaultModel === undefined) {
+      out.push({
+        nodeId,
+        code: "E056",
+        severity: "error",
+        message: `judge step "${nodeId}": provider "${id}" declares no default model — set \`model:\` on the step`,
+      });
+    }
+  }
+  return out;
+}
+
+/** The authoritative enqueue-time check, against the store's merged records. */
+export function validateWorkflowJudgeProviders(
+  source: string,
+  providers: Readonly<Record<string, JudgeProviderRecord>>,
+  defaultProvider: string,
+): JudgeProviderDiagnostic[] {
+  return checkJudge(source, providers, defaultProvider, "error");
+}
+
+/** The store-free variant behind `fragua validate`. Only the built-ins are
+ * visible, so an unknown provider warns rather than fails — it may be a
+ * `judge:<id>` row this process cannot see. A provider that IS known and
+ * declares no default model is still a hard error: that one needs no store. */
+export function validateWorkflowJudgeProvidersOffline(
+  source: string,
+  defaultProvider: string = JUDGE_DEFAULT_PROVIDER,
+): JudgeProviderDiagnostic[] {
+  return checkJudge(source, JUDGE_BUILTIN_PROVIDERS, defaultProvider, "warning");
 }

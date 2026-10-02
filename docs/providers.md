@@ -35,16 +35,86 @@ Omit `model:` and fragua uses that provider's default (see
 pi-ai's registry before starting — bad combos fail immediately with a
 list of valid ids, not after 30 retries.
 
-## The judge provider
+## Judge providers
 
 `type: judge` steps do not use an inference provider. They call a System One
-model — TypeSafe's Jev — through the `typesafe` provider id: one endpoint,
-typed `choice` / `score` / `noul` answers with probabilities, no chat, no
-tools. It never enters the model registry (`fragua providers ls` lists it only
-once credentialed), it takes no `model:` beyond `jev-latest` / `jev-preview`,
-and it is billed per input token only. Credential: `fragua providers add
-typesafe`; smoke test: `fragua providers test typesafe` (one `noul` call,
-prints the resolved model id and latency). In CI: `TYPESAFE_API_KEY`.
+model: one endpoint, typed `choice` / `score` / `noul` answers with
+probabilities, no chat, no tools. Judge backends never enter the model registry
+— pi-ai has no models for them — so `fragua providers ls` lists each one with
+its default model instead of a model count.
+
+Two ship built in:
+
+| id | endpoint | auth | default model | price |
+|---|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai` | required | `jev-1.13.0` | per input token |
+| `ollaya` | `http://127.0.0.1:11435` | optional | none — name `model:` | free |
+
+[Ollaya](https://ollaya.dev) is a local runtime serving open decision models
+behind an API wire-identical to TypeSafe's, so the same client speaks to both.
+It accepts any non-empty key unless the server sets `OLLAYA_API_KEY`, which is
+why its record marks auth optional: no credential row is needed, and
+`fragua providers ls` shows it ready without one.
+
+A step picks its backend with `provider:`, and the default comes from
+`~/.fragua/config.yaml`:
+
+```yaml
+judge:
+  provider: ollaya
+  model: winnow:e4b
+```
+
+**Thresholds do not transfer between backends.** Every bound a workflow authors
+was read against one model's answers, and published accuracy differs. Moving a
+gate to another provider means re-reading its distribution —
+`fragua judge calibrate` prints one line per `provider/model` and says so when
+two answered under one bound.
+
+Credential: `fragua providers add <id>` (only where auth is required). Smoke
+test: `fragua providers test <id> [model]` — one `noul` call, prints the
+resolved model id and latency. This is also the model pre-flight: a step's
+`model:` is deliberately not validated statically, because a local runtime's
+model list changes under `ollaya pull`. In CI: `TYPESAFE_API_KEY`,
+`OLLAYA_API_KEY`.
+
+### Adding a judge provider
+
+Records live in the same `provider_config` table llm custom providers use,
+under a `judge:<id>` key — the shapes are incompatible, and an un-prefixed row
+would be read as an llm provider with zero models. There is no write verb yet;
+the row is hand-written:
+
+```json
+{
+  "base-url": "http://10.0.0.5:8080",
+  "auth": "optional",
+  "default-model": "kev",
+  "request-tokens": 900,
+  "state-tokens": 450,
+  "bytes-per-token": 3.1,
+  "state-max-bytes": 8192,
+  "models": { "laya:en": { "request-tokens": 400, "state-tokens": 200 } }
+}
+```
+
+Every field is optional in the schema, but a row that defines a **new** provider
+must actually supply `base-url` (http or https), both token budgets,
+`bytes-per-token` and `state-max-bytes` — it inherits nothing, and a zero budget
+rejects every state as "over the 0-byte cap" rather than behaving permissively.
+A row that **overlays** a built-in needs none of them: it corrects the one
+number a measurement moved, field by field, without dropping that model's other
+limits.
+
+`models` matters. Ollaya's context windows span 512 to 32768 tokens across its
+library, and a state over a model's window is **refused** rather than answered
+on a truncated one. `bytes-per-token` belongs there too: one backend serves
+several tokenizers, and the ratio is a property of a tokenizer over a *kind of
+text*, not of a vendor. Measured on Ollaya 0.7.5, `kev:0.8b` runs 3.56
+bytes/token on diff text and 6.00 on English prose — the same tokenizer, 1.7x
+apart — where Jev's diff text measured 2.2. Judge states are mostly diffs and
+file excerpts, so entries should carry the lower, code-shaped figure: the chunk
+planner must under-estimate the window, never over-estimate it.
 
 ## Credentials
 

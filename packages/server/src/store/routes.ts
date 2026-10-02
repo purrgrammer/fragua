@@ -33,6 +33,13 @@ export type WorkflowModelValidator = (
   | { ok: true }
   | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
 
+/** Per-node judge-provider check injected by the daemon. Separate from the
+ * model validator because a judge offender may carry no model at all — an
+ * unresolved default model IS the finding. Returns only blocking diagnostics. */
+export type WorkflowJudgeValidator = (
+  source: string,
+) => Array<{ nodeId: string; code: string; severity: string; message: string }>;
+
 export interface ServerDeps {
   store: IEventWriter & IEventReader & IAnalyticsReader;
   /** Snapshot/ref git reader — used by `POST /runs/:id/merge` to refuse a
@@ -67,6 +74,7 @@ export interface ServerDeps {
    * resolver on startup.
    */
   validateWorkflowModels?: WorkflowModelValidator;
+  validateWorkflowJudge?: WorkflowJudgeValidator;
   /**
    * Backpressure cap on `status='queued'` runs. When the queue depth
    * meets or exceeds this number, `POST /runs` returns 429 with a
@@ -228,6 +236,15 @@ export function createRoutes(deps: ServerDeps): Hono {
             code: "model_unresolved",
             offenders: check.offenders,
           },
+          400,
+        );
+      }
+    }
+    if (deps.validateWorkflowJudge != null) {
+      const offenders = deps.validateWorkflowJudge(body.source).filter((d) => d.severity === "error");
+      if (offenders.length > 0) {
+        return c.json(
+          { error: "workflow has unresolved judge providers", code: "judge_provider_unresolved", offenders },
           400,
         );
       }

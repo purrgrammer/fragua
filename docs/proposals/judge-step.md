@@ -536,9 +536,9 @@ shows; $0.00004 for the run.
   from the response (`jev-1.13.0`), not the alias the author wrote, so a replay
   or a post-mortem knows which model produced a distribution. One
   `cost.recorded` per call, folded into `run_state.metrics` like any llm cost;
-  budget attrs and `budgetSnapshot` apply unchanged. Pricing is a per-provider
-  constant in the client, not a per-model table, until a second System One
-  model exists.
+  budget attrs and `budgetSnapshot` apply unchanged. The rate lives on the
+  provider record (§3.11), so a free local provider still emits a
+  `cost.recorded` at $0 — the call stays countable.
 - **Observability.** Two new types, `judge.requested {nodeId, model, questionIds,
   stateBytes}` and `judge.answered {nodeId, model, durationMs, answers}` — the
   answers are small and typed, so they ride the event inline (a 255-option
@@ -552,6 +552,155 @@ shows; $0.00004 for the run.
   tails). Add a `judge_node` role to the `AgentMessage` declaration merge in
   `@fragua/types` carrying `{ model, state_preview, questions, answers,
   durationMs }`. Named here; its rendering is a `@fragua/web` follow-up (§8).
+
+### 3.11 `provider:` — which System One backend answers
+
+A judge step names its backend the way an llm step does:
+
+```yaml
+  verify_judge:
+    type: judge
+    provider: ollaya        # omitted → the configured default (`typesafe`)
+    model: laya             # required when the provider declares no default
+    state: {diff: {file: review-diff.patch}}
+    questions: {...}
+```
+
+The wire is one endpoint with three question shapes, so a second backend is not
+a second client — it is a **provider record** the one client is parameterised
+by: base URL, whether a credential is required, price per input token, the
+request / state token budgets, the measured bytes-per-token, the state byte cap,
+and an optional per-model override table for the budgets. Two records ship
+built in:
+
+| | `typesafe` | `ollaya` |
+|---|---|---|
+| base URL | `https://api.typesafe.ai` | `http://127.0.0.1:11435` |
+| auth | required | optional (any non-empty key, unless the server sets `OLLAYA_API_KEY`) |
+| default model | `jev-1.13.0` | none — the step must name one |
+| price | $0.042/Mtok input | $0 |
+| budgets | 48k request / 24k state | conservative, per model |
+
+[Ollaya](https://ollaya.dev) is a local runtime serving open decision models
+behind an API wire-identical to TypeSafe's `/v1/systemone` — same request, same
+response, same choice / score / noul primitives. Nothing in `JudgeAnswer`
+widens to accommodate it.
+
+**Budgets are per model, not per provider — and so is the tokenizer.** Ollaya's
+context windows span 512 (`laya:en`) to 32768 (`qwen3guard`) tokens, a 64×
+spread, against TypeSafe's 64k request / 32k state. The record carries a
+provider default and a per-model override table; a `for-each` judge's chunk
+planner reads whichever applies. `bytes-per-token` sits in the same table rather
+than only on the provider, because one backend serves several tokenizers —
+`laya:en` is ModernBERT, `laya:multilingual` is mmBERT — and the ratio is a
+property of a tokenizer over a kind of text, not of a vendor.
+
+Measured against Ollaya 0.7.5 rather than assumed:
+
+| model | window | measured ceiling | bytes/token |
+|---|---|---|---|
+| `laya:en` | 512 | 479 tokens at 2200 bytes; 2400 refused | 4.89 (prose) |
+| `laya:multilingual` | 1024 | 1011 tokens at 4800 bytes | 4.88 (prose) |
+| `kev:0.8b` | 8192 | 8161 tokens; refused above 29 KB of diff | **3.56 diff / 6.00 prose** |
+| `winnow:e4b` | 8192 | 5946 tokens; refused above 17 KB of diff | **2.91 diff / 6.00 prose** |
+
+The 2.2 the `for-each` planner had baked in as a constant would have sized every
+local chunk at 45% of the window it could actually use.
+
+**The ratio is not even constant within one model.** `kev:0.8b` measures 3.56
+bytes/token on diff text and 6.00 on English prose — the same tokenizer, 1.7x
+apart by *kind* of text. Judge states are mostly diffs and file excerpts, so
+entries carry the lower, code-shaped figure: the planner must under-estimate the
+window, never over-estimate it. Planning `kev` with its prose figure would build
+a request 68% over what it accepts.
+
+The provider defaults stay conservative — a model with no entry could be the
+smallest one — and a `judge:ollaya` row adds entries as they are measured.
+
+**A bigger model is not a wider one.** `winnow:e4b` and `kev:0.8b` both
+advertise 8192 tokens, but winnow refuses above ~5950 and cuts code more finely,
+so at ten times kev's size on disk it holds 17 KB of diff where kev holds 29 KB.
+The advertised window says little; only a measurement against the kind of text
+the gate actually sends does.
+
+**What this means for the shipped gates.** Across 103 recorded judge calls the
+state sent ranges from under 1 KB to 55 KB. Against `kev:0.8b`'s measured 29 KB,
+**every lens judge, every `verify`, every `verdict` and `work/triage` fits** —
+`review/quality_judge` peaks at 14.9 KB, `review/integration_judge` at 12.3 KB,
+`work/triage` at 13.2 KB. Exactly two gates do not: `review/classify` (6 of 13
+calls over, max 53.9 KB) and `pr_review/scope` (4 of 7 over, max 52.9 KB). Both
+are single-shot classifiers reading a whole diff, so unlike the `for-each`
+lenses they cannot chunk their way under a ceiling.
+
+So a local backend is a real option for the review lenses today, and not one for
+the two front-door classifiers without narrowing what they read. That is a
+finding about our workflows, not a limit of the seam.
+
+**Thresholds do not transfer between providers.** Every bound a workflow
+authors was read against one model's answers — that is why `model:` pins rather
+than tracking an alias (§3.x), and it holds across providers with more force:
+published accuracy on typed decisions is 0.722 for Ollaya's best against 0.738
+for Jev, and far wider on some benchmarks. `fragua judge calibrate` therefore
+partitions its report by `provider/model` and refuses to pool two models' reads
+under one bound.
+
+A row that defines a **new** provider must supply the numbers a built-in would
+have lent it — `base-url` (http or https), the two token budgets,
+`bytes-per-token` and `state-max-bytes`. A zero is not a permissive default: the
+handler rejects every state as "over the 0-byte cap" and the chunk planner sizes
+each request at zero bytes, so an omitted field would surface as a capacity
+error that says nothing about the config. A row **overlaying** a built-in needs
+none of them and inherits what it does not set.
+
+**A user defines a provider** with a `provider_config` row keyed `judge:<id>`
+— the same table llm custom providers use, namespaced because the two record
+shapes are incompatible and an un-namespaced row is silently adopted by the llm
+registry. Credentials are **not** namespaced: `provider_credentials('ollaya')`
+is one key for one host, and the existing `typesafe` row keeps working
+untouched. `~/.fragua/config.yaml` selects the default the way `defaults:` does
+for llm steps:
+
+```yaml
+judge:
+  provider: ollaya
+  model: laya
+```
+
+**Proved end to end**, not only in unit tests. A `judge_provider_probe`
+workflow with `provider: ollaya`, `model: laya:en` and a `decide.route` gate ran
+through `fragua ci` against a local Ollaya with **no credential row at all**:
+`judge.requested`/`judge.answered` carry `provider: "ollaya"`, the route was
+taken on a real distribution (`access` at p=0.9995, confidence 0.999), and
+`cost.recorded` landed with `kind: "judge"` and `cost_usd: 0` — a free call is
+still a counted call. 285 ms for two questions; `fragua providers test ollaya
+laya:en` answers in 53 ms against Jev's ~1 s.
+
+The error mappings were checked against the **real** envelopes rather than
+hand-written fixtures, and that changed one of them. All carry a top-level
+`code`, and all land as a node `fail` an `on: {fail:}` edge can route:
+
+```
+422 {"error":"state: part of state was dropped …","code":"STATE_TRUNCATED"}     (laya)
+422 {"error":"the row is 8202 tokens … the model's limit is 8192",
+     "code":"INVALID_REQUEST"}                                                  (kev)
+  → judge state does not fit "ollaya" model "…" … lower `state-max-bytes:`
+404 {"error":"model \\"no-such-model:latest\\" not found …","code":"MODEL_NOT_FOUND"}
+  → judge provider "ollaya" does not serve model "no-such-model" … check `fragua providers test ollaya`
+```
+
+**One runtime reports the same oversized state under two codes**, depending on
+the model. The original design halted a 422 that was not `STATE_TRUNCATED`, on
+the reasoning that it meant a request shape E048 should have caught — so on
+`kev` an oversized state would have halted the run rather than failing the node.
+A 422 is now always a node fail. A genuine shape bug is caught by E047 / E048
+long before dispatch, so what actually reaches the provider is data; and only a
+fail gives an `on: {fail}` edge something to route, where a halt leaves the
+operator nothing.
+
+**What is not validated:** whether the model exists on the provider. Ollaya's
+list changes under `ollaya pull` mid-session, so a static check guarantees false
+failures; an unknown model is a node `fail` carrying the provider's own
+`MODEL_NOT_FOUND`, and `fragua providers test <id>` is the pre-flight.
 
 ## 4. Execution
 
@@ -583,36 +732,64 @@ Handler discipline holds: no bare `fetch`, no `node:fs` — the client is on
 
 ### 4.2 `ctx.judge` and the provider
 
-A pre-wired, **optional** `ctx.judge?: JudgeClient` on `HandlerContext`
-(`ask(req, signal)`; optional like `ctx.env?` so existing context builders and
-tests keep compiling — the handler halts `reason:"error"` when it is absent),
-built in `executor-deps.ts` (the shared executor assembly behind `daemon` and `ci`) from
-the credential row `provider_credentials('typesafe', kind='api_key')`. Absent
-credential → the handler halts `reason:"error"`, detail "provider typesafe
-not credentialed — `fragua providers set typesafe`" (a run that reaches a judge
-with no key is an operator error, not a retry).
+A pre-wired, **optional** `ctx.judge?: JudgeClient` on `HandlerContext`, built in
+`executor-deps.ts` (the shared executor assembly behind `daemon` and `ci`).
+Optional like `ctx.env?` so existing context builders and tests keep compiling;
+the handler halts `reason:"error"` when it is absent.
+
+The client is a **router**, not one backend:
+
+```ts
+interface JudgeClient {
+  readonly defaultProvider: string;
+  resolve(id?: string): JudgeProviderRecord | undefined;
+  ask(req: JudgeRequest, signal: AbortSignal): Promise<JudgeResponse>;
+}
+```
+
+`resolve` exists because the handler needs the record *before* it calls — for
+the default model, for the chunk planner's budgets, and for the `provider` on
+`judge.requested`. `JudgeRequest` carries an optional `provider`; `JudgeResponse`
+carries the resolved one, so the recorded row names what actually answered
+rather than what was asked for. Records come from the built-ins merged under
+`provider_config` rows keyed `judge:<id>` (§3.11), read through a
+`JudgeProviderRegistry` that mirrors `ModelRegistry` — per-row schema check, a
+corrupt row skipped and surfaced rather than poisoning the set, and the same
+`updated_at` watermark for cross-process invalidation.
+
+**Credentials.** `fragua providers` gains every configured judge id, reading and
+writing the same `provider_credentials` table (`test` makes one `noul` call and
+prints the resolved model id + latency). A provider whose record says
+`auth: "optional"` needs no row at all — the client sends a placeholder bearer,
+and a server that *does* enforce a key answers 401 onto the ordinary auth-failure
+path with the `fragua providers add <id>` hint. There is no `kind: "none"`
+credential: an absent row already says this, exactly as it does for a keyless
+llm provider. `env-creds.ts` seeds `TYPESAFE_API_KEY` and `OLLAYA_API_KEY` for
+`fragua ci`, and both join the always-strip set so a CI env leak cannot reach a
+tool step's shell.
 
 | API status | Handler result |
 |---|---|
 | 200 | `transition` |
 | 401 / 403 | `transition{outcomeStatus:"fail", non-retryable}` — same class as an llm auth failure |
-| 422 | `halt{reason:"error", detail: <API detail>}` — a request shape E048 should have caught; surfacing the API's own message makes the validator gap visible |
-| 429 / 529 | in-client full-jitter backoff (3 attempts, `Retry-After` honoured when present); on exhaustion `pause_provider{httpStatus, provider:"typesafe", errorMessage, retryAfterMs?}` — the existing recoverable pause |
+| 400 (TypeSafe) | `fail` — that provider's data-dependent rejection of an oversized state |
+| 422 | `fail`, carrying the provider's message; sharpened to name `state-max-bytes:` when the provider says it was a size problem. One runtime uses two different codes for the same oversized state, so the outcome cannot hinge on the code |
+| unknown `provider:` | `fail` naming the id and the `judge:<id>` row that would fix it. Not a halt: E055 only warns offline, so a bad name reaches runtime, and the remedy is a config row — the same class as a missing model |
+| `MODEL_NOT_FOUND` | `fail`, non-retryable, naming the model and provider |
+| retryable (408 / 429 / 500–504 / 529) | in-client full-jitter backoff (3 attempts, `Retry-After` honoured); on exhaustion `pause_provider{httpStatus, provider, errorMessage, retryAfterMs?}` |
 | network / abort | `pause_provider{httpStatus:null}` / propagate the abort |
 
-**Dependency: none.** The contract is one endpoint with three question shapes;
-a ~120-line client over the injected `fetch` is smaller than the SDK's error
-hierarchy. `@typesafe-ai/sdk` 0.6.0 (Node ≥ 20, retries built in) is the
-alternative if the contract grows — one exact pin plus a rationale line, per the
-no-silent-deps rule.
+The retryable set is `provider-classification.ts`'s `isAutoRetryableStatus`, the
+same predicate the daemon retry policy and the agent backend use — the judge
+client was the one boundary carrying its own copy. A provider's error body
+carries a machine code (`MODEL_NOT_FOUND`, `STATE_TRUNCATED`, …); the client
+lifts it onto `JudgeProviderError.code` so the handler branches on the code
+rather than on message text.
 
-**Credentials.** `fragua providers` today means pi-ai providers, and `typesafe`
-is not one — Jev is not a chat model and never enters `ModelRegistry`. The
-`set` / `ls` / `test` verbs gain a `typesafe` id that reads and writes the same
-`provider_credentials` table (`test` makes one `noul` call and prints the
-resolved model id + latency). `env-creds.ts` seeds it from `TYPESAFE_API_KEY`
-for `fragua ci`, and that var joins the always-strip set so a CI env leak cannot
-reach a tool step's shell.
+**Dependency: none.** The contract is one endpoint with three question shapes;
+a small client over the injected `fetch` is smaller than the SDK's error
+hierarchy. `@typesafe-ai/sdk` is the alternative if the contract grows — one
+exact pin plus a rationale line, per the no-silent-deps rule.
 
 ### 4.3 Replay and determinism
 
@@ -1124,6 +1301,24 @@ discovery path for user-scope skills and for a tree that lacks the file.
 - **Structured state leaves.** Binding a record output into `state` as a JSON
   object instead of JSON text, so `instructions` can path into it. The API
   accepts objects; the substitution resolver would need a non-string mode.
+- **Model-supplied question sets.** `qwen3guard:0.6b` answers only its four
+  built-in questions, and an Ollaya `Modelfile` can bake a `QUESTIONS` block any
+  request may omit. Honouring that means a judge step whose typed `outputs:` are
+  derived from the *model's* question set rather than the authored one — i.e.
+  model metadata inside a parser that is pure by design. A checked-in manifest
+  is the likely shape. > Status: sketch.
+- **`/v1/models` probe.** Static validation that a step's `model:` exists on its
+  provider. Cheap once a registry refresh exists; today an unknown model is an
+  honest runtime `fail`.
+- **Ollaya's native `/api/*`.** `/api/decide` returns `total_duration` /
+  `load_duration` / `eval_duration` that `/v1/*` omits, and `/api/ps` shows
+  which models are warm. Useful for a latency budget; not needed to answer a
+  question.
+- **`fragua providers custom add --judge`.** Until it exists a judge
+  `provider_config` row is hand-written — the weakest UX seam in the provider
+  work.
+- **Per-step budget attributes.** `request-token-budget:` / `state-token-budget:`
+  on a step, for a model whose window the record does not yet know.
 - **SDK.** `@typesafe-ai/sdk` if retries / typing / a second model make the
   hand-rolled client grow past its rationale.
 - **`--json` on `fragua providers test typesafe`.** `{provider, model, noul,

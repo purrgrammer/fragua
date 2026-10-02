@@ -7,7 +7,8 @@
 //                                      Overlays global; project keys win.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`) merge one
+// (`defaults`, `judge`, `blob-gc`, `skills`, `timeouts`, `summariser`, `bash`)
+// merge one
 // level deep so a project config can override `defaults.model` without losing
 // the global `summariser` block. (`bash.env-passthrough` is an array, replaced
 // wholesale — not merged element-wise.)
@@ -30,6 +31,19 @@ const Summariser = Type.Object(
   {
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** Which System One backend judge steps use when they name none. Records
+ * themselves live in `provider_config` rows keyed `judge:<id>`, the same way
+ * llm custom providers do; this block only selects, as `defaults:` does for
+ * llm steps. Model ids do not cross providers, so setting `provider` without
+ * `model` is only valid for a provider whose record declares a default. */
+const Judge = Type.Object(
+  {
+    provider: Type.Optional(Type.String({ minLength: 1 })),
+    model: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
 );
@@ -144,6 +158,8 @@ export const FraguaConfigSchema = Type.Object(
     // than "600000".
     "bootstrap-timeout-ms": Type.Optional(Type.Integer({ minimum: 0 })),
     defaults: Type.Optional(Defaults),
+    // Default judge (System One) backend. See the `Judge` schema above.
+    judge: Type.Optional(Judge),
     // Weak-model summariser. Powers async run-title generation (auto-title)
     // and per-node `summary=low|medium|high` transcript compression. Always
     // cheaper than the primary coding model. Omit to disable both paths.

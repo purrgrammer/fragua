@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeJudgeClient, TYPESAFE_BASE_URL } from "../../src/handler/judge-client.ts";
 import { JudgeNotCredentialedError, JudgeProviderError, type JudgeRequest } from "../../src/handler/judge-contract.ts";
+import { JUDGE_OLLAYA_BASE_URL } from "../../src/handler/judge-provider.ts";
 
 const REQ: JudgeRequest = {
   model: "jev-latest",
@@ -44,7 +45,7 @@ describe("makeJudgeClient", () => {
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers["authorization"]).toBe("Bearer sk-test");
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual(REQ);
-    expect(client.provider).toBe("typesafe");
+    expect(client.defaultProvider).toBe("typesafe");
   });
 
   test("no credential → JudgeNotCredentialedError before any request", async () => {
@@ -71,6 +72,40 @@ describe("makeJudgeClient", () => {
     expect(res.model).toBe("jev-1.13.0");
     expect(calls).toHaveLength(2);
     expect(slept).toEqual([2000]);
+  });
+
+  test("without Retry-After, every backoff waits at least half its exponential (equal jitter)", async () => {
+    const slept: number[] = [];
+    const { fetch: f } = fetchSeq([
+      new Response("", { status: 503 }),
+      new Response("", { status: 503 }),
+      new Response(OK_BODY, { status: 200 }),
+    ]);
+    const client = makeJudgeClient({
+      getApiKey: async () => "k",
+      fetch: f,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await client.ask(REQ, signal());
+    expect(slept).toHaveLength(2);
+    expect(slept[0]).toBeGreaterThanOrEqual(250);
+    expect(slept[0]).toBeLessThan(500);
+    expect(slept[1]).toBeGreaterThanOrEqual(500);
+    expect(slept[1]).toBeLessThan(1000);
+  });
+
+  test("a non-finite or negative usage count is read as zero, so no Infinity reaches the cost", async () => {
+    // JSON.stringify would drop a literal Infinity; the wire text is what a
+    // misbehaving provider can actually send, so write it by hand.
+    const body = `{"model":"jev-1.13.0","answers":{"ok":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1e999,"output_tokens":-4}}`;
+    const { fetch: f } = fetchSeq([new Response(body, { status: 200 })]);
+    const client = makeJudgeClient({ getApiKey: async () => "k", fetch: f, sleep: noSleep });
+    const res = await client.ask(REQ, signal());
+    expect(res.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(Number.isFinite(res.costUsd)).toBe(true);
+    expect(res.costUsd).toBe(0);
   });
 
   test("529 exhausting attempts → JudgeProviderError with status + retryAfter", async () => {
@@ -248,5 +283,134 @@ describe("makeJudgeClient — credential redaction in persisted errors", () => {
     const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(JudgeProviderError);
     expect((err as JudgeProviderError).message).not.toContain(KEY);
+  });
+});
+
+describe("makeJudgeClient — routing over provider records", () => {
+  test("`provider` on the request picks the record's base URL and price", async () => {
+    const { fetch: f, calls } = fetchSeq([
+      new Response(
+        JSON.stringify({
+          model: "laya",
+          answers: { ok: { type: "noul", noul: 0.4 } },
+          usage: { input_tokens: 40, output_tokens: 0 },
+        }),
+        { status: 200 },
+      ),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => undefined, fetch: f, sleep: noSleep });
+    const res = await client.ask({ ...REQ, provider: "ollaya", model: "laya" }, signal());
+    expect(calls[0]!.url).toBe(`${JUDGE_OLLAYA_BASE_URL}/v1/systemone`);
+    expect(res.provider).toBe("ollaya");
+    // Free provider: the call is still counted, it just costs nothing.
+    expect(res.costUsd).toBe(0);
+  });
+
+  test("`provider` is ours, not the wire's — it never reaches the request body", async () => {
+    const { fetch: f, calls } = fetchSeq([new Response(OK_BODY, { status: 200 })]);
+    const client = makeJudgeClient({ getApiKey: async () => "sk-test", fetch: f, sleep: noSleep });
+    await client.ask({ ...REQ, provider: "typesafe" }, signal());
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual(REQ);
+  });
+
+  test("an optional-auth provider sends a placeholder bearer instead of refusing", async () => {
+    const { fetch: f, calls } = fetchSeq([
+      new Response(
+        JSON.stringify({
+          model: "laya",
+          answers: { ok: { type: "noul", noul: 0.4 } },
+          usage: { input_tokens: 1, output_tokens: 0 },
+        }),
+        { status: 200 },
+      ),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => undefined, fetch: f, sleep: noSleep });
+    await client.ask({ ...REQ, provider: "ollaya", model: "laya" }, signal());
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["authorization"]).toMatch(/^Bearer .+/);
+  });
+
+  test("the credential is fetched per provider, so one router serves several", async () => {
+    const asked: string[] = [];
+    const { fetch: f } = fetchSeq([new Response(OK_BODY, { status: 200 })]);
+    const client = makeJudgeClient({
+      getApiKey: async (p) => {
+        asked.push(p);
+        return "sk-test";
+      },
+      fetch: f,
+      sleep: noSleep,
+    });
+    await client.ask(REQ, signal());
+    expect(asked).toEqual(["typesafe"]);
+  });
+
+  test("an unknown provider fails before any request, naming the configured ids", async () => {
+    const { fetch: f, calls } = fetchSeq([]);
+    const client = makeJudgeClient({ getApiKey: async () => "sk-test", fetch: f });
+    await expect(client.ask({ ...REQ, provider: "nope" }, signal())).rejects.toThrow(/unknown judge provider "nope"/);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("503 is retried now that the retry set is the shared classification", async () => {
+    const { fetch: f, calls } = fetchSeq([
+      new Response("cold loading", { status: 503 }),
+      new Response(OK_BODY, { status: 200 }),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => "sk-test", fetch: f, sleep: noSleep });
+    await client.ask(REQ, signal());
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a machine-readable error code is lifted onto the error", async () => {
+    const { fetch: f } = fetchSeq([
+      new Response(JSON.stringify({ error: { code: "STATE_TRUNCATED", message: "state too long" } }), { status: 422 }),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => "sk-test", fetch: f, sleep: noSleep });
+    const err = await client.ask(REQ, signal()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JudgeProviderError);
+    expect((err as JudgeProviderError).code).toBe("STATE_TRUNCATED");
+  });
+
+  test("a top-level `code` is lifted too; a non-JSON body leaves it unset", async () => {
+    const { fetch: f } = fetchSeq([
+      new Response(JSON.stringify({ code: "MODEL_NOT_FOUND" }), { status: 404 }),
+      new Response("plain text", { status: 404 }),
+    ]);
+    const client = makeJudgeClient({ getApiKey: async () => "sk-test", fetch: f, sleep: noSleep });
+    const first = (await client.ask(REQ, signal()).catch((e: unknown) => e)) as JudgeProviderError;
+    expect(first.code).toBe("MODEL_NOT_FOUND");
+    const second = (await client.ask(REQ, signal()).catch((e: unknown) => e)) as JudgeProviderError;
+    expect(second.code).toBeUndefined();
+  });
+});
+
+describe("redaction of short credentials", () => {
+  /** Drive redaction through the client: a 401 body is what gets persisted. */
+  async function errorFor(key: string, body: string): Promise<string> {
+    const { fetch: f } = fetchSeq([new Response(body, { status: 401 })]);
+    const client = makeJudgeClient({ getApiKey: async () => key, fetch: f, sleep: noSleep });
+    const err = (await client.ask(REQ, signal()).catch((e: unknown) => e)) as JudgeProviderError;
+    return err.message;
+  }
+
+  test("a short key is still redacted — optional auth makes one reachable", async () => {
+    // A local backend takes any non-empty key, so a two-character one is a real
+    // possibility where no hosted provider would allow it.
+    expect(await errorFor("xy", "bad credential xy supplied")).toContain("[redacted]");
+    expect(await errorFor("xy", "bad credential xy supplied")).not.toMatch(/credential xy /);
+  });
+
+  test("but it does not eat the diagnostic it appears inside", async () => {
+    // The failure the exact-match guard exists to prevent: an earlier, broader
+    // pass turned `api_key_expired_for_org` into `[redacted]` and cost the
+    // operator the message redaction is meant to keep readable.
+    const msg = await errorFor("or", "api_key_expired_for_org: rotate the key");
+    expect(msg).toContain("api_key_expired_for_org");
+  });
+
+  test("a long key is still substring-matched, boundaries or not", async () => {
+    const key = "sk-abcdef123456";
+    expect(await errorFor(key, `token ${key}suffix rejected`)).not.toContain(key);
   });
 });

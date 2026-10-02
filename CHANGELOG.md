@@ -10,6 +10,21 @@ guarantee.
 
 ### Added
 
+- **`type: judge` steps can name a backend.** `provider:` on a judge step picks
+  which System One model answers, and `judge: {provider, model}` in
+  `~/.fragua/config.yaml` sets the default. Two backends ship: `typesafe`
+  (hosted Jev) and `ollaya`, a local runtime serving open decision models on
+  `127.0.0.1:11435` whose API is wire-identical. A local backend needs no API
+  key and costs nothing. Further backends are `judge:<id>` rows in
+  `provider_config` carrying the base URL, auth mode, default model, price, and
+  the request/state token budgets and the tokenizer's bytes-per-token ratio —
+  per model as well as per provider, since one backend serves several
+  tokenizers and local model windows vary by two orders of magnitude. Thresholds do not
+  transfer between backends: `fragua judge calibrate` now prints one line per
+  `provider/model`, takes `--provider` / `--model`, and says so when two models
+  answered under one bound. Two new validator codes: **E055** (a `provider:`
+  with no record) and **E056** (a provider with no default model where the step
+  names none).
 - **`tool` steps can produce typed `outputs:`.** A tool step may declare
   `outputs:` over the same type grammar `llm` steps use. The engine hands the
   process a scratch path in `$FRAGUA_OUTPUT`; the process writes one JSON
@@ -117,6 +132,36 @@ guarantee.
   blank no longer resolves a server as ready: `mcp ls` reports `missing env:`,
   and the connector skips the server instead of sending an empty `Authorization`
   header.
+- **A judge provider's other 4xx responses fail the node instead of pausing the
+  run.** A bare 404 from a wrong `base-url` (or any 4xx other than 429) is a
+  request the provider will keep refusing; it is now a routable node failure.
+- **A `judge:<id>` row pointing plaintext http at a non-loopback host is
+  rejected** unless it sets `auth: optional`, since the bearer key would cross
+  the network unencrypted. A `__proto__` key in a row's `models:` map is ignored.
+- **`fragua validate` reads the project-merged config** for the judge default
+  provider, matching enqueue, so a project-level `judge.provider` override
+  validates the same way it runs.
+- **`fragua validate` resolves a bare `judge` step against the configured
+  default provider.** The offline check read `typesafe` regardless of
+  `judge.provider` in the global config, so a workflow could validate green
+  and fail E056 at enqueue.
+- **Judge usage counts are read as finite, non-negative numbers.** A provider
+  response carrying `Infinity` or a negative token count no longer lands a
+  non-finite cost in the event log.
+- **Judge retry backoff has a floor.** The judge client's exponential backoff
+  used full jitter; it now waits at least half its exponential per attempt,
+  matching the llm retry path.
+- **`provider:` on a judge step no longer does nothing.** It parsed, validated,
+  and was then dropped before the handler saw it.
+- **A judge state the provider refuses now fails the node instead of halting
+  the run.** Every `422` is a node failure an `on: {fail}` edge can route,
+  carrying the provider's own message and naming `state-max-bytes:` when the
+  provider says it was a size problem — one runtime reports the same oversized
+  state under two different codes depending on the model, so the outcome cannot
+  hinge on the code. An unknown model reports `MODEL_NOT_FOUND` as a node
+  failure rather than a provider pause. Judge calls also share the retry
+  classification the rest of fragua uses, so a backend that is briefly
+  unavailable (503) is retried.
 - **`fragua runs tail` and `runs wait` settle on legacy runs.** The follow loop
   tested only the current contract's terminal facts, so a run terminated under
   an older event contract never settled and the command waited forever.

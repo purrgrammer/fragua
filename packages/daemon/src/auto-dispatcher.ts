@@ -257,6 +257,7 @@ function specForNode(
       if (attrs.judge_decide !== undefined) judgeOpts.decide = attrs.judge_decide;
       if (attrs.judge_state_max_bytes !== undefined) judgeOpts.stateMaxBytes = attrs.judge_state_max_bytes;
       if (typeof attrs.model === "string") judgeOpts.model = attrs.model;
+      if (typeof attrs.provider === "string") judgeOpts.provider = attrs.provider;
       if (resolvedMaxMs !== undefined) judgeOpts.maxMs = resolvedMaxMs;
       return handler.makeJudgeHandler(judgeOpts);
     }

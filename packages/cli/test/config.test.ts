@@ -41,6 +41,37 @@ describe("loadConfig", () => {
     expect(await load()).toEqual({});
   });
 
+  test("judge: selects the default System One backend, project over global", async () => {
+    await writeGlobal(`
+judge:
+  provider: typesafe
+  model: jev-1.13.0
+`);
+    await write(`
+judge:
+  provider: ollaya
+`);
+    // One level deep: the project's provider wins, the global model survives.
+    expect((await load()).judge).toEqual({ provider: "ollaya", model: "jev-1.13.0" });
+  });
+
+  test("an unknown key under judge: is warned about and stripped, not carried", async () => {
+    // Records are defined by `provider_config` rows; this block only selects,
+    // so a `baseUrl` here is a mistake worth naming rather than honouring.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await write(`
+judge:
+  provider: ollaya
+  baseUrl: http://x
+`);
+      expect((await load()).judge).toEqual({ provider: "ollaya" });
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("parses defaults.provider and defaults.model", async () => {
     await write(`
 defaults:

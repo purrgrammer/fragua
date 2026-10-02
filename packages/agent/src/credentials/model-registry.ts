@@ -47,6 +47,7 @@ import type { IProviderConfigStore } from "@fragua/store";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AuthStorage } from "./auth-storage.ts";
+import { JUDGE_PROVIDER_CONFIG_PREFIX } from "./judge-provider-registry.ts";
 
 // ---------------------------------------------------------------------------
 // Schemas (TypeBox)
@@ -447,6 +448,12 @@ export class ModelRegistry {
     }
 
     for (const row of rows) {
+      // Judge providers share this table under a `judge:` prefix because their
+      // record shape is incompatible with an llm provider's. Without this skip
+      // the row validates anyway (`Value.Check` is non-strict) and
+      // `validateConfig` accepts zero models beside a `baseUrl`, so a judge
+      // backend would silently register here as an llm provider with 0 models.
+      if (row.provider.startsWith(JUDGE_PROVIDER_CONFIG_PREFIX)) continue;
       // Per-row schema validation. Wrap the row in the whole-file shape
       // so the schema applies; a corrupt row is logged and skipped,
       // sibling rows still load.

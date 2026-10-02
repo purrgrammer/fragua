@@ -127,14 +127,19 @@ export interface JudgeChunkPlanInput {
   longestQuestionBytes: number;
   requestTokenBudget?: number;
   stateTokenBudget?: number;
+  /** A measured property of one provider's tokenizer, not a universal ratio —
+   * planning a 512-token model with Jev's number is a guess about a different
+   * tokenizer. Absent → the measured Jev ratio. */
+  bytesPerToken?: number;
 }
 
 /** Cut a list into chunks of consecutive global indices that fit both
  * budgets. `undefined` when the shared state alone, or one item on its own,
  * cannot fit — the caller fails the node with the offending size. */
 export function planForEachChunks(input: JudgeChunkPlanInput): number[][] | { tooLarge: "shared" | number } {
-  const reqBudget = (input.requestTokenBudget ?? JUDGE_REQUEST_TOKEN_BUDGET) * JUDGE_BYTES_PER_TOKEN;
-  const stateBudget = (input.stateTokenBudget ?? JUDGE_STATE_TOKEN_BUDGET) * JUDGE_BYTES_PER_TOKEN;
+  const bytesPerToken = input.bytesPerToken ?? JUDGE_BYTES_PER_TOKEN;
+  const reqBudget = (input.requestTokenBudget ?? JUDGE_REQUEST_TOKEN_BUDGET) * bytesPerToken;
+  const stateBudget = (input.stateTokenBudget ?? JUDGE_STATE_TOKEN_BUDGET) * bytesPerToken;
   if (input.sharedBytes + input.longestQuestionBytes > stateBudget || input.sharedBytes > reqBudget) {
     return { tooLarge: "shared" };
   }

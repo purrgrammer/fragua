@@ -74,12 +74,13 @@ confirm which one resolved.
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-### Judge provider (TypeSafe Jev)
+### Judge provider (System One)
 
-Workflows with `type: judge` steps need the judge provider's key alongside the
-LLM provider's. It is seeded the same way — env at startup, `creds seeded for
-typesafe` in the log — and, like every provider credential, is refused by
-`--allow-env` and scrubbed from the exported bundle:
+Workflows with `type: judge` steps need their judge provider's key alongside the
+LLM provider's, when that provider requires one. It is seeded the same way — env
+at startup, `creds seeded for typesafe` in the log — and, like every provider
+credential, is refused by `--allow-env` and scrubbed from the exported bundle.
+A judge step pointed at a local runtime needs no key:
 
 ```yaml
 - run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN

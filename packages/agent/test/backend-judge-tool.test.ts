@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { EventType } from "@fragua/core";
-import type { JudgeClient, JudgeRequest } from "@fragua/core/handler";
+import { JUDGE_BUILTIN_PROVIDERS, type JudgeClient, type JudgeRequest } from "@fragua/core/handler";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
 import { PiLlmBackend } from "../src/backend.ts";
 
@@ -21,10 +21,12 @@ interface CapturedEvent {
 
 function stubJudge(requests: JudgeRequest[]): JudgeClient {
   return {
-    provider: "typesafe",
+    defaultProvider: "typesafe",
+    resolve: (id) => JUDGE_BUILTIN_PROVIDERS[id ?? "typesafe"],
     async ask(req) {
       requests.push(req);
       return {
+        provider: "typesafe",
         model: "jev-1.13.0",
         answers: { holds: { type: "noul", noul: 0.88 } },
         usage: { input_tokens: 120, output_tokens: 10 },

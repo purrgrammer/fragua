@@ -53,11 +53,15 @@ afterEach(async () => {
 });
 
 /** A store holding one run of `lens` whose judge answered `values`. */
-function seed(values: number[], keepMin = 0.6): void {
+function seed(
+  values: number[],
+  keepMin = 0.6,
+  who: { provider: string; model: string; runId?: string } = { provider: "typesafe", model: "jev-1.13.0" },
+): void {
   const store = new SqliteStore({ path: dbPath });
   const src = WF(keepMin);
   store.saveWorkflow("sha", "lens", src, serializeGraph(parseWorkflow(src)), CURRENT_IR_VERSION);
-  const runId = "01ktest0000000000000000000";
+  const runId = who.runId ?? "01ktest0000000000000000000";
   store.enqueueRun({ runId, workflowSha: "sha" });
   const answers: Record<string, unknown> = {};
   values.forEach((v, i) => {
@@ -66,8 +70,8 @@ function seed(values: number[], keepMin = 0.6): void {
   store.appendMessage(runId, {
     content: {
       role: "judge_node",
-      provider: "typesafe",
-      model: "jev-1.13.0",
+      provider: who.provider,
+      model: who.model,
       statePreview: "",
       stateBytes: 0,
       questions: { present: { type: "noul", instructions: "q" } },
@@ -170,5 +174,50 @@ steps:
     expect(out).toContain("review");
     // One question, two bounds, one read — counted once in the totals.
     expect(out).toContain("1 gate read(s)");
+  });
+});
+
+describe("fragua judge calibrate — two models under one bound", () => {
+  const OTHER = { provider: "ollaya", model: "winnow:e4b", runId: "01ktest0000000000000000001" };
+
+  test("each model gets its own line and the report says they are not comparable", async () => {
+    seed([0.59, 0.62]);
+    seed([0.2, 0.25], 0.6, OTHER);
+    expect(await judgeCalibrateCommand({ dbPath })).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("typesafe/jev-1.13.0");
+    expect(out).toContain("ollaya/winnow:e4b");
+    // Two lines, each with its own n — never one pooled n=4 near-bound count.
+    expect(out).toMatch(/n=\s*2[\s\S]*n=\s*2/);
+    expect(out).toMatch(/2 models answered here/);
+    expect(out).toMatch(/not comparable|calibrated against one model/);
+  });
+
+  test("--model narrows to one distribution", async () => {
+    seed([0.59, 0.62]);
+    seed([0.2, 0.25], 0.6, OTHER);
+    expect(await judgeCalibrateCommand({ dbPath, model: "winnow:e4b" })).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("ollaya/winnow:e4b");
+    expect(out).not.toContain("jev-1.13.0");
+    expect(out).toContain("2 gate read(s)");
+    expect(out).not.toMatch(/2 models answered here/);
+  });
+
+  test("--provider narrows the same way", async () => {
+    seed([0.59, 0.62]);
+    seed([0.2, 0.25], 0.6, OTHER);
+    expect(await judgeCalibrateCommand({ dbPath, provider: "typesafe" })).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("typesafe/jev-1.13.0");
+    expect(out).not.toContain("ollaya");
+  });
+
+  test("one model still prints its id, dimmed, and raises no warning", async () => {
+    seed([0.59, 0.62]);
+    expect(await judgeCalibrateCommand({ dbPath })).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("typesafe/jev-1.13.0");
+    expect(out).not.toMatch(/models answered here/);
   });
 });

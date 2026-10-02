@@ -11,7 +11,7 @@
 // against it never sees a "not configured" answer at runtime.
 
 import type { JudgeJson, JudgeQuestion } from "@fragua/core";
-import { JUDGE_DEFAULT_MODEL, parseJudgeQuestions } from "@fragua/core";
+import { parseJudgeQuestions } from "@fragua/core";
 import { JudgeNotCredentialedError, JudgeProviderError, judgeCostPayload } from "@fragua/core/handler";
 import { Type } from "@sinclair/typebox";
 import type { Tool } from "./types.ts";
@@ -75,8 +75,15 @@ export const judgeTool: Tool<JudgeToolArgs, JudgeToolData> = {
     const ctx = opts.fraguaContext;
     const judge = ctx?.judge;
     if (judge === undefined) {
+      return errorResult("judge is not available on this run — no judge provider is configured");
+    }
+    const record = judge.resolve();
+    if (record?.defaultModel === undefined) {
+      // Model ids do not cross providers. A graph step can name `model:`; this
+      // tool has no authoring surface, so it declines rather than sending one
+      // provider's model id to another.
       return errorResult(
-        "judge is not available on this run — no judge provider is credentialed (`fragua providers add typesafe`)",
+        `judge provider "${judge.defaultProvider}" declares no default model — the judge tool needs one`,
       );
     }
     let questions: Record<string, JudgeQuestion>;
@@ -90,10 +97,10 @@ export const judgeTool: Tool<JudgeToolArgs, JudgeToolData> = {
     }
     try {
       const res = await judge.ask(
-        { model: JUDGE_DEFAULT_MODEL, state: args.state, questions },
+        { model: record.defaultModel, state: args.state, questions },
         opts.signal ?? new AbortController().signal,
       );
-      ctx?.emit("cost.recorded", judgeCostPayload(judge.provider, res));
+      ctx?.emit("cost.recorded", judgeCostPayload(res.provider, res));
       const data: JudgeToolData = {
         model: res.model,
         answers: res.answers,
