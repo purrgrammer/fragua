@@ -18,7 +18,7 @@
 // LocalEnvironment (non-git cwd). Pluggable HITL and cross-machine import are
 // deferred (docs/proposals/hitl-channel.md, docs/proposals/archive/db-import.md).
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -76,6 +76,9 @@ export interface CiCommandOptions {
   allowEnv?: string[];
   /** Base directory used to resolve the workflow + project identity. Default cwd. */
   cwd?: string;
+  /** Home directory for the global config + skills. Default `os.homedir()`;
+   * a test seam, since Bun's `homedir()` ignores `$HOME`. */
+  homeDir?: string;
 }
 
 /** Wall-clock ms at which a `paused_auto` run becomes wake-eligible, read
@@ -177,8 +180,13 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   // path is created at the baseline schema (SqliteStore migrates by default).
   let storeDir: string | undefined;
   let storePath: string;
+  // A `--db` that already exists is the operator's store, not ci's artifact:
+  // it is used exactly as the daemon would use it — its own credentials and
+  // MCP logins, nothing seeded over them, and nothing pruned on the way out.
+  let preexisting = false;
   if (opts.dbPath) {
     storePath = resolve(opts.dbPath);
+    preexisting = existsSync(storePath);
   } else {
     storeDir = mkdtempSync(join(tmpdir(), "fragua-ci-"));
     storePath = join(storeDir, "fragua.db");
@@ -211,11 +219,13 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // overlaid so a CI secret overrides. Both no-op gracefully — no global store
     // on a CI machine, no matching env vars locally. The executor then resolves
     // from this store's provider_credentials, the same path the daemon uses.
-    const seededGlobal = await seedCredsFromGlobalStore(store, storePath);
-    const seededEnv = seedCredsFromEnv(store);
+    const seededGlobal = preexisting ? [] : await seedCredsFromGlobalStore(store, storePath);
+    const seededEnv = preexisting ? [] : seedCredsFromEnv(store);
     ciEnvSecrets = captureCiEnvSecrets();
     const seeded = [...new Set([...seededGlobal, ...seededEnv])];
-    const config = await loadConfig(cwd);
+    if (preexisting)
+      console.error(chalk.dim(`ci: using existing store ${storePath} as-is (no credential seeding or pruning)`));
+    const config = await loadConfig(cwd, opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
     let timeouts: ReturnType<typeof resolveTimeouts>;
     try {
       timeouts = resolveTimeouts(config);
@@ -230,11 +240,16 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       timeouts,
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     });
     if (!deps.llm.useLlm) {
-      const hint =
-        seeded.length > 0
-          ? `creds seeded for ${seeded.join(", ")}`
+      // MCP logins seed alongside provider keys but say nothing about whether
+      // an llm provider resolved, so the hint names only the provider entries.
+      const seededLlm = seeded.filter((s) => !s.startsWith("mcp:"));
+      const hint = preexisting
+        ? `the existing --db store has no usable provider credentials, and a pre-existing store is never seeded`
+        : seededLlm.length > 0
+          ? `creds seeded for ${seededLlm.join(", ")}`
           : "no provider creds in the global store (`fragua providers add`) or env";
       console.error(chalk.yellow(`ci: no llm provider resolved (${hint}); llm nodes will use the stub backend`));
     }
@@ -411,8 +426,10 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // to portable tables (below) — it must read provider_credentials to build
     // the scrub registry, so it must execute while those rows are still present.
     // The prune happens after. A failed export leaves the unpruned --db behind
-    // — that is by design: the operator still gets the raw inspection store,
-    // and re-running the export against --db reproduces the same bundle.
+    // — that is by design: the operator still gets the raw inspection store.
+    // (A later `runs export` against a pruned --db still works — the export
+    // treats absent credential tables as empty — it just has no live-token
+    // literals left to redact.)
     // CI profile: generic markers, env secrets as extra needles, fail the job
     // if a live secret sits verbatim in an un-scrubbed binary artifact.
     if (opts.exportPath != null && opts.exportPath.length > 0 && runId !== undefined) {
@@ -451,7 +468,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     // safe to publish — the secret-free egress is the `--export` bundle
     // (scrubbed in `exportRunBundle`). (The temp store, `storeDir` set, is
     // removed below.)
-    if (storeDir === undefined) {
+    if (storeDir === undefined && !preexisting) {
       try {
         store.retainPortableTables();
       } catch (e) {
