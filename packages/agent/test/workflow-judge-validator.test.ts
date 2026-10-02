@@ -56,6 +56,13 @@ describe("judge provider validation", () => {
     expect(diags[0]).toMatchObject({ code: "E055", severity: "warning" });
   });
 
+  test("offline: a bare judge step resolves against the configured default provider", () => {
+    const bare = WF("");
+    expect(validateWorkflowJudgeProvidersOffline(bare)).toEqual([]);
+    const diags = validateWorkflowJudgeProvidersOffline(bare, "ollaya");
+    expect(diags[0]).toMatchObject({ code: "E056", severity: "error" });
+  });
+
   test("offline: a known provider with no default model still errors", () => {
     const diags = validateWorkflowJudgeProvidersOffline(WF("    provider: ollaya\n"));
     expect(diags[0]).toMatchObject({ code: "E056", severity: "error" });

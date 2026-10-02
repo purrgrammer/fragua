@@ -6,7 +6,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Outcome } from "@fragua/core";
 import { ANTHROPIC_OVERLOADED_STATUS, fail, failProvider, isAutoRetryableStatus } from "@fragua/core";
-import { findAbortToolCall, summarizeMessage } from "./exit-tools.ts";
+import { findAbortToolCall, nonIsolatedAbortReason, summarizeMessage } from "./exit-tools.ts";
 
 /** Classify the terminal assistant message into a resumable pause / hard fail,
  * or `null` to fall through to exit resolution. Handles no-response, provider
@@ -64,10 +64,7 @@ export function classifyTerminalMessage(args: {
     // still wins over a provider pause.
     const abortedEarlier = findAbortToolCall(messages.slice(hydratedCount));
     if (abortedEarlier && !abortedEarlier.isolated) {
-      return fail(
-        "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-        { non_retryable: true },
-      );
+      return fail(nonIsolatedAbortReason(abortedEarlier.reason), { non_retryable: true });
     }
     if (abortedEarlier) {
       return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
