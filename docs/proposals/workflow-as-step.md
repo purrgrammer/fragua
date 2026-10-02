@@ -1,6 +1,6 @@
 ---
 title: "`type: workflow` — a workflow invoked as a step"
-summary: "A `type: workflow` step runs a named child workflow as one step of a parent run: the executor enqueues one child run tagged `parent_run_id`, parks the parent in `paused_auto{reason:fanout_pending}` (the ratified fan-out-runs.md literal), and joins by reading the child's run-level `outputs:` block cross-run via the read-plane's run-level output projection (the pure `projectRunOutputs` egress contract). It is the FIRST landing of the Model M spine ([fan-out-runs.md](fan-out-runs.md)) — the spine is unbuilt today, so this proposal builds its minimal subset itself (the `parent_run_id` lineage column + budget-SUM index, the level-triggered `wakeFanoutJoin`, the child-lifetime GC guard (a parent-lineage predicate on `getGcEligibleSnapshotRuns` honored by `fragua gc --snapshots`, released by a durable adoption-or-discard fact), the single-level `SUM(total_cost_usd)` roll-up over `parent_run_id` — v1 forbids nested `type: workflow` steps, E049, so descendants are exactly the direct children); the fan variant reuses them later. The join is level-triggered — each tick `wakeFanoutJoin` scans `paused_auto{fanout_pending}` parents and, on a derived child reaching terminal, emits only `fact.run_resumed`; the driver's ordinary re-dispatch then fabricates the step's `fact.node_completed` at its single, existing edge-selection site (S1) — so a child that terminates before the park fact commits is never a lost wakeup, and no edge-selection logic leaks into `wake-pending`. Children are OPAQUE — never embedded — so no descendant SSE, no recursive rollup, no I11 leak. There is ONE mechanism (child run); inline parse-time expansion is rejected because the motivating loop is write-class and each round must provision an isolated worktree from the prior round's produced tree via `base:`, which a single shared worktree cannot hand off. Input binding is two clean substitution passes; the child never sees the parent namespace. The fix→review chain threads its worktree by a `base: tip` key that pins the child's provision base to the running tree tip (`tip` is a reserved value of the `base:` key, not a reserved node id), over the `--base <ref>` feature; `base: <step-id>` is deferred behind a Door. `accept` on the parent cherry-picks the running tip. Only the parent-authored top-level `human` signoff ships (layer 1); child-internal HITL propagation is deferred behind a Door, and a child whose graph contains a `human` node is rejected at save and re-checked at dispatch (E053, direct-child — v1 forbids nesting, so no transitive walk is needed). Cost: an `EVENT_CONTRACT_VERSION` bump (the new `fanout_pending` pause reason plus the new `parentRunId` payload field both change the surface hash) plus a `schema_version` migration (the `parent_run_id` column + index); `MIN_COMPATIBLE_CONTRACT_VERSION` stays 1. Validator codes E047–E054, W019."
+summary: "A `type: workflow` step runs a named child workflow as one step of a parent run: the executor enqueues one child run tagged `parent_run_id`, parks the parent in `paused_auto{reason:fanout_pending}` (the ratified fan-out-runs.md literal), and joins by reading the child's run-level `outputs:` block cross-run via the read-plane's run-level output projection (the pure `projectRunOutputs` egress contract). It is the FIRST landing of the Model M spine ([fan-out-runs.md](archive/fan-out-runs.md)) — the spine is unbuilt today, so this proposal builds its minimal subset itself (the `parent_run_id` lineage column + budget-SUM index, the level-triggered `wakeFanoutJoin`, the child-lifetime GC guard (a parent-lineage predicate on `getGcEligibleSnapshotRuns` honored by `fragua gc --snapshots`, released by a durable adoption-or-discard fact), the single-level `SUM(total_cost_usd)` roll-up over `parent_run_id` — v1 forbids nested `type: workflow` steps, E049, so descendants are exactly the direct children); the fan variant reuses them later. The join is level-triggered — each tick `wakeFanoutJoin` scans `paused_auto{fanout_pending}` parents and, on a derived child reaching terminal, emits only `fact.run_resumed`; the driver's ordinary re-dispatch then fabricates the step's `fact.node_completed` at its single, existing edge-selection site (S1) — so a child that terminates before the park fact commits is never a lost wakeup, and no edge-selection logic leaks into `wake-pending`. Children are OPAQUE — never embedded — so no descendant SSE, no recursive rollup, no I11 leak. There is ONE mechanism (child run); inline parse-time expansion is rejected because the motivating loop is write-class and each round must provision an isolated worktree from the prior round's produced tree via `base:`, which a single shared worktree cannot hand off. Input binding is two clean substitution passes; the child never sees the parent namespace. The fix→review chain threads its worktree by a `base: tip` key that pins the child's provision base to the running tree tip (`tip` is a reserved value of the `base:` key, not a reserved node id), over the `--base <ref>` feature; `base: <step-id>` is deferred behind a Door. `accept` on the parent cherry-picks the running tip. Only the parent-authored top-level `human` signoff ships (layer 1); child-internal HITL propagation is deferred behind a Door, and a child whose graph contains a `human` node is rejected at save and re-checked at dispatch (E053, direct-child — v1 forbids nesting, so no transitive walk is needed). Cost: an `EVENT_CONTRACT_VERSION` bump (the new `fanout_pending` pause reason plus the new `parentRunId` payload field both change the surface hash) plus a `schema_version` migration (the `parent_run_id` column + index); `MIN_COMPATIBLE_CONTRACT_VERSION` stays 1. Validator codes E047–E054, W019."
 status: proposal
 maturity: draft
 last-reviewed: 2026-06-19
@@ -10,13 +10,13 @@ last-reviewed: 2026-06-19
 
 > **Status: draft, panel NOT converged.** Four `propose` revise→panel rounds; feasibility and scope lenses approve, adversarial/clarity/precedent still ask for revisions — see [`workflow-as-step.critique.md`](workflow-as-step.critique.md) for the five open blocking demands. Checked in so the design is not lost in a paused run. Additive. Adds one node kind, `type: workflow`, that runs
 > a named child workflow as a single step of a parent run. It is the **first
-> landing of the Model M spine** ([fan-out-runs.md](fan-out-runs.md)) — that spine
+> landing of the Model M spine** ([fan-out-runs.md](archive/fan-out-runs.md)) — that spine
 > is entirely unbuilt today (`parent_run_id`, `wakeFanoutJoin`, `fanout_pending`
 > have zero matches in `packages/`), so this proposal *builds* its minimal subset
 > itself; the fan variant reuses it later. It shares the ratified fan-out-runs.md
 > park reason literal `fanout_pending` verbatim, so the two docs stay one spine.
 > It reads the child's run-level `outputs:` block
-> ([structured-outputs.md](structured-outputs.md) §11) cross-run through the
+> ([structured-outputs.md](archive/structured-outputs.md) §11) cross-run through the
 > read-plane's run-level output projection as the child→parent value return, and the
 > in-flight `--base <ref>` provision pin as the worktree hand-off. The cost is
 > honest: an `EVENT_CONTRACT_VERSION` bump (the `fanout_pending` pause reason and
@@ -75,7 +75,7 @@ join — the fan-in bullet:
 > artifact-sharing, not a graph join.
 
 Both are **superseded** for the child-run path by the ratified Model M reversal
-(**A9, 2026-05-29**) and its B5 resolution ([fan-out-runs.md](fan-out-runs.md) § B5),
+(**A9, 2026-05-29**) and its B5 resolution ([fan-out-runs.md](archive/fan-out-runs.md) § B5),
 which established that cross-run composition over `parent_run_id` lineage — spawn N
 tagged children, park the parent, join by reading their typed outputs cross-run — is
 legitimate composition, **not** the embedded sub-run leak §2.2 rejected (that leak
@@ -92,7 +92,7 @@ hand-driven. It adds no runtime supervisor: the child is an ordinary independent
 imperatively — it enqueues one intent, parks as a pure fold, and wakes when the
 level-triggered join sweep observes the child terminal.
 
-The recovery-granularity axis ([concurrency.md](concurrency.md)) already names
+The recovery-granularity axis ([concurrency.md](archive/concurrency.md)) already names
 this the `run:` model: a full child run of a named workflow, one state/log/OCC per
 child, isolated per-child worktree, join by typed outputs read cross-run. The
 axis line — *"there is deliberately no third off-log model"* — is why the inline
@@ -141,7 +141,7 @@ The Model M spine does not exist yet. Grep finds **zero** matches for
 `packages/`; `--base` / `refs/fragua/heads`-based provisioning is not in the CLI.
 So `type: workflow` cannot "reuse" the spine — it **builds the minimal subset** and
 lands it first, at N=1 (the simplest cardinality), and the fan variant
-([fan-out-runs.md](fan-out-runs.md)) reuses it later by adding only the parameter
+([fan-out-runs.md](archive/fan-out-runs.md)) reuses it later by adding only the parameter
 sweep and the aggregate read. The subset this proposal owns:
 
 1. **`parent_run_id` lineage column** — a nullable column on `run_state`,
@@ -205,7 +205,7 @@ The spawn/park/collect *control flow* lives in the driver (`runOne`) and
 
 The parking reason is a **new pause reason**, not a free diagnostic label. The
 literal is **`fanout_pending`** — the exact reason the ratified
-[fan-out-runs.md](fan-out-runs.md) already names for parking a parent on child
+[fan-out-runs.md](archive/fan-out-runs.md) already names for parking a parent on child
 progress. The two docs share one spine, so they must share one literal; adopting
 `fanout_pending` here (rather than minting a distinct `child_pending`) is what keeps
 the "fan variant reuses this spine" claim true. Parking the parent on a child's
@@ -367,7 +367,7 @@ usually a mistake, but legal for a pure side-effect child).
 `llm` producers only (structured-outputs §10 #3): a `tool`-terminal child cannot
 surface typed results yet. `converge.yaml`'s `review` child is `llm`-terminal (it
 emits a `verdict`), so this gap does not bite; it lifts when
-[`tool-outputs.md`](tool-outputs.md) lands.
+[`tool-outputs.md`](archive/tool-outputs.md) lands.
 
 ### Joining on the child's terminal — status → step outcome
 
@@ -893,7 +893,7 @@ concrete guarantees:
 ### Identity, IR, and recursion
 
 `type: workflow` is one literal added to the parser's `KNOWN_TYPES` and the IR
-graph types — an `ir_version` bump with a converter ([`workflow-ir.md`](workflow-ir.md) §1).
+graph types — an `ir_version` bump with a converter ([`workflow-ir.md`](archive/workflow-ir.md) §1).
 
 The child is referenced **by name**. Resolving that name is **not** a core-local
 operation: `resolveWorkflow` (`cli/src/workflow-path.ts`) is a CLI/`node:fs`
@@ -1096,7 +1096,7 @@ whole workflows, not nodes.
 **Model M (N > 1) is the same spine, opened wider.** `type: workflow` is Model M at
 N=1 with a by-name single child; the fan variant (`map: { over, as, run: W }`,
 N children over a parameter sweep, joined by `${{ children[*].outputs.f }}`) is
-[`fan-out-runs.md`](fan-out-runs.md). This proposal *builds* the shared spine
+[`fan-out-runs.md`](archive/fan-out-runs.md). This proposal *builds* the shared spine
 (`parent_run_id` column + index, `wakeFanoutJoin`, GC guard, single-level budget SUM,
 opaque child) at its simplest cardinality; the fan **reuses** it, adding only the
 sweep, the aggregate read, and — with the nesting Door — the `WITH RECURSIVE`
@@ -1130,7 +1130,7 @@ full check. The door that reopens it is the cross-lane
 `respond` reconciliation surface — mirror a child's `paused_human` onto the parent,
 route the operator's `intent.human_input` to the child, and reconcile a crash between
 the parent's mirror and the child's unblock. That is the in-store analog of
-[`hitl-channel.md`](hitl-channel.md)'s cross-boundary resume; deferred until a
+[`hitl-channel.md`](archive/hitl-channel.md)'s cross-boundary resume; deferred until a
 consumer needs a child that itself pauses for a human, since the worked example (and
 the "signoff at the top" requirement) is fully served by the parent-authored `human`
 node.
@@ -1160,7 +1160,7 @@ serve — not present today, and named here rather than left ajar.
 **Tool-terminal children stay closed until `tool-outputs` lands.** A child whose
 last node is a `tool` cannot surface typed run-level outputs (structured-outputs
 §10 #3), so it can't return a value to the parent — only a side effect. When
-[`tool-outputs.md`](tool-outputs.md) lifts the `llm`-only producer gate, run-level
+[`tool-outputs.md`](archive/tool-outputs.md) lifts the `llm`-only producer gate, run-level
 outputs project from tool producers too and tool-terminal children join like any
 other. `converge.yaml` doesn't wait on this (its `review` is `llm`-terminal).
 
@@ -1195,7 +1195,7 @@ subprocess result envelope that boundary forces.
   fine. It still loses, on the substrate/axis bar: a write-class *sequential* splice
   is neither the on-log `parallel` frontier (branches are read-class `llm`-only,
   E041/E042) nor a child run, so it is the "third off-log model" the
-  recovery-granularity axis ([concurrency.md](concurrency.md)) deliberately refuses.
+  recovery-granularity axis ([concurrency.md](archive/concurrency.md)) deliberately refuses.
   Admitting inline expansion for read-class children *only* would fork the mechanism
   by node class — the exact split the next rejection ("Both") loses on. So the axis
   bar closes the read-class narrowing that the worktree argument leaves open, and the

@@ -1,5 +1,5 @@
 // Parse and statically validate the `outputs:` block on llm/tool steps.
-// See docs/proposals/structured-outputs.md §3.
+// See docs/proposals/archive/structured-outputs.md §3.
 
 import type { OutputArray, OutputProfile, OutputRecord, OutputScalar, OutputsDecl } from "../types/outputs.ts";
 import type { Diagnostic } from "./validator.ts";

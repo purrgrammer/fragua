@@ -1,7 +1,7 @@
 // Structured step outputs — typed `outputs:` declarations on `llm` steps. A
 // restricted JSON-Schema profile (scalars + records + arrays, nesting to any
 // fixed depth) that both validates at parse time and lowers to provider-enforced
-// TypeBox schemas. See docs/proposals/structured-outputs.md §3.
+// TypeBox schemas. See docs/proposals/archive/structured-outputs.md §3.
 
 import { type TSchema, Type } from "@sinclair/typebox";
 

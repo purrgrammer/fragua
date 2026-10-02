@@ -7,7 +7,7 @@
 //   - `${{ outputs.<producer>.<field>[.<subfield>...] }}` — a typed step
 //     output emitted by an upstream node. Reads fail closed: an unpopulated
 //     ref throws `UnpopulatedOutputError` (→ node failure) rather than
-//     collapsing to "". See docs/proposals/structured-outputs.md.
+//     collapsing to "". See docs/proposals/archive/structured-outputs.md.
 //
 // Substitutes in `prompt:` / `text:` / `run:` strings.
 //
@@ -41,7 +41,7 @@ export interface SubstitutionOptions {
    * an instruction in an `llm` `prompt:`. Set ONLY for prompt consumption —
    * `tool` `run:` uses `escapeForShell` (a shell-injection surface, not
    * prompt), and `human` `text:` is read by a person. Ignored when
-   * `escapeForShell` is set. See docs/proposals/structured-outputs.md §6.4. */
+   * `escapeForShell` is set. See docs/proposals/archive/structured-outputs.md §6.4. */
   wrapValues?: boolean;
 }
 

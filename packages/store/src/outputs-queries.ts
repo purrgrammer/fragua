@@ -2,7 +2,7 @@
 // Keyed (run_id, node_id, iteration) → struct JSON.
 // Written in the same transaction as fact.node_completed (no await/JSON.stringify
 // inside the txn — the caller pre-serialises the payload).
-// See docs/proposals/structured-outputs.md §3 "Consumption and size".
+// See docs/proposals/archive/structured-outputs.md §3 "Consumption and size".
 
 import type { Database } from "bun:sqlite";
 

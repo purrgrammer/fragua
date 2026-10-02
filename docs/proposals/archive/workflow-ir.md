@@ -11,8 +11,8 @@ last-reviewed: 2026-05-28
 > **Status: (C) done · (A) done · (B) deferred post-feature-complete.** The
 > live content of this doc is §8 — the (B) freeze gate and the canonicalization
 > checklist. The (A)/(C) story is condensed into §1 below; git has the rest.
-> Interlocks with [`event-contract-version.md`](archive/event-contract-version.md)
-> (sibling versioning pattern, shipped) and [`bundles.md`](archive/bundles.md)
+> Interlocks with [`event-contract-version.md`](./event-contract-version.md)
+> (sibling versioning pattern, shipped) and [`bundles.md`](./bundles.md)
 > (what an exported run carries, shipped).
 
 ## 1. What shipped (A + C)
@@ -140,7 +140,7 @@ canonicalizers needed). The core rules, each a forever contract:
 - **Four version axes stay separate**: `schema_version` (store migrations),
   `ir_version` (IR contract), `sha` (content identity), and
   `EVENT_CONTRACT_VERSION` (fold contract —
-  [`event-contract-version.md`](archive/event-contract-version.md)). The
+  [`event-contract-version.md`](./event-contract-version.md)). The
   proposal's whole value is not collapsing them — and the pairing that bites
   is `ir_version` vs `EVENT_CONTRACT_VERSION`: a new node type / attr / default
   is an **`ir_version`** bump + an up-converter (§1), *not* an event-contract
@@ -153,4 +153,4 @@ canonicalizers needed). The core rules, each a forever contract:
 - **Sequencing**: (C) + (A) shipped. (B) lands when §8.1's checklist is ready
   and the graph feature set has settled. The bundle format already reserves
   the carrying shape (`{ ir, ir_version, source, sha }`) — see
-  [`bundles.md`](archive/bundles.md).
+  [`bundles.md`](./bundles.md).

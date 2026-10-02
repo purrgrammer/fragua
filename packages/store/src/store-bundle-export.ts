@@ -83,7 +83,7 @@ function deepRewriteRefs(v: unknown, reCasMap: Map<string, { exportSha: string; 
 /** Event types dropped from bundle exports — streaming deltas and scaffolding
  * that are losslessly reconstructable from the `messages` transcript.
  * Everything NOT in this set is retained so read-plane projections work on
- * imported runs. See docs/proposals/secret-scrubbing.md §4 for the rationale.
+ * imported runs. See docs/proposals/archive/secret-scrubbing.md §4 for the rationale.
  *
  * Tier-3 decision: retain llm.error, budget.warn, budget.stop, steering.*,
  * control.*, and legacy run.* lifecycle echoes (small structural payloads
@@ -220,7 +220,7 @@ export function retainPortableTables(ctx: StoreCtx): void {
  * are decoded, scrubbed, and re-CASed — the new sha replaces the original in
  * the artifacts JSONL, blob tar entry, and manifest blobs[] consistently.
  * Binary blobs ship as-is under their original sha; a secret in a binary
- * artifact is a known residual (see docs/proposals/secret-scrubbing.md §13).
+ * artifact is a known residual (see docs/proposals/archive/secret-scrubbing.md §13).
  *
  * `fraguaVersion` is stamped for the import-time compatibility check.
  * Single-run today (the `fragua ci --export` producer); the format is
