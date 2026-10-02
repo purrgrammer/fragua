@@ -103,6 +103,20 @@ async function sleepUntil(wakeAt: number | undefined, signal: AbortSignal): Prom
   });
 }
 
+/** The on-disk gate for the `--export` bundle. A bundle the binary-residual
+ * scan flagged never reaches `dest`: a non-zero exit is the only other signal,
+ * and it loses to an `if: always()` artifact-upload step. A stale bundle from
+ * an earlier run at the same path is removed for the same reason. Returns
+ * whether the bundle was written. */
+export function writeCiBundle(dest: string, bytes: Uint8Array, liveLiteralHit: boolean): boolean {
+  if (liveLiteralHit) {
+    rmSync(dest, { force: true });
+    return false;
+  }
+  writeFileSync(dest, bytes);
+  return true;
+}
+
 export async function ciCommand(opts: CiCommandOptions): Promise<number> {
   const invocationCwd = opts.cwd ?? process.cwd();
   const project = await resolveProject(invocationCwd);
@@ -408,11 +422,13 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
           // imported run carries it too (§5.4). Omitted for a non-terminal run.
           ...(ciResult !== undefined ? { runResult: ciResult } : {}),
         });
-        writeFileSync(dest, bytes);
-        console.log(chalk.dim(`bundle \u2192 ${dest}`));
-        if (liveLiteralHit) {
+        if (writeCiBundle(dest, bytes, liveLiteralHit)) {
+          console.log(chalk.dim(`bundle \u2192 ${dest}`));
+        } else {
           console.error(
-            chalk.red(`ci: a live secret reached an UNSCRUBBED binary artifact — review/exclude it before publishing.`),
+            chalk.red(
+              `ci: a live secret reached an UNSCRUBBED binary artifact — the bundle was NOT written to ${dest}; review/exclude the artifact and re-run.`,
+            ),
           );
           computedExitCode = CLI_EXIT.scrubLeak;
         }
