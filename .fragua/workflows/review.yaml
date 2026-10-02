@@ -81,7 +81,7 @@
 #   bun run fragua run review --input target="PR 128 focus on token storage"
 
 name: review
-goal: Holistic code review scaled to the change — minimum work for trivial diffs; six concurrent lenses (defects AND design debt) where it matters.
+goal: Holistic code review scaled to the change — minimum work for trivial diffs; four concurrent lenses (defects AND design debt) where it matters.
 # Single governor: the run-level budget. No per-step max-cost caps — a per-node
 # cap sums across the node's iterations (a verify↔synthesize retarget re-runs
 # synthesize) and a lens reading a real diff can need more than a tight cap.

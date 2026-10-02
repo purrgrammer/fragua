@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
 import { CLI_EXIT } from "../src/cli-exit.ts";
-import { type CiCommandOptions, ciCommand } from "../src/commands/ci.ts";
+import { type CiCommandOptions, ciCommand, writeCiBundle } from "../src/commands/ci.ts";
 
 let dir: string;
 let wfPath: string;
@@ -192,6 +192,21 @@ describe("ciCommand", () => {
     }
     // The bundle was written — verify it exists.
     expect(existsSync(exportPath)).toBe(true);
+  });
+});
+
+describe("writeCiBundle — the --export on-disk gate", () => {
+  test("a clean export lands at dest", () => {
+    const dest = join(dir, "clean.fragua");
+    expect(writeCiBundle(dest, new TextEncoder().encode("bundle"), false)).toBe(true);
+    expect(existsSync(dest)).toBe(true);
+  });
+
+  test("a live-literal hit leaves no bytes at dest, and removes a stale bundle there", () => {
+    const dest = join(dir, "leaky.fragua");
+    writeFileSync(dest, "from an earlier run");
+    expect(writeCiBundle(dest, new TextEncoder().encode("secret-bearing"), true)).toBe(false);
+    expect(existsSync(dest)).toBe(false);
   });
 });
 

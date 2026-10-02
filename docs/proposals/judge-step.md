@@ -1,8 +1,8 @@
 ---
 title: Judge steps — deterministic typed judgments (classify / score / verify / route) without an agent turn
 summary: "A `type: judge` step asks a System One model (TypeSafe's Jev) a map of narrow, typed questions — `choice`, `score`, `noul` — over a `state:` assembled from `${{ inputs.* }}`, `${{ outputs.* }}`, literal text, and bounded read-only worktree files. One HTTP call, no tools, no thread, no agent loop; answers arrive as calibrated probabilities in well under a second at ~$0.00002 per call. The step produces typed `outputs:` derived from its `questions:` (never authored), so `${{ outputs.<judge>.<q>.choice }}` and friends ride the shipped structured-outputs spine unchanged. One optional `decide:` block turns a judgment into control flow deterministically: `decide.route` keys edge selection on a `choice` answer (with a confidence and/or probability floor and a declared fallback route), and `decide.outcome` thresholds a `noul` into `success` / `fail` so `goal_gate` and `retry:` compose unchanged. No new fact type, no reducer change, no `EVENT_CONTRACT_VERSION` bump; a new `NodeType`, a pre-wired `ctx.judge` client, one credential row, and validator codes E047–E052 / W020–W022. A `for-each:` judge asks every question once per item of an array output in one call and splits the list into typed `kept` / `dropped` with a `keep:` threshold (§3.7)."
-status: proposal
-maturity: draft
+status: shipped
+maturity: shipped
 last-reviewed: 2026-09-17
 ---
 
