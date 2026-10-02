@@ -70,7 +70,9 @@ export function providersListCommand(): number {
     // these rows — a credentialed `typesafe` read as "0/N credentialed" and the
     // documented `fragua providers add typesafe` had no way to confirm itself.
     // Union every configured one, not only the built-in default.
-    const judge = loadJudgeProviders(store).providers;
+    const judgeLoad = loadJudgeProviders(store);
+    if (judgeLoad.error !== null) console.error(chalk.yellow(`judge providers: ${judgeLoad.error}`));
+    const judge = judgeLoad.providers;
     for (const id of Object.keys(judge)) if (!byProvider.has(id)) byProvider.set(id, 0);
 
     console.log(chalk.bold("Providers (via pi-ai registry):\n"));
