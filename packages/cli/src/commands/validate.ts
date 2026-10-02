@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { validateWorkflowJudgeProvidersOffline, validateWorkflowModelsOffline } from "@fragua/agent";
 import { DEFAULT_TOOL_MAX_MS, parseWorkflow, validate } from "@fragua/core";
 import chalk from "chalk";
-import { loadGlobalConfig } from "../config.ts";
+import { loadConfig } from "../config.ts";
 import { resolveWorkflow } from "../workflow-path.ts";
 
 export async function validateCommand(workflow: string): Promise<number> {
@@ -33,10 +33,10 @@ export async function validateCommand(workflow: string): Promise<number> {
   // Store-free, so only the built-in judge records are visible: an unknown
   // provider warns (it may be a `judge:<id>` row), a known one with no default
   // model still errors.
-  // The default provider comes from the same global config the enqueue path
-  // reads (a YAML file, not the store), so `validate` and `run` agree on which
-  // record a bare `judge` step resolves to.
-  const judgeCheck = validateWorkflowJudgeProvidersOffline(source, (await loadGlobalConfig()).judge?.provider);
+  // The default provider comes from the same project-merged config the
+  // enqueue path reads (YAML files, not the store), so `validate` and `run`
+  // agree on which record a bare `judge` step resolves to.
+  const judgeCheck = validateWorkflowJudgeProvidersOffline(source, (await loadConfig(cwd)).judge?.provider);
 
   const modelErrors = modelCheck.offenders.filter((o) => o.severity === "error");
   const modelWarnings = modelCheck.offenders.filter((o) => o.severity === "warning");

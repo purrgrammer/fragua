@@ -96,6 +96,15 @@ guarantee.
 
 ### Fixed
 
+- **A judge provider's other 4xx responses fail the node instead of pausing the
+  run.** A bare 404 from a wrong `base-url` (or any 4xx other than 429) is a
+  request the provider will keep refusing; it is now a routable node failure.
+- **A `judge:<id>` row pointing plaintext http at a non-loopback host is
+  rejected** unless it sets `auth: optional`, since the bearer key would cross
+  the network unencrypted. A `__proto__` key in a row's `models:` map is ignored.
+- **`fragua validate` reads the project-merged config** for the judge default
+  provider, matching enqueue, so a project-level `judge.provider` override
+  validates the same way it runs.
 - **`fragua validate` resolves a bare `judge` step against the configured
   default provider.** The offline check read `typesafe` regardless of
   `judge.provider` in the global config, so a workflow could validate green
