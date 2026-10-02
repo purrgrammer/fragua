@@ -62,6 +62,7 @@ import {
   workflowSourcePath,
   writeTar,
 } from "./bundle.ts";
+import { tableExists } from "./catalog-queries.ts";
 import {
   deleteDaemonLock,
   deleteDaemonLockIfMatches,
@@ -1465,6 +1466,7 @@ export class SqliteStore implements IEventStore {
   }
 
   listProviderCredentials(): ProviderCredentialRow[] {
+    if (!tableExists(this.db, "provider_credentials")) return [];
     return selectAllProviderCredentials(this.db).map(rowToProviderCredential);
   }
 
@@ -1496,6 +1498,7 @@ export class SqliteStore implements IEventStore {
   }
 
   listMcpOAuth(): { url: string; payload: string }[] {
+    if (!tableExists(this.db, "mcp_oauth")) return [];
     return selectAllMcpOAuth(this.db).map((row) => ({ url: row.url, payload: row.payload }));
   }
 
