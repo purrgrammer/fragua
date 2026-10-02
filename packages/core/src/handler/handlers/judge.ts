@@ -249,6 +249,13 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
           }
           if (err.httpStatus === 200)
             return halt(`judge provider "${err.provider}" returned a malformed response — ${err.message}`);
+          // Any other 4xx (a bare 404 from a wrong `base-url`, a 405, …) is a
+          // request the provider will keep refusing: pausing would wait on a
+          // retry that can never succeed. 429 is the one 4xx the client
+          // classifies as retryable and it reaches here as a pause.
+          if (err.httpStatus !== null && err.httpStatus >= 400 && err.httpStatus < 500 && err.httpStatus !== 429) {
+            return fail(`judge provider "${err.provider}" rejected the request (${err.httpStatus}) — ${err.message}`);
+          }
           return {
             kind: "pause_provider",
             httpStatus: err.httpStatus,

@@ -80,6 +80,19 @@ guarantee.
 
 ### Changed
 
+- **MCP client now runs on `@earendil-works/pi-mcp`.** fragua's remote and
+  stdio MCP support is rebuilt on the standalone pi-mcp package; the official
+  `@modelcontextprotocol/sdk` is no longer a runtime dependency. `.mcp.json`
+  loading, tool naming/collision hashing, allow/deny gating, and store-backed
+  OAuth logins are unchanged. Stored MCP OAuth logins carry over without
+  re-login. One behaviour change: a tool result that returns non-text content
+  (embedded resources, audio, resource links, binary blobs) is now rendered for
+  the model by pi-mcp's `toLlmContent` — embedded text resources become text and
+  other non-text blocks become a short placeholder — which can change the exact
+  text of such results.
+- **Updated the agent runtime (`pi-ai` / `pi-agent-core`) to 0.99.2.** No change
+  to how workflows are authored. The bundled default model per provider for
+  fireworks, together, and opencode-go moved to its catalogue successor.
 - **The unauthenticated control plane no longer trusts the Vite dev origin in
   production.** The same-origin gate previously accepted any `localhost:5173`
   page unconditionally, letting a rogue loopback page drive the compiled
@@ -147,6 +160,24 @@ guarantee.
 
 ### Fixed
 
+- **MCP stdio diagnostics redact every non-flag argument.** A credential passed
+  as a bare positional argument (not only `--flag=VALUE` / `--flag VALUE`) no
+  longer survives into the connect-failure diagnostic or an export bundle.
+- **`fragua mcp login` strips Unicode controls from auth-server errors.** Bidi
+  overrides, isolates, line separators and zero-width characters are removed
+  alongside C0 bytes, so a hostile `error_description` cannot re-order the
+  printed line.
+- **A timed-out MCP connect cannot surface as an unhandled rejection.** The
+  losing connect promise is observed before teardown closes the transport.
+- **A judge provider's other 4xx responses fail the node instead of pausing the
+  run.** A bare 404 from a wrong `base-url` (or any 4xx other than 429) is a
+  request the provider will keep refusing; it is now a routable node failure.
+- **A `judge:<id>` row pointing plaintext http at a non-loopback host is
+  rejected** unless it sets `auth: optional`, since the bearer key would cross
+  the network unencrypted. A `__proto__` key in a row's `models:` map is ignored.
+- **`fragua validate` reads the project-merged config** for the judge default
+  provider, matching enqueue, so a project-level `judge.provider` override
+  validates the same way it runs.
 - **`fragua validate` resolves a bare `judge` step against the configured
   default provider.** The offline check read `typesafe` regardless of
   `judge.provider` in the global config, so a workflow could validate green
