@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { McpOAuthProvider } from "@earendil-works/pi-mcp/oauth";
 import { LocalEnvironment } from "../../src/local-env.ts";
 import type { ResolvedMcpServer } from "../../src/mcp/config.ts";
 import {
@@ -13,9 +13,10 @@ import {
   needsOAuthProvider,
   normalizeMcpToolRef,
 } from "../../src/mcp/connector.ts";
-import { type McpOAuthStore, StoredOAuthProvider } from "../../src/mcp/oauth.ts";
+import { type McpOAuthStore, makeMcpOAuthProvider } from "../../src/mcp/oauth.ts";
 
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
+const ENV_SERVER = join(import.meta.dir, "env-server.ts");
 const BAD_LIST_SERVER = join(import.meta.dir, "bad-list-server.ts");
 const COLLIDE_SERVER = join(import.meta.dir, "collide-server.ts");
 const UNSORTED_SERVER = join(import.meta.dir, "unsorted-server.ts");
@@ -132,7 +133,7 @@ describe("createMcpConnector.materialize — error paths", () => {
   test("OAuth over plaintext http to a non-loopback host → refused before any provider call", async () => {
     const cwd = projectWith({ mcpServers: { remote: { type: "http", url: "http://insecure.example.com/mcp" } } });
     let asked = false;
-    const oauthProviderFor = (): OAuthClientProvider | undefined => {
+    const oauthProviderFor = (): McpOAuthProvider | undefined => {
       asked = true;
       return undefined;
     };
@@ -184,6 +185,58 @@ describe("createMcpConnector.materialize — live stdio server", () => {
     } finally {
       await set.dispose();
     }
+  }, 30_000);
+
+  test("does not leak a daemon secret into the stdio child (inheritEnv:false + allowlist)", async () => {
+    // A provider key living in the daemon's environment must NOT reach a
+    // third-party MCP binary; only the allowlist (PATH/HOME/…) + server.env do.
+    const secretKey = "FRAGUA_MCP_LEAK_PROBE";
+    process.env[secretKey] = "super-secret-token";
+    try {
+      const cwd = projectWith({
+        mcpServers: { env: { command: process.execPath, args: [ENV_SERVER], env: { FRAGUA_OWN_VAR: "from-config" } } },
+      });
+      const set = await createMcpConnector().materialize(["env"], { cwd });
+      try {
+        const getenv = set.tools.find((t) => t.name === "mcp__env__getenv");
+        if (!getenv) throw new Error("no getenv tool");
+        const leaked = await getenv.execute({ name: secretKey }, new LocalEnvironment());
+        expect(leaked.text).toBe(""); // the daemon secret did not cross into the child
+        const ownVar = await getenv.execute({ name: "FRAGUA_OWN_VAR" }, new LocalEnvironment());
+        expect(ownVar.text).toBe("from-config"); // server.env still reaches it
+        const path = await getenv.execute({ name: "PATH" }, new LocalEnvironment());
+        expect(path.text.length).toBeGreaterThan(0); // allowlisted PATH still inherited
+      } finally {
+        await set.dispose();
+      }
+    } finally {
+      delete process.env[secretKey];
+    }
+  }, 30_000);
+
+  test("a non-text content block renders via toLlmContent (placeholder), not a raw block", async () => {
+    const cwd = projectWith({ mcpServers: { env: { command: process.execPath, args: [ENV_SERVER] } } });
+    const set = await createMcpConnector().materialize(["env"], { cwd });
+    try {
+      const rich = set.tools.find((t) => t.name === "mcp__env__rich");
+      if (!rich) throw new Error("no rich tool");
+      const out = await rich.execute({}, new LocalEnvironment());
+      // toLlmContent keeps the text block and placeholders the audio block.
+      expect(out.text).toContain("intro");
+      expect(out.text).not.toContain("AAAA");
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+
+  test("dispose() tears a live stdio child down promptly (no wedged close)", async () => {
+    const cwd = projectWith({ mcpServers: { echo: { command: process.execPath, args: [ECHO_SERVER] } } });
+    const set = await createMcpConnector().materialize(["echo"], { cwd });
+    expect(set.tools).toHaveLength(1);
+    const started = Date.now();
+    await set.dispose();
+    // StdioTransport's SIGTERM→SIGKILL escalation bounds teardown; it must not hang.
+    expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
   test("a callTool timeout/transport error → is_error result, not an uncaught throw", async () => {
@@ -275,6 +328,30 @@ describe("createMcpConnector.materialize — live stdio server", () => {
   }, 30_000);
 });
 
+describe("createMcpConnector.materialize — stderr redaction", () => {
+  test("a bare positional secret arg echoed on stderr is redacted from the diagnostic", async () => {
+    const secret = "ghp_positional_secret_value_1234";
+    const cwd = projectWith({
+      mcpServers: {
+        leaky: {
+          command: process.execPath,
+          args: ["-e", "console.error(process.argv[1]); process.exit(3)", secret],
+        },
+      },
+    });
+    const set = await createMcpConnector().materialize(["leaky"], { cwd, connectTimeoutMs: 10_000 });
+    try {
+      expect(set.tools).toEqual([]);
+      expect(set.errors).toHaveLength(1);
+      const message = set.errors[0]?.message ?? "";
+      expect(message).not.toContain(secret);
+      expect(message).toContain("«redacted»");
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+});
+
 const httpServer = (headers: Record<string, string>): ResolvedMcpServer => ({
   transport: "http",
   url: "https://mcp.example.com/mcp",
@@ -309,7 +386,7 @@ describe("createMcpConnector.materialize — oauth provider selection", () => {
       },
     });
     const seen: string[] = [];
-    const oauthProviderFor = (url: string): OAuthClientProvider | undefined => {
+    const oauthProviderFor = (url: string): McpOAuthProvider | undefined => {
       seen.push(url);
       return undefined;
     };
@@ -325,8 +402,8 @@ describe("createMcpConnector.materialize — oauth provider selection", () => {
   test("daemon-style throwing onRedirect → server reported in errors, materialize resolves", async () => {
     const cwd = projectWith({ mcpServers: { oauthed: { type: "http", url: "http://127.0.0.1:41997/mcp" } } });
     const port: McpOAuthStore = { load: () => undefined, save: () => {}, clear: () => {} };
-    const oauthProviderFor = (url: string): OAuthClientProvider =>
-      new StoredOAuthProvider({
+    const oauthProviderFor = (url: string): McpOAuthProvider =>
+      makeMcpOAuthProvider({
         url,
         store: port,
         redirectUrl: "http://127.0.0.1:41765/callback",
