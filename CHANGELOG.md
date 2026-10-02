@@ -14,6 +14,11 @@ guarantee.
 
 ### Fixed
 
+- **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
+  When a live secret sits verbatim in an unscrubbed binary artifact, nothing is
+  written to the export path (and a stale bundle there is removed), so an
+  `if: always()` artifact-upload step cannot publish it. The job still exits
+  with the scrub-leak code. `fragua runs export` keeps writing and warning.
 - **The agent `read` tool no longer bypasses the working-directory jail.** Reads
   now go through the execution environment's own byte read, which applies the
   cwd realpath check to the same path it reads, closing a symlink-swap race
@@ -182,6 +187,16 @@ guarantee.
 
 ### Fixed
 
+- **`fragua validate` resolves a bare `judge` step against the configured
+  default provider.** The offline check read `typesafe` regardless of
+  `judge.provider` in the global config, so a workflow could validate green
+  and fail E056 at enqueue.
+- **Judge usage counts are read as finite, non-negative numbers.** A provider
+  response carrying `Infinity` or a negative token count no longer lands a
+  non-finite cost in the event log.
+- **Judge retry backoff has a floor.** The judge client's exponential backoff
+  used full jitter; it now waits at least half its exponential per attempt,
+  matching the llm retry path.
 - **A shared `thread:` no longer lets one step inherit another's route or
   output.** The scans that recover a step's `route()` / `emit_output()` call
   walked the whole rehydrated transcript, so on a shared thread a step that

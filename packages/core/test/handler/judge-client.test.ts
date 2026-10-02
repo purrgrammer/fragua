@@ -74,6 +74,40 @@ describe("makeJudgeClient", () => {
     expect(slept).toEqual([2000]);
   });
 
+  test("without Retry-After, every backoff waits at least half its exponential (equal jitter)", async () => {
+    const slept: number[] = [];
+    const { fetch: f } = fetchSeq([
+      new Response("", { status: 503 }),
+      new Response("", { status: 503 }),
+      new Response(OK_BODY, { status: 200 }),
+    ]);
+    const client = makeJudgeClient({
+      getApiKey: async () => "k",
+      fetch: f,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await client.ask(REQ, signal());
+    expect(slept).toHaveLength(2);
+    expect(slept[0]).toBeGreaterThanOrEqual(250);
+    expect(slept[0]).toBeLessThan(500);
+    expect(slept[1]).toBeGreaterThanOrEqual(500);
+    expect(slept[1]).toBeLessThan(1000);
+  });
+
+  test("a non-finite or negative usage count is read as zero, so no Infinity reaches the cost", async () => {
+    // JSON.stringify would drop a literal Infinity; the wire text is what a
+    // misbehaving provider can actually send, so write it by hand.
+    const body = `{"model":"jev-1.13.0","answers":{"ok":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1e999,"output_tokens":-4}}`;
+    const { fetch: f } = fetchSeq([new Response(body, { status: 200 })]);
+    const client = makeJudgeClient({ getApiKey: async () => "k", fetch: f, sleep: noSleep });
+    const res = await client.ask(REQ, signal());
+    expect(res.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(Number.isFinite(res.costUsd)).toBe(true);
+    expect(res.costUsd).toBe(0);
+  });
+
   test("529 exhausting attempts → JudgeProviderError with status + retryAfter", async () => {
     const { fetch: f, calls } = fetchSeq([
       new Response("busy", { status: 529 }),

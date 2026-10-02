@@ -23,12 +23,7 @@ export function resolveExitOutcome(args: {
   const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
   const aborted = findAbortToolCall(messages.slice(hydratedCount));
   // Isolation (mirrors the route / emit_output exits, D3).
-  if (aborted && !aborted.isolated) {
-    return fail(
-      "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-      { non_retryable: true },
-    );
-  }
+  if (aborted && !aborted.isolated) return fail(nonIsolatedAbortReason(aborted.reason), { notes, non_retryable: true });
   if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
   // Route-tool resolution — only when the node opted into `routes=`.
@@ -66,6 +61,12 @@ export function resolveExitOutcome(args: {
   }
 
   return ok({ notes });
+}
+
+/** The isolation breach is the failure, but the model's own reason is the
+ * diagnostic an operator reads first — carry it along. */
+export function nonIsolatedAbortReason(reason: string): string {
+  return `abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn (abort reason: ${reason})`;
 }
 
 export function summarizeMessage(message: { role: string; content?: unknown }): string {
