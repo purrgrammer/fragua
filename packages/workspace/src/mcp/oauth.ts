@@ -175,7 +175,9 @@ export function clearTransientOAuthState(store: McpOAuthStore, url: string): voi
 export function portableOAuthBlob(payload: string, now: number): string | undefined {
   const current = parseOAuthBlob(payload);
   const access = current?.tokens?.access_token;
-  if (current === undefined || access === undefined) return undefined;
+  // An empty token is as unusable as a missing one: it would build
+  // `Authorization: Bearer ` and fail remotely instead of as "not logged in".
+  if (current === undefined || access === undefined || access.length === 0) return undefined;
   if (current.tokensExpireAt !== undefined && current.tokensExpireAt <= now) return undefined;
   const { refresh_token: _refresh, ...tokens } = current.tokens ?? {};
   const { codeVerifier: _verifier, oauthState: _state, ...rest } = current;

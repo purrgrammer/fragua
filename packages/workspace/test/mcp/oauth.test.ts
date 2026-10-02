@@ -210,6 +210,9 @@ describe("clearTransientOAuthState", () => {
 
 describe("portableOAuthBlob", () => {
   const now = 1_700_000_000_000;
+  test("an empty access token is as unusable as a missing one", () => {
+    expect(portableOAuthBlob(JSON.stringify({ serverUrl: URL_A, tokens: { access_token: "" } }), now)).toBeUndefined();
+  });
   test("keeps the access token + client registration, drops refresh material and transients", () => {
     const out = portableOAuthBlob(
       JSON.stringify({
