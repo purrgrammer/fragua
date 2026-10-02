@@ -192,6 +192,7 @@ describe("PiLlmBackend abort tool wiring", () => {
       expect(outcome.status).toBe("fail");
       expect(outcome.non_retryable).toBe(true);
       expect(outcome.failure_reason).toContain("shared an assistant response");
+      expect(outcome.failure_reason).toContain("blocked by missing input");
     } finally {
       faux.unregister();
       await rm(scratch, { recursive: true, force: true });
