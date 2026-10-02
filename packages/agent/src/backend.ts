@@ -1000,10 +1000,7 @@ function classifyTerminalMessage(args: {
     // still wins over a provider pause.
     const abortedEarlier = findAbortToolCall(messages.slice(hydratedCount));
     if (abortedEarlier && !abortedEarlier.isolated) {
-      return fail(
-        "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-        { non_retryable: true },
-      );
+      return fail(nonIsolatedAbortReason(abortedEarlier.reason), { non_retryable: true });
     }
     if (abortedEarlier) {
       return fail(abortedEarlier.reason, { notes: summarizeMessage(last), non_retryable: true });
@@ -1037,6 +1034,12 @@ function classifyTerminalMessage(args: {
  * everything), a route pick (`routes:` nodes), an `emit_output` value
  * (`outputs:` nodes), or a plain `ok`. Each terminating tool must be called in
  * isolation (D3) — sharing its batch fails the node. */
+/** The isolation breach is the failure, but the model's own reason is the
+ * diagnostic an operator reads first — carry it along. */
+function nonIsolatedAbortReason(reason: string): string {
+  return `abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn (abort reason: ${reason})`;
+}
+
 function resolveExitOutcome(args: {
   messages: readonly AgentMessage[];
   hydratedCount: number;
@@ -1048,12 +1051,7 @@ function resolveExitOutcome(args: {
   const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
   const aborted = findAbortToolCall(messages.slice(hydratedCount));
   // Isolation (mirrors the route / emit_output exits, D3).
-  if (aborted && !aborted.isolated) {
-    return fail(
-      "abort shared an assistant response with other tool calls — call it alone, with no other tools in the same turn",
-      { non_retryable: true },
-    );
-  }
+  if (aborted && !aborted.isolated) return fail(nonIsolatedAbortReason(aborted.reason), { notes, non_retryable: true });
   if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
   // Route-tool resolution — only when the node opted into `routes=`.
