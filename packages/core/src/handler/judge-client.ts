@@ -205,14 +205,16 @@ function parseResponse(text: string, record: JudgeProviderRecord, apiKey: string
       throw new JudgeProviderError(`answer "${safeId}": ${problem}`, provider, 200);
     }
   }
-  const inputTokens = typeof usage?.["input_tokens"] === "number" ? usage["input_tokens"] : 0;
+  // `Infinity` and `NaN` are `number`s; a provider sending either would
+  // otherwise land a non-finite cost in the event log and every rollup over it.
+  const inputTokens = isFiniteNumber(usage?.["input_tokens"]) ? Math.max(0, usage["input_tokens"]) : 0;
   return {
     provider,
     model: r["model"],
     answers: answers as JudgeResponse["answers"],
     usage: {
       input_tokens: inputTokens,
-      output_tokens: typeof usage?.["output_tokens"] === "number" ? usage["output_tokens"] : 0,
+      output_tokens: isFiniteNumber(usage?.["output_tokens"]) ? Math.max(0, usage["output_tokens"]) : 0,
     },
     costUsd: inputTokens * record.usdPerInputToken,
   };
@@ -270,8 +272,11 @@ function parseRetryAfter(header: string | null): number | undefined {
 
 function backoffMs(attempt: number, retryAfterMs: number | undefined): number {
   if (retryAfterMs !== undefined) return Math.min(retryAfterMs, 30_000);
+  // Equal jitter, as the llm retry path uses: every attempt waits at least
+  // half its exponential, so three retries cannot all fire near-zero and burn
+  // the chain without spanning a rate-limit window.
   const cap = Math.min(500 * 2 ** (attempt - 1), 8_000);
-  return Math.floor(Math.random() * cap);
+  return Math.floor(cap / 2 + Math.random() * (cap / 2));
 }
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
