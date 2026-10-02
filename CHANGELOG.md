@@ -10,6 +10,11 @@ guarantee.
 
 ### Fixed
 
+- **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
+  When a live secret sits verbatim in an unscrubbed binary artifact, nothing is
+  written to the export path (and a stale bundle there is removed), so an
+  `if: always()` artifact-upload step cannot publish it. The job still exits
+  with the scrub-leak code. `fragua runs export` keeps writing and warning.
 - **The agent `read` tool no longer bypasses the working-directory jail.** Reads
   now go through the execution environment's own byte read, which applies the
   cwd realpath check to the same path it reads, closing a symlink-swap race

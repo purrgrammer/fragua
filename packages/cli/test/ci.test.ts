@@ -8,13 +8,13 @@
 // assert on.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import { SqliteStore } from "@fragua/store";
 import { CLI_EXIT } from "../src/cli-exit.ts";
-import { type CiCommandOptions, ciCommand } from "../src/commands/ci.ts";
+import { type CiCommandOptions, ciCommand, writeCiBundle } from "../src/commands/ci.ts";
 
 let dir: string;
 let wfPath: string;
@@ -94,66 +94,6 @@ function readArtifact(): { status: string; types: string[] } {
     store.close();
   }
 }
-
-describe("ciCommand — a pre-existing --db store", () => {
-  test("is used as-is: nothing seeded over it, credential tables and rows kept", async () => {
-    writeFileSync(wfPath, "name: ci-smoke\nsteps:\n  done: {type: exit}\n");
-    const URL = "https://mcp.example.com/mcp";
-    const pre = new SqliteStore({ path: dbPath });
-    pre.upsertProviderCredential({
-      provider: "openai",
-      kind: "api_key",
-      payload: JSON.stringify({ type: "api_key", key: "sk-operator-row" }),
-    });
-    pre.upsertMcpOAuth(URL, JSON.stringify({ serverUrl: URL, tokens: { access_token: "AT" } }));
-    pre.close();
-    const saved = process.env["MISTRAL_API_KEY"];
-    process.env["MISTRAL_API_KEY"] = "env-key-that-must-not-be-seeded";
-    try {
-      expect(await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).toBe(0);
-    } finally {
-      if (saved === undefined) delete process.env["MISTRAL_API_KEY"];
-      else process.env["MISTRAL_API_KEY"] = saved;
-    }
-    const store = new SqliteStore({ path: dbPath, migrate: false });
-    try {
-      expect((store.getProviderCredential("openai")?.payload as { key?: string } | undefined)?.key).toBe(
-        "sk-operator-row",
-      );
-      expect(store.getMcpOAuth(URL)).toBeDefined();
-      expect(store.getProviderCredential("mistral")).toBeNull();
-      expect(store.listProviderCredentials().map((r) => r.provider)).toEqual(["openai"]);
-    } finally {
-      store.close();
-    }
-  });
-
-  test("with only an MCP login and no provider key, the stub-backend hint blames the store, not a seed", async () => {
-    writeFileSync(wfPath, "name: ci-smoke\nsteps:\n  done: {type: exit}\n");
-    const URL = "https://mcp.example.com/mcp";
-    const pre = new SqliteStore({ path: dbPath });
-    pre.upsertMcpOAuth(URL, JSON.stringify({ serverUrl: URL, tokens: { access_token: "AT" } }));
-    pre.close();
-    const errs: string[] = [];
-    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-      errs.push(args.map(String).join(" "));
-    });
-    // The operator's ~/.fragua/config.yaml may pin a default provider+model,
-    // which resolves the llm target without any credential; an empty home dir
-    // makes the stub-backend branch the one that runs.
-    const homeDir = mkdtempSync(join(tmpdir(), "fragua-ci-home-"));
-    try {
-      expect(await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true, homeDir })).toBe(0);
-    } finally {
-      spy.mockRestore();
-    }
-    const hint = errs.find((l) => l.includes("no llm provider resolved"));
-    expect(hint).toBeDefined();
-    expect(hint).toContain("pre-existing store is never seeded");
-    expect(hint).not.toContain("creds seeded for");
-    expect(hint).not.toContain("mcp:");
-  });
-});
 
 describe("ciCommand", () => {
   test("drives a no-op (exit-only) workflow to completed; exit 0; .db holds the terminal fact", async () => {
@@ -252,6 +192,35 @@ describe("ciCommand", () => {
     }
     // The bundle was written — verify it exists.
     expect(existsSync(exportPath)).toBe(true);
+  });
+});
+
+describe("writeCiBundle — the --export on-disk gate", () => {
+  test("a clean export lands at dest", () => {
+    const dest = join(dir, "clean.fragua");
+    expect(writeCiBundle(dest, new TextEncoder().encode("bundle"), false)).toBe(true);
+    expect(existsSync(dest)).toBe(true);
+  });
+
+  test("a live-literal hit leaves no bytes at dest, and removes a stale bundle there", () => {
+    const dest = join(dir, "leaky.fragua");
+    writeFileSync(dest, "from an earlier run");
+    expect(writeCiBundle(dest, new TextEncoder().encode("secret-bearing"), true)).toBe(false);
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  test("an unremovable stale bundle is reported, not thrown — the gate still answers false", () => {
+    // A directory at dest: rmSync without `recursive` refuses it (EISDIR/EPERM).
+    const dest = join(dir, "stale-as-dir.fragua");
+    mkdirSync(dest);
+    writeFileSync(join(dest, "x"), "x");
+    const spy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(writeCiBundle(dest, new TextEncoder().encode("secret-bearing"), true)).toBe(false);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

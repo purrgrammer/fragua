@@ -26,11 +26,9 @@ interface AllowEntry {
 
 // Pre-existing oversize files pinned here with a dated reason so this lint lands
 // green while still guarding every other file (including the freshly split
-// backend.ts) from regressing. `backend.ts` must NEVER appear here — its split
-// cleared it, and a regression must fail the scan, not be silently allowlisted.
-// `store/src/store.ts` is present only as the SANCTIONED deferral of the store
-// split (see the commit body): the agent split + this lint landed first; the
-// store split into per-interface modules is tracked separately.
+// backend.ts and store.ts) from regressing. `backend.ts` and `store/src/store.ts`
+// must NEVER appear here — both were split along their declared seams, and a
+// regression must fail the scan, not be silently allowlisted.
 const ALLOWLIST: readonly AllowEntry[] = [
   {
     file: "core/src/engine/validator.ts",
@@ -62,11 +60,6 @@ const ALLOWLIST: readonly AllowEntry[] = [
     file: "store/src/types.ts",
     reason:
       "2025-06-14: pre-existing store public-types + sub-interface surface; the IEventStore contract lives in one file by design.",
-  },
-  {
-    file: "store/src/store.ts",
-    reason:
-      "2025-06-14: store split into per-interface modules deferred (agent split + lint landed first); tracked separately.",
   },
 ];
 
@@ -135,14 +128,13 @@ describe("file-length discipline", () => {
     expect(lineCount(join(PACKAGES_DIR, rel)), `${rel} over ${MAX_LINES}`).toBeLessThanOrEqual(MAX_LINES);
   });
 
-  test("the allowlist holds only the pinned pre-existing files plus the deferred store.ts", () => {
+  test("the allowlist holds only the pinned pre-existing files", () => {
     expect(ALLOWLIST.map((a) => a.file).sort()).toEqual([
       "cli/src/commands/operator.ts",
       "core/src/engine/validator.ts",
       "core/src/parser/yaml.ts",
       "daemon/src/transition-planner.ts",
       "store/src/run-state-queries.ts",
-      "store/src/store.ts",
       "store/src/types.ts",
       "types/src/events.ts",
     ]);
