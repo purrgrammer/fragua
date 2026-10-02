@@ -66,6 +66,9 @@ function overlay(id: string, base: JudgeProviderRecord | undefined, cfg: JudgePr
   if (defaultModel !== undefined) record.defaultModel = defaultModel;
   const merged: Record<string, JudgeModelLimits> = { ...(base?.models ?? {}) };
   for (const [model, lim] of Object.entries(models ?? {})) {
+    // A plain-object assignment to one of these invokes the setter instead of
+    // creating an own property, poisoning every later lookup on the record.
+    if (model === "__proto__" || model === "constructor" || model === "prototype") continue;
     // Field by field over the built-in entry, so a row correcting one measured
     // number does not silently drop that model's other limits.
     merged[model] = {
@@ -78,6 +81,17 @@ function overlay(id: string, base: JudgeProviderRecord | undefined, cfg: JudgePr
   }
   if (Object.keys(merged).length > 0) record.models = merged;
   return record;
+}
+
+function isPlaintextRemote(baseUrl: string): boolean {
+  if (!/^http:\/\//i.test(baseUrl)) return false;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return true;
+  }
+  return !(host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]" || /^127\./.test(host));
 }
 
 /** The fields a row defining a NEW provider must supply, with how to read each
@@ -134,6 +148,16 @@ export function loadJudgeProviders(store: IProviderConfigStore): JudgeProviderRe
     // `fetch` with an implementation-defined TypeError, far from the row.
     if (!/^https?:\/\//i.test(record.baseUrl)) {
       errors.push(`provider_config[${row.provider}]: \`base-url\` must be http(s), got "${record.baseUrl}"`);
+      continue;
+    }
+    // The client sends `Authorization: Bearer <key>` whatever the scheme, so a
+    // plaintext non-loopback URL with auth required would put the operator's
+    // key on the wire unencrypted on every call.
+    if (record.auth !== "optional" && isPlaintextRemote(record.baseUrl)) {
+      errors.push(
+        `provider_config[${row.provider}]: \`base-url\` "${record.baseUrl}" is plaintext http to a non-loopback host; ` +
+          "a credential would cross the network unencrypted — use https, or set `auth: optional`",
+      );
       continue;
     }
     // A row overlaying a built-in inherits every number it does not set. A row
