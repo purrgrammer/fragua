@@ -216,7 +216,10 @@ function substitute(input: string, env: Record<string, string | undefined>): Sub
   const missing: string[] = [];
   const value = input.replace(ENV_REF, (_match, name: string) => {
     const resolved = env[name];
-    if (resolved === undefined) {
+    // A var that is set but blank (`GITHUB_PAT=` in .env.local, an empty CI
+    // secret) is as unusable as an unset one; without this the server resolves
+    // and an `Authorization: Bearer ` header goes out on the wire.
+    if (resolved === undefined || resolved.trim() === "") {
       if (!missing.includes(name)) missing.push(name);
       return "";
     }
