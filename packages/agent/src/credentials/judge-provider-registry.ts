@@ -130,6 +130,10 @@ export function loadJudgeProviders(store: IProviderConfigStore): JudgeProviderRe
       errors.push(`provider_config[${row.provider}]: empty judge provider id`);
       continue;
     }
+    if (id === "__proto__" || id === "constructor" || id === "prototype") {
+      errors.push(`provider_config[${row.provider}]: "${id}" is not a usable judge provider id`);
+      continue;
+    }
     if (!Value.Check(JudgeProviderConfigSchema, row.config)) {
       const details =
         [...Value.Errors(JudgeProviderConfigSchema, row.config)]
