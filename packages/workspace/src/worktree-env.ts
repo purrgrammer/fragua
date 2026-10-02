@@ -250,6 +250,10 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     return this.local.readFile(path);
   }
 
+  readFileBytes(path: string): Promise<Uint8Array> {
+    return this.local.readFileBytes(path);
+  }
+
   writeFile(path: string, contents: string): Promise<void> {
     return this.local.writeFile(path, contents);
   }

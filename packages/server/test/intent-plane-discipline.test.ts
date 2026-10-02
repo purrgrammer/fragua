@@ -9,6 +9,11 @@
 // (packages/core/src/intent-plane) are exempt by construction: core is not in
 // SCAN_DIRS.
 //
+// Beyond the plane-owned writes, this also guards the `IDaemonCoordinator`
+// lock-eviction write `evictDaemonLockIfStale`: it must never be inlined into a
+// new route/adapter body — the one legitimate direct caller (the harness
+// liveness adapter) is named in EXEMPT_FILES.
+//
 // This is an AST walk (not a regex over source text), so a computed member
 // access — `store["enqueueRun"]()` — is caught the same as `store.enqueueRun()`.
 // Shape mirrors packages/server/test/inline-import-discipline.test.ts.
@@ -32,6 +37,7 @@ const WRITE_METHODS = new Set<string>([
   "pauseSchedule",
   "resumeSchedule",
   "deleteSchedule",
+  "evictDaemonLockIfStale",
 ]);
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
 
@@ -47,6 +53,10 @@ const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages
 const EXEMPT_FILES = new Set<string>([
   "packages/daemon/src/auto-titler.ts",
   "packages/daemon/src/schedule-dispatcher.ts",
+  // Legitimate direct `evictDaemonLockIfStale` caller, not an event-log bypass:
+  //   - harness: its liveness adapter reaps a provably-dead daemon's lock on
+  //     supervised restart and on its periodic reaper tick.
+  "packages/cli/src/commands/harness.ts",
 ]);
 const SCAN_DIRS = [
   join(ROOT, "packages/server/src"),
@@ -119,5 +129,15 @@ describe("intent-plane discipline — store writes only inside the plane", () =>
   test("honours EXEMPT_FILES and dotted commit* passthrough", () => {
     expect(EXEMPT_FILES.has("packages/daemon/src/auto-titler.ts")).toBe(true);
     expect(scanString(`plane.commit(x); plane.commitEnqueue(y); plane.commitSaveWorkflow(z);\n`)).toEqual([]);
+  });
+
+  test("flags a route body calling the coordinator write evictDaemonLockIfStale", () => {
+    const src = `app.get("/x", (c) => { deps.store.evictDaemonLockIfStale(o); return c.json({}); });\n`;
+    expect(scanString(src).map((h) => h.method)).toContain("evictDaemonLockIfStale");
+  });
+
+  test("exempts harness.ts as the documented direct coordinator caller", () => {
+    expect(EXEMPT_FILES.has("packages/cli/src/commands/harness.ts")).toBe(true);
+    expect(EXEMPT_FILES.has("packages/server/src/reaper.ts")).toBe(false);
   });
 });

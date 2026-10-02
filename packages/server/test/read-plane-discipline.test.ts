@@ -10,8 +10,11 @@
 // blind spot is auditable rather than silent.
 //
 // Scoped to the run-focused route files. `schedule-routes.ts` /
-// `analytics-routes.ts` read over `IDaemonCoordinator` / `IAnalyticsReader`
-// surfaces the run-read plane does not front, so they are out of scope here.
+// `analytics-routes.ts` / `routes/health.ts` read over `IDaemonCoordinator` /
+// `IAnalyticsReader` surfaces the run-read plane does not front (health reads
+// `currentDaemonLock` / `runStateCounts` and delegates its only write to the
+// reaper), so they are out of scope here — the reaper's `evictDaemonLockIfStale`
+// write is guarded against inline route use by the intent-plane lint instead.
 //
 // This is an AST scan (not a regex over source text), so a forbidden call can't
 // slip past by renaming or aliasing `deps.store`. Shape mirrors

@@ -1,19 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { insertDaemonEvent } from "./daemon-queries.ts";
+import { insertEventDaemon, selectAllOrphanSideEffects } from "./event-queries.ts";
 import { crashRequeueActiveMsDelta } from "./reducers.ts";
+import {
+  bumpRunSeq,
+  selectRunningNonImportedRuns,
+  selectRunStateRow,
+  updateRunStateQuarantinedBySweep,
+  updateRunStateRequeuedAfterCrash,
+} from "./run-state-queries.ts";
 import type { SweepResult } from "./types.ts";
-
-interface RunningRow {
-  run_id: string;
-  version: number;
-  current_node: string | null;
-}
-
-interface OrphanRow {
-  run_id: string;
-  seq: number;
-  idempotency_key: string;
-}
 
 /**
  * Heal crash damage on daemon startup.
@@ -33,7 +29,7 @@ interface OrphanRow {
 export interface StartupSweepOpts {
   /** Heartbeat timestamp captured from the dying daemon's lock just
    * before the eviction cleared it (the harness supervisor's
-   * `evictDaemonLockIfStale`, or the server reaper). Threaded into
+   * `evictDaemonLockIfStale`, or the daemon's startup TTL-reclaim). Threaded into
    * the `fact.run_requeued_after_crash` payload as `lastAliveAt` so
    * the reducer can credit pre-crash active time within ~5s. Omit on
    * the clean-acquire path. */
@@ -45,21 +41,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
   const quarantined = new Map<string, number[]>();
 
   // Read-only scans first — outside the write txn — to gather work + pre-serialize payloads.
-  const orphans = db
-    .query<OrphanRow, []>(
-      `SELECT i.run_id,
-              i.seq,
-              json_extract(i.payload, '$.idempotencyKey') AS idempotency_key
-         FROM events i
-         LEFT JOIN events d
-                ON d.run_id = i.run_id
-               AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
-               AND json_extract(d.payload, '$.idempotencyKey') =
-                   json_extract(i.payload, '$.idempotencyKey')
-        WHERE i.type = 'fact.side_effect_intent'
-          AND d.seq IS NULL`,
-    )
-    .all();
+  const orphans = selectAllOrphanSideEffects(db);
   for (const row of orphans) {
     const list = quarantined.get(row.run_id) ?? [];
     list.push(row.seq);
@@ -72,14 +54,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     quarantinePayloads.set(runId, JSON.stringify({ reason: "orphan_side_effect", orphanedIntents: seqs }));
   }
 
-  const running = db
-    .query<RunningRow, []>(
-      `SELECT run_id, version, current_node
-         FROM run_state
-        WHERE status = 'running'
-          AND NOT EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id)`,
-    )
-    .all();
+  const running = selectRunningNonImportedRuns(db);
   const requeuePayloads = new Map<string, string>();
   for (const row of running) {
     const payload: { prevNode?: string; lastAliveAt?: number } = {};
@@ -117,13 +92,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
   for (const [runId, _seqs] of quarantined) {
     sweepRun(runId, () => {
       const ts = now();
-      const stateRow = db
-        .query<{ version: number; status: string; next_seq: number; imported: number }, [string]>(
-          `SELECT version, status, next_seq,
-                  EXISTS (SELECT 1 FROM imported_runs i WHERE i.run_id = run_state.run_id) AS imported
-             FROM run_state WHERE run_id = ?`,
-        )
-        .get(runId);
+      const stateRow = selectRunStateRow(db, runId);
       if (stateRow == null) return;
       if (
         stateRow.status === "completed" ||
@@ -137,25 +106,13 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
         return;
       }
 
-      const seq = bumpSeq(db, runId);
-      db.query(
-        `INSERT INTO events (run_id, seq, type, writer, payload, ts)
-           VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`,
-      ).run(runId, seq, quarantinePayloads.get(runId)!, ts);
+      const seq = bumpRunSeq(db, runId);
+      insertEventDaemon(db, runId, seq, "fact.run_quarantined", quarantinePayloads.get(runId)!, ts);
       // Leave last_applied_seq alone: sweep doesn't fold operator
       // intents, so it can't pretend they've been applied. Advancing
       // the watermark past, e.g., a pre-crash intent.cancel_requested
       // would silently drop it from the next executor fold.
-      db.query(
-        `UPDATE run_state SET
-             status = 'quarantined',
-             current_node = NULL,
-             node_started_at = NULL,
-             dispatch_started_at = NULL,
-             version = version + 1,
-             updated_at = ?
-           WHERE run_id = ?`,
-      ).run(ts, runId);
+      updateRunStateQuarantinedBySweep(db, runId, ts);
     });
   }
 
@@ -163,18 +120,18 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
   // because the quarantine loop above may have moved some of them.
   for (const row of running) {
     sweepRun(row.run_id, () => {
-      const current = db
-        .query<{ status: string; dispatch_started_at: number | null }, [string]>(
-          "SELECT status, dispatch_started_at FROM run_state WHERE run_id = ?",
-        )
-        .get(row.run_id);
+      const current = selectRunStateRow(db, row.run_id);
       if (current == null || current.status !== "running") return;
       const ts = now();
-      const seq = bumpSeq(db, row.run_id);
-      db.query(
-        `INSERT INTO events (run_id, seq, type, writer, payload, ts)
-           VALUES (?, ?, 'fact.run_requeued_after_crash', 'daemon', ?, ?)`,
-      ).run(row.run_id, seq, requeuePayloads.get(row.run_id) ?? "{}", ts);
+      const seq = bumpRunSeq(db, row.run_id);
+      insertEventDaemon(
+        db,
+        row.run_id,
+        seq,
+        "fact.run_requeued_after_crash",
+        requeuePayloads.get(row.run_id) ?? "{}",
+        ts,
+      );
       // Sweep bypasses the reducer, so the activeMs credit in applyFact for
       // fact.run_requeued_after_crash doesn't fire here. Compute it via the
       // same shared helper the reducer calls, then apply it in SQL — one
@@ -185,18 +142,7 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
       // from the start node. Partial-side-effect safety is covered by the
       // orphan quarantine pass above; rerun-from-start was never the
       // intended recovery semantics.
-      db.query(
-        `UPDATE run_state SET
-             status = 'queued',
-             node_started_at = NULL,
-             dispatch_started_at = NULL,
-             ready_at = ?,
-             version = version + 1,
-             updated_at = ?,
-             metrics = json_set(metrics, '$.activeMs',
-                                COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
-           WHERE run_id = ?`,
-      ).run(ts, ts, activeMsDelta, row.run_id);
+      updateRunStateRequeuedAfterCrash(db, { runId: row.run_id, readyAt: ts, now: ts, activeMsDelta });
       requeued.push(row.run_id);
     });
   }
@@ -205,17 +151,4 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     requeued,
     quarantined: Array.from(quarantined.keys()),
   };
-}
-
-function bumpSeq(db: Database, runId: string): number {
-  const row = db
-    .query<{ seq: number }, [string]>(
-      `UPDATE run_state
-          SET next_seq = next_seq + 1
-        WHERE run_id = ?
-       RETURNING next_seq - 1 AS seq`,
-    )
-    .get(runId);
-  if (row == null) throw new Error(`run_state missing for ${runId}`);
-  return row.seq;
 }

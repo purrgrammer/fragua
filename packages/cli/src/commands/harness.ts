@@ -23,7 +23,9 @@
 //   4. Supervise: an unexpected daemon exit triggers a restart with exponential
 //      backoff (RESTART_INITIAL_BACKOFF_MS doubling to RESTART_MAX_BACKOFF_MS,
 //      reset after HEALTHY_RESET_MS of uptime); MAX_FAST_FAILURES consecutive
-//      fast crashes give up and stop the harness non-zero. Block on
+//      fast crashes give up and stop the harness non-zero. A periodic reaper
+//      tick (REAPER_TICK_MS) reclaims a crashed daemon's stale lock even inside
+//      a long restart backoff, so takeover never waits on a client GET. Block on
 //      SIGINT / SIGTERM otherwise.
 //   5. On shutdown: SIGTERM the daemon, wait up to SHUTDOWN_GRACE_MS, then
 //      SIGKILL; `serverHandle.close()` clears `server_endpoint` and stops the
@@ -56,6 +58,10 @@ const HEALTHY_RESET_MS = 60_000;
 const MAX_FAST_FAILURES = 5;
 /** Grace period after SIGTERM before the daemon is SIGKILLed on shutdown. */
 const SHUTDOWN_GRACE_MS = 5_000;
+/** Cadence of the supervisor's stale-lock reaper tick. Reclaims a crashed
+ *  daemon's lock promptly during a long restart backoff, so takeover doesn't
+ *  wait on the next spawn attempt (which `bootOrRestart` reaps at). */
+const REAPER_TICK_MS = 5_000;
 
 /** The subset of a spawned daemon process the supervisor drives. Bun's
  *  `Subprocess` satisfies it; tests inject a fake via `spawn`. */
@@ -101,6 +107,11 @@ export interface SupervisorConfig {
    *  before declaring failure. Cancellable: a shutdown mid-gate breaks the
    *  poll early rather than blocking the full deadline. */
   lockWaitMs: number;
+  /** Cadence of the periodic stale-lock reaper tick. Each tick runs
+   *  `evictStaleLock` (TTL/liveness-gated, so a live child is never touched),
+   *  closing the restart-backoff window where a crashed daemon's lock + orphan
+   *  runs would otherwise sit until the next spawn. */
+  reaperTickMs: number;
 }
 
 export interface HarnessCommandOptions {
@@ -184,6 +195,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     lockTtlMs: DAEMON_LOCK_TTL_MS,
     shutdownGraceMs: SHUTDOWN_GRACE_MS,
     lockWaitMs: LOCK_WAIT_MS,
+    reaperTickMs: REAPER_TICK_MS,
   });
 }
 
@@ -206,6 +218,7 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     let firstFailureAt: number | undefined;
     let firstReady = false;
     let restartTimer: ReturnType<typeof setTimeout> | undefined;
+    let reaperTimer: ReturnType<typeof setInterval> | undefined;
     // Per-spawn outcome, so the readiness gate and the exit watcher can't both
     // account for the same attempt: `pending` until either the gate confirms
     // readiness (`ready`) or the boot fails (`failed`, from a gate timeout or a
@@ -224,6 +237,7 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
       if (stopping) return;
       stopping = true;
       if (restartTimer) clearTimeout(restartTimer);
+      if (reaperTimer) clearInterval(reaperTimer);
       process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGTERM", onSigterm);
       console.log(chalk.dim(`\n${label} — shutting down...`));
@@ -340,6 +354,25 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
 
     process.once("SIGINT", onSigint);
     process.once("SIGTERM", onSigterm);
+
+    // Periodic stale-lock reaper. Runs for the whole supervision lifetime and
+    // is TTL/liveness-gated inside `evictStaleLock`, so it never touches the
+    // live child's lock — it only reclaims a crashed daemon's lock during the
+    // restart-backoff window, where `bootOrRestart`'s per-spawn reap wouldn't
+    // fire until the next attempt. `unref` so an idle tick never keeps the
+    // process alive past shutdown.
+    if (cfg.reaperTickMs > 0) {
+      reaperTimer = setInterval(() => {
+        if (stopping) return;
+        try {
+          evictStaleLock(cfg.dbPath);
+        } catch {
+          // Best-effort — a transient store-open failure must not crash the
+          // supervisor; the next tick (or the next spawn) retries.
+        }
+      }, cfg.reaperTickMs);
+      reaperTimer.unref?.();
+    }
 
     // Initial boot shares the restart path, so `evictStaleLock`/`spawn` throws
     // land in the same error handler as the supervisor body: close the server

@@ -37,7 +37,6 @@
 
 import { randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { readFile as fsReadFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -91,10 +90,14 @@ export const readFileTool: Tool<{ path: string; offset?: number; limit?: number 
         return { text: `File not found: ${args.path}`, is_error: true };
       }
 
-      // env.readFile returns a string today; for images we go through
-      // the underlying fs to get bytes. The detection function returns
-      // null for non-image content so we fall through to the text path.
-      const buffer = await readFileBytes(resolved);
+      // Read bytes through the env so the read is served by the run's
+      // own filesystem and re-runs the cwd realpath jail on the same
+      // path — no direct node:fs read that a non-local env or a swapped
+      // symlink could bypass. Fall back to encoding the text read for an
+      // env that only serves strings; both paths stay inside the jail.
+      const buffer = env.readFileBytes
+        ? Buffer.from(await env.readFileBytes(resolved))
+        : Buffer.from(await env.readFile(resolved), "utf-8");
       const mimeType = detectImageMimeType(buffer, resolved);
       if (mimeType) {
         const base64 = buffer.toString("base64");
@@ -660,12 +663,4 @@ export async function sanitiseUnpairedToolCalls(
   }
 
   return [...stripped, ...synthesised];
-}
-
-async function readFileBytes(absolutePath: string): Promise<Buffer> {
-  // Direct fs read so we get bytes for image MIME sniffing. Tools
-  // shouldn't reach into node:fs in general (handler discipline test
-  // forbids it on handlers), but the workspace package owns the
-  // filesystem layer.
-  return fsReadFile(absolutePath);
 }

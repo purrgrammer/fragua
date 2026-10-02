@@ -639,6 +639,11 @@ export interface GetEventsTailOpts {
   limit?: number;
 }
 
+/** {@link GetEventsTailOpts} minus the `limit` — a count is inherently
+ * unbounded. Same `sinceSeq` / `typePrefix` filters, so the total matches
+ * the tail it accompanies. */
+export type EventCountOpts = Omit<GetEventsTailOpts, "limit">;
+
 export interface GetGlobalEventsForwardOpts {
   /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
    * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
@@ -861,6 +866,12 @@ export interface IEventReader {
    * `runs tail` reads.
    */
   getEventsTail(runId: string, opts?: GetEventsTailOpts): StoredEvent[];
+  /**
+   * Total events for `runId` matching the same `sinceSeq` / `typePrefix`
+   * filter as {@link getEventsTail}, unbounded — the "M" in the CLI's
+   * "last N of M" footer, without hydrating the log.
+   */
+  getEventCount(runId: string, opts?: EventCountOpts): number;
   /**
    * The TYPE of the most recent node-lifecycle fact per node
    * (`NODE_LIFECYCLE_FACT_TYPES`: dispatch_started / node_started /
@@ -1161,7 +1172,7 @@ export interface IDaemonCoordinator {
   /**
    * Unconditionally delete whatever `daemon_lock` row exists, in a single
    * `DELETE FROM daemon_lock WHERE id = 1` statement. The low-level eviction
-   * primitive: the server reaper (after its own TTL check) and
+   * primitive: the harness reaper (after its own TTL check) and
    * {@link evictDaemonLockIfStale} call it. Prefer `evictDaemonLockIfStale`
    * over calling this directly so the TTL/liveness gate can't be skipped.
    */
@@ -1176,7 +1187,7 @@ export interface IDaemonCoordinator {
    * `DELETE`, so a daemon that re-acquired between the liveness snapshot and
    * the delete is spared (its fresh pid/heartbeat fails the guard). On a
    * successful eviction it emits `daemon.reaper_took_over` + a truthful
-   * `daemon.sweep_completed` so harness-supervised and server-reaper recoveries
+   * `daemon.sweep_completed` so harness-supervised recoveries
    * are audit-visible, mirroring the daemon's direct-takeover path.
    * `stalePid` / `priorHeartbeatAt` are populated only when `evicted` is true.
    */

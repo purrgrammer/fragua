@@ -315,8 +315,8 @@ no mutator (`bash` / `write` / `edit`), `ctx.env` is wrapped so
 that loses its *tools* to the allowed_tools filter also loses the raw
 env path that would otherwise bypass them — relevant when the llm
 backend's agent-callable tools sit on top of `ctx.env` (write → `env.writeFile`,
-bash → `env.exec`). Read-only methods (`readFile`, `exists`, `listDir`,
-`glob`) pass through.
+bash → `env.exec`). Read-only methods (`readFile`, `readFileBytes`,
+`exists`, `listDir`, `glob`) pass through.
 
 Custom tools can be added later by `ToolRegistry.register()`-ing an
 additional `Tool` at daemon startup. They share the same bare-identifier

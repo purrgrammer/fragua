@@ -29,6 +29,7 @@ export function makeReadOnlyEnv(env: ExecutionEnvironment): ExecutionEnvironment
     cwd: () => env.cwd(),
     projectCwd: () => env.projectCwd(),
     readFile: (path) => env.readFile(path),
+    ...(env.readFileBytes ? { readFileBytes: (path: string) => env.readFileBytes!(path) } : {}),
     exists: (path) => env.exists(path),
     listDir: (path) => env.listDir(path),
     glob: (pattern, opts) => env.glob(pattern, opts),

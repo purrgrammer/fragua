@@ -8,6 +8,14 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The agent `read` tool no longer bypasses the working-directory jail.** Reads
+  now go through the execution environment's own byte read, which applies the
+  cwd realpath check to the same path it reads, closing a symlink-swap race
+  where a link pointing outside the run's directory could be followed unchecked.
+  No change to authored workflows.
+
 ### Changed
 
 - **Read-path ceilings on the dashboard and run-detail APIs.** The

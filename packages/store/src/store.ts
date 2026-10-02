@@ -86,6 +86,7 @@ import {
   insertEventWeb,
   type OrphanSideEffectRow,
   type PendingIntentRow,
+  selectEventCount,
   selectEvents,
   selectEventsByType,
   selectEventsTail,
@@ -241,6 +242,7 @@ import {
   type DaemonLockResult,
   type DaemonLockRow,
   type EnqueueRunParams,
+  type EventCountOpts,
   type EventWriter,
   type ExportBundleOptions,
   type ExportBundleResult,
@@ -929,6 +931,10 @@ export class SqliteStore implements IEventStore {
     return selectEventsTail(this.db, runId, opts).map(rowToStoredEvent);
   }
 
+  getEventCount(runId: string, opts: EventCountOpts = {}): number {
+    return selectEventCount(this.db, runId, opts);
+  }
+
   getLatestLifecycleByNode(runId: string): Array<{ nodeId: string; type: string }> {
     return selectLatestLifecycleByNode(this.db, runId, NODE_LIFECYCLE_FACT_TYPES);
   }
@@ -1388,7 +1394,7 @@ export class SqliteStore implements IEventStore {
     const sweepStart = this.now();
     const swept = this.startupSweep({ priorHeartbeatAt: lock.heartbeatAt });
     // Mirror the daemon's direct-takeover audit trail so a harness-supervised
-    // (or server-reaper) recovery is visible in `daemon_events`.
+    // recovery is visible in `daemon_events`.
     this.appendDaemonEvent({
       type: "daemon.reaper_took_over",
       payload: {

@@ -25,7 +25,6 @@
 
 import type { IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
 import { Hono } from "hono";
-import { reapStaleDaemon } from "../reaper.ts";
 
 /** Daemons heartbeat at ~10s; treat 30s without one as dead. Matches
  * `DEFAULT_LOCK_TTL_MS` in `@fragua/daemon`. */
@@ -64,11 +63,10 @@ export function daemonInfoFromStore(opts: DaemonInfoFromStoreOptions): () => Hea
     const lock = opts.store.currentDaemonLock();
     if (lock == null) throw new Error("daemon not running");
     if (now() - lock.heartbeatAt > ttl) {
-      // Stale heartbeat: the daemon died without releasing. Sweep any
-      // runs it had in flight and clear the lock row so the next
-      // `fragua daemon` doesn't have to wait out the TTL. Idempotent —
-      // safe to fire on every /health request when the lock is stale.
-      reapStaleDaemon({ store: opts.store, ttlMs: ttl, now });
+      // Stale heartbeat: report the daemon as not running. This path is
+      // read-only — stale-lock reclamation (sweep + clear the lock row) is a
+      // write-context concern owned by daemon startup (TTL-reclaim) and the
+      // harness supervisor, never by a GET.
       throw new Error("daemon heartbeat stale");
     }
     const counts = opts.store.runStateCounts();

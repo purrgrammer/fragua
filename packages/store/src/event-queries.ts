@@ -43,6 +43,14 @@ export interface OrphanSideEffectRow {
   nodeId: string;
 }
 
+/** An orphan side-effect intent located by the all-runs startup sweep:
+ *  the owning run plus the intent's seq (folded into the quarantine
+ *  payload's `orphanedIntents` list). */
+export interface AllOrphanSideEffectRow {
+  run_id: string;
+  seq: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Writes
 // ─────────────────────────────────────────────────────────────────────
@@ -187,6 +195,32 @@ export function selectEventsTail(
   return db
     .query<EventRow, [string, number, string | null, number]>(SELECT_EVENTS_TAIL_SQL)
     .all(runId, opts.sinceSeq ?? 0, pattern, opts.limit ?? NO_LIMIT);
+}
+
+// Same WHERE as SELECT_EVENTS_TAIL_SQL (run scope, since floor, optional LIKE
+// prefix) so the CLI footer's total matches exactly what the tail draws from.
+const SELECT_EVENT_COUNT_SQL = `
+  SELECT COUNT(*) AS n
+    FROM events
+   WHERE run_id = ?1
+     AND seq > ?2
+     AND (?3 IS NULL OR type LIKE ?3 ESCAPE '\\')
+`;
+
+/** Total events for `runId` strictly after `sinceSeq`, optionally restricted to
+ *  types starting with `typePrefix`. The unbounded companion to
+ *  {@link selectEventsTail}: the CLI footer reports "last N of M" without
+ *  hydrating the log. */
+export function selectEventCount(
+  db: Database,
+  runId: string,
+  opts: { sinceSeq?: number; typePrefix?: string } = {},
+): number {
+  const pattern = opts.typePrefix != null && opts.typePrefix.length > 0 ? escapeLikePrefix(opts.typePrefix) : null;
+  const row = db
+    .query<{ n: number }, [string, number, string | null]>(SELECT_EVENT_COUNT_SQL)
+    .get(runId, opts.sinceSeq ?? 0, pattern);
+  return row?.n ?? 0;
 }
 
 const SELECT_EVENTS_BY_TYPE_SQL = `
@@ -347,23 +381,44 @@ export function selectFactSideEffectIntent(
   );
 }
 
-const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
-  SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotencyKey,
-         json_extract(i.payload, '$.toolName')       AS toolName,
-         json_extract(i.payload, '$.nodeId')         AS nodeId
+// Shared orphan-detection body: a `fact.side_effect_intent` whose
+// idempotencyKey has no matching `fact.side_effect_done`/`_failed`. Both
+// the single-run recovery read and the all-runs startup sweep interpolate
+// this so the LEFT JOIN and the done/failed enum are encoded exactly once.
+const ORPHAN_SIDE_EFFECTS_FROM_WHERE = `
     FROM events i
     LEFT JOIN events d
            ON d.run_id = i.run_id
           AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
           AND json_extract(d.payload, '$.idempotencyKey') =
               json_extract(i.payload, '$.idempotencyKey')
-   WHERE i.run_id = ?
-     AND i.type   = 'fact.side_effect_intent'
+   WHERE i.type   = 'fact.side_effect_intent'
      AND d.seq IS NULL
+`;
+
+const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
+  SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotencyKey,
+         json_extract(i.payload, '$.toolName')       AS toolName,
+         json_extract(i.payload, '$.nodeId')         AS nodeId
+  ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
+     AND i.run_id = ?
 `;
 
 export function selectOrphanSideEffects(db: Database, runId: string): OrphanSideEffectRow[] {
   return db.query<OrphanSideEffectRow, [string]>(SELECT_ORPHAN_SIDE_EFFECTS_SQL).all(runId);
+}
+
+const SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL = `
+  SELECT i.run_id AS run_id, i.seq AS seq
+  ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
+   ORDER BY i.run_id, i.seq
+`;
+
+/** Every orphan side-effect intent across ALL runs, oldest-first per run.
+ *  The startup sweep quarantines each owning run; the single-run variant
+ *  (`selectOrphanSideEffects`) backs the executor's per-run recovery. */
+export function selectAllOrphanSideEffects(db: Database): AllOrphanSideEffectRow[] {
+  return db.query<AllOrphanSideEffectRow, []>(SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL).all();
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { writeFile as fsWriteFile, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalEnvironment } from "../src/local-env.ts";
 import { bashTool, editFileTool, readFileTool, writeFileTool } from "../src/tools.ts";
+import type { DirEntry, ExecResult, ExecutionEnvironment } from "../src/types.ts";
 
 describe("core tools", () => {
   let scratch: string;
@@ -209,6 +210,37 @@ describe("core tools", () => {
     expect(r.content?.some((b) => b.type === "image" && b.mimeType === "image/png")).toBe(true);
     const data = r.data as { image?: { mimeType: string } };
     expect(data.image?.mimeType).toBe("image/png");
+  });
+
+  test("read rejects a symlink that points outside cwd", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "fragua-tools-outside-"));
+    try {
+      await fsWriteFile(join(outside, "secret.txt"), "leaked");
+      await symlink(join(outside, "secret.txt"), join(scratch, "shortcut"));
+      const r = await readFileTool.execute({ path: "shortcut" }, env);
+      expect(r.is_error).toBe(true);
+      expect(r.text).not.toContain("leaked");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("read is served by the execution env, not the host fs (non-local stub)", async () => {
+    const sentinel = "served-by-stub";
+    const stub: ExecutionEnvironment = {
+      cwd: () => "/nonlocal",
+      projectCwd: () => "/nonlocal",
+      readFile: async () => sentinel,
+      readFileBytes: async () => new TextEncoder().encode(sentinel),
+      writeFile: async () => {},
+      exists: async () => true,
+      listDir: async (): Promise<DirEntry[]> => [],
+      glob: async () => [],
+      exec: async (): Promise<ExecResult> => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
+    };
+    const r = await readFileTool.execute({ path: "anything.txt" }, stub);
+    expect(r.is_error).toBeUndefined();
+    expect(r.text).toContain(sentinel);
   });
 
   test("write serializes concurrent writes to the same path", async () => {

@@ -1,21 +1,22 @@
 // Read-plane fs discipline — ARCHITECTURE.md §5.
 //
 // The read plane projects run_state + the event log into wire DTOs; it is a
-// pure read surface over the store. A `node:fs` SYNC call (existsSync / statSync
-// / readFileSync / writeFileSync), a blocking `node:fs/promises` /
-// `node:child_process` import, a raw `fetch`, or a `Bun.*` reach buries I/O
-// inside a projection that every read client fans out through — the cost is
-// invisible at the callsite and the data belongs in the store, not the
-// filesystem or the network. Any genuine exception carries the
-// `read-discipline-allow:` marker so the bypass is auditable.
+// pure read surface over the store. A `node:*` / `bun:*` import, a `node:fs`
+// SYNC call (existsSync / statSync / readFileSync / writeFileSync), a raw
+// `fetch`, or a `Bun.*` reach buries I/O inside a projection that every read
+// client fans out through — the cost is invisible at the callsite and the data
+// belongs in the store, not the filesystem or the network. Any genuine
+// exception carries the `read-discipline-allow:` marker so the bypass is
+// auditable.
 //
-// This is an AST scan (not a regex over source text). It resolves import aliases
-// to the imported symbol, so `import { existsSync as e }; e(p)` is caught the
-// same as a direct `existsSync(p)` — a rename can no longer slip a forbidden call
-// past the rule. Shape mirrors packages/core/test/handler/discipline.test.ts.
+// This is a TRANSITIVE walk from the `./read-plane` entry (`index.ts`) over
+// relative value imports — not a directory-membership check — so a value import
+// from a projection into an `engine/` or `parser/` helper that does `node:fs`
+// (e.g. `projections.ts` importing `fanoutBranchClosures` / `projectRunOutput` /
+// `parseWorkflow`) is scanned the same as code physically under `read-plane/`.
+// Shape mirrors packages/core/test/handler/discipline.test.ts.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   allowMarked,
@@ -25,27 +26,20 @@ import {
   importBindings,
   lineOf,
   parseSource,
+  transitiveRelativeImports,
 } from "@fragua/test-utils";
 import ts from "typescript";
 
-const READ_PLANE_DIR = join(import.meta.dir, "..", "..", "src", "read-plane");
+const SRC_DIR = join(import.meta.dir, "..", "..", "src");
+const ENTRY = join(SRC_DIR, "read-plane", "index.ts");
+const FIXTURE_LEAKY = join(import.meta.dir, "fixtures", "leaky-projection.ts");
 const ALLOW_MARKER = "read-discipline-allow:";
 const BANNED_SYNC_FS = new Set(["existsSync", "statSync", "readFileSync", "writeFileSync"]);
-const BANNED_MODULES = new Set(["node:child_process", "node:fs/promises"]);
 
-function isTestFile(path: string): boolean {
-  return path.endsWith(".test.ts") || path.endsWith(".test.tsx");
-}
-
-function walkTs(dir: string): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "dist") continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...walkTs(p));
-    else if (p.endsWith(".ts") && !isTestFile(p)) out.push(p);
-  }
-  return out;
+/** A `node:*` or `bun:*` module reference (any import kind). */
+function bannedModule(mod: string): string | undefined {
+  if (mod.startsWith("node:") || mod.startsWith("bun:")) return mod;
+  return undefined;
 }
 
 interface Offense {
@@ -86,8 +80,10 @@ function scan(sf: ts.SourceFile): Offense[] {
       out.push({ rule: "Bun.*", line: lineOf(sf, m.node) });
   }
   for (const imp of collectImports(sf)) {
-    if (BANNED_MODULES.has(imp.module) && !allowMarked(sf, imp.node, ALLOW_MARKER))
-      out.push({ rule: imp.module, line: lineOf(sf, imp.node) });
+    if (imp.typeOnly) continue;
+    const banned = bannedModule(imp.module);
+    if (banned !== undefined && !allowMarked(sf, imp.node, ALLOW_MARKER))
+      out.push({ rule: banned, line: lineOf(sf, imp.node) });
   }
   return out;
 }
@@ -96,16 +92,31 @@ function scanString(src: string): Offense[] {
   return scan(ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
 }
 
-describe("read-plane fs discipline — no node:fs / network I/O in projections", () => {
-  test("no fs sync / fetch / Bun.* / blocking-module import in packages/core/src/read-plane outside the marker", () => {
-    const offenders: string[] = [];
-    for (const file of walkTs(READ_PLANE_DIR)) {
-      for (const o of scan(parseSource(file)))
-        offenders.push(`${relative(READ_PLANE_DIR, file)}:${o.line} → ${o.rule}`);
-    }
+function scanReachable(entry: string): string[] {
+  const offenders: string[] = [];
+  for (const file of transitiveRelativeImports(entry)) {
+    for (const o of scan(parseSource(file))) offenders.push(`${relative(SRC_DIR, file)}:${o.line} → ${o.rule}`);
+  }
+  return offenders;
+}
+
+describe("read-plane fs discipline — no node:fs / network I/O reachable from the read plane", () => {
+  test("no node:/bun: import, fs sync, fetch, or Bun.* reachable from the read-plane entry", () => {
+    const offenders = scanReachable(ENTRY);
     if (offenders.length > 0)
       throw new Error(`read-plane fs discipline violations:\n${offenders.map((o) => `  ${o}`).join("\n")}`);
     expect(offenders).toHaveLength(0);
+  });
+
+  test("the reachable graph includes engine and parser helpers", () => {
+    const reachable = transitiveRelativeImports(ENTRY);
+    expect(reachable).toContain(join(SRC_DIR, "engine", "fanout.ts"));
+    expect(reachable).toContain(join(SRC_DIR, "parser", "yaml.ts"));
+  });
+
+  test("flags a node:fs import in an engine helper reachable from a projection", () => {
+    const offenders = scanReachable(FIXTURE_LEAKY);
+    expect(offenders.some((o) => o.includes("leaky-engine-helper.ts") && o.endsWith("node:fs"))).toBe(true);
   });
 
   test("flags existsSync, statSync, and readFileSync in a projection", () => {
@@ -121,7 +132,7 @@ describe("read-plane fs discipline — no node:fs / network I/O in projections",
     expect(scanString(src).some((o) => o.rule === "existsSync")).toBe(true);
   });
 
-  test("flags fetch, writeFileSync, Bun.*, and node:child_process / node:fs/promises imports", () => {
+  test("flags fetch, writeFileSync, Bun.*, and node:child_process / node:fs/promises / bun: imports", () => {
     expect(scanString(`function f(u) { return fetch(u); }\n`).some((o) => o.rule === "fetch")).toBe(true);
     expect(
       scanString(`import { writeFileSync } from "node:fs";\nfunction f(p) { writeFileSync(p, ""); }\n`).some(
@@ -135,6 +146,11 @@ describe("read-plane fs discipline — no node:fs / network I/O in projections",
     expect(
       scanString(`import { readFile } from "node:fs/promises";\n`).some((o) => o.rule === "node:fs/promises"),
     ).toBe(true);
+    expect(scanString(`import { Database } from "bun:sqlite";\n`).some((o) => o.rule === "bun:sqlite")).toBe(true);
+  });
+
+  test("does not flag a type-only node: import", () => {
+    expect(scanString(`import type { Stats } from "node:fs";\n`)).toHaveLength(0);
   });
 
   test("honors the read-discipline-allow marker", () => {

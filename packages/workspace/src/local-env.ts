@@ -190,7 +190,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
     if (real !== cwdReal && !real.startsWith(cwdReal + sep)) {
       throw new PathEscapeError(path, real, cwdReal);
     }
-    return normalized;
+    return real;
   }
 
   async fileSize(path: string): Promise<number> {
@@ -199,6 +199,16 @@ export class LocalEnvironment implements ExecutionEnvironment {
 
   async readFile(path: string): Promise<string> {
     return readFile(this.resolvePath(path), "utf8");
+  }
+
+  async readFileBytes(path: string): Promise<Uint8Array> {
+    const real = this.resolvePath(path);
+    const handle = await open(real, "r");
+    try {
+      return await handle.readFile();
+    } finally {
+      await handle.close();
+    }
   }
 
   async writeFile(path: string, contents: string): Promise<void> {
@@ -230,11 +240,15 @@ export class LocalEnvironment implements ExecutionEnvironment {
   }
 
   async glob(pattern: string, opts: { cwd?: string; dot?: boolean } = {}): Promise<string[]> {
-    const base = opts.cwd ? this.resolvePath(opts.cwd) : this._cwd;
+    // resolvePath returns a realpath; relativise matches against the
+    // realpath of cwd too so the two agree (a lexical cwd here would
+    // yield `../../private/var/...` on symlinked temp dirs like macOS's).
+    const cwdReal = this.cwdReal();
+    const base = opts.cwd ? this.resolvePath(opts.cwd) : cwdReal;
     const g = new Bun.Glob(pattern);
     const matches: string[] = [];
     for await (const absolute of g.scan({ cwd: base, absolute: true, onlyFiles: false, dot: opts.dot ?? false })) {
-      matches.push(relative(this._cwd, absolute));
+      matches.push(relative(cwdReal, absolute));
     }
     matches.sort();
     return matches;

@@ -197,6 +197,49 @@ describe("getStepAggregates", () => {
   });
 });
 
+describe("getEventCount", () => {
+  test("counts all / type-filtered / since-bounded events; absent run → 0", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+
+    // Baseline: enqueue emits one intent.run_enqueued (no fact.* yet).
+    expect(store.getEventCount(runId, { typePrefix: "fact." })).toBe(0);
+
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha!, contractVersion: s0.contractVersion, startNode: "work" },
+        },
+      ],
+      s0.version,
+    );
+    const afterStartSeq = store.getState(runId)!.nextSeq - 1;
+    store.appendObservabilityEvents(runId, [startEv("n1"), startEv("n2"), startEv("n3")]);
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }],
+      s1.version,
+    );
+
+    // Total: intent.run_enqueued + 2 facts + 3 llm.start = 6.
+    expect(store.getEventCount(runId)).toBe(6);
+    // Type-filtered: exactly the two fact.* events.
+    expect(store.getEventCount(runId, { typePrefix: "fact." })).toBe(2);
+    expect(store.getEventCount(runId, { typePrefix: "llm." })).toBe(3);
+    // Since-bounded: everything strictly after the run_started fact — the
+    // 3 llm.start observability events plus the terminal fact = 4.
+    expect(store.getEventCount(runId, { sinceSeq: afterStartSeq })).toBe(4);
+    // Absent run → 0 (no rows, no throw).
+    expect(store.getEventCount("run_does_not_exist")).toBe(0);
+
+    store.close();
+  });
+});
+
 describe("listRunSummaryRows", () => {
   test("projects summary fields without hydrating event logs", async () => {
     const store = freshStore();

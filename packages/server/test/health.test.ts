@@ -1,8 +1,8 @@
 // Tests for GET /health.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createServer } from "../src/index.ts";
-import type { HealthDaemonInfo } from "../src/routes/health.ts";
+import { daemonInfoFromStore, type HealthDaemonInfo } from "../src/routes/health.ts";
 import { freshStore } from "./helpers.ts";
 
 describe("GET /health", () => {
@@ -62,6 +62,32 @@ describe("GET /health", () => {
     };
     expect(res1.daemon.queued).toBe(0);
     expect(res2.daemon.queued).toBe(1);
+    store.close();
+  });
+
+  test("GET /health performs zero store appends (no reap on a stale heartbeat)", async () => {
+    const store = freshStore();
+    store.forceAcquireDaemonLock(4242, "deadHost");
+    const evictSpy = spyOn(store, "evictDaemonLockIfStale");
+    const appendSpy = spyOn(store, "appendDaemonEvent");
+    const app = createServer({
+      store,
+      ports: {
+        daemonInfo: daemonInfoFromStore({ store, ttlMs: 30_000, now: () => Date.now() + 60_000 }),
+      },
+    });
+
+    const res1 = await app.request("/health");
+    const res2 = await app.request("/health");
+    const body = (await res1.json()) as { ok: boolean; daemon?: unknown };
+    await res2.json();
+
+    expect(res1.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect("daemon" in body).toBe(false);
+    expect(evictSpy).toHaveBeenCalledTimes(0);
+    expect(appendSpy).toHaveBeenCalledTimes(0);
+    expect(store.currentDaemonLock()?.pid).toBe(4242);
     store.close();
   });
 

@@ -14,8 +14,16 @@ The goal is the same as operate's: go from a run id to a cause in the fewest rea
 RUN=<run-id>                          # the full id (resolve via `runs ls`, §2)
 
 fragua runs status "$RUN"             # lifecycle + outcome + the why
-fragua runs events "$RUN" --type fact.run_    # terminal facts — the ending
+fragua runs events "$RUN" --type 'fact.*'     # the first forensic read — every state-changing fact, small payload
+fragua runs events "$RUN" --type fact.run_    # narrower: just the run-lifecycle facts (the ending)
 ```
+
+`--type 'fact.*'` is the first forensic read: it drops the high-volume
+observability stream (`llm.*` deltas, `cost.recorded`) and leaves only the
+state-changing facts, so the payload stays small even on a run with tens of
+thousands of events. Add `--all` for the whole log (it defaults to the last 50)
+and `--json` when you need full payloads — the JSON is drained to completion, so
+piping a large log into `jq` no longer truncates.
 
 `fragua runs status` gives you status, workflow, cost/tokens, duration, and the *why*: pause reason + fields, halt reason + detail, quarantine `orphanedIntents`, or the HITL gate. For `completed` / `cancelled` runs the story is short. For everything else, read the ending (§3) and then walk the timeline (§4).
 
