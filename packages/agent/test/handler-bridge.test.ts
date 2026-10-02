@@ -960,6 +960,85 @@ describe("makeLlmHandler — priorMessages thread loading", () => {
     });
   }
 
+  test("synthetic __agent worker rows never hydrate into a thread sibling (explicit-thread fallback)", async () => {
+    // A worker persists under a synthetic node id (`__agent.*`). A sibling node
+    // sharing an explicit thread hydrates via the graph-level fallback (thread_id
+    // matches no node exactly); the worker rows must be excluded there.
+    const store = new SqliteStore({ path: ":memory:" });
+    const { calls, backend } = capturingBackend();
+    const ctx = await ctxFor("r-syn-thread", store, "review");
+
+    seed(store, "r-syn-thread", "implement", {
+      role: "assistant",
+      content: [{ type: "text", text: "REAL_CALLER_TURN" }],
+      timestamp: 1,
+    });
+    seed(store, "r-syn-thread", "__agent.implement#0/tc1", {
+      role: "assistant",
+      content: [{ type: "text", text: "WORKER_ONLY_TURN" }],
+      timestamp: 2,
+    });
+
+    const spec = makeLlmHandler({
+      node: node({ id: "review", attrs: { prompt: "…", thread_id: "build" } }),
+      backend,
+    });
+    await spec.handler(ctx);
+
+    const prior = JSON.stringify(calls[0]);
+    expect(prior).toContain("REAL_CALLER_TURN");
+    expect(prior).not.toContain("WORKER_ONLY_TURN");
+    store.close();
+  });
+
+  test("synthetic __agent worker rows never hydrate into the caller's threadless node", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
+    store.enqueueRun({ runId: "r-syn-node", workflowSha: "sha" });
+    const { calls, backend } = capturingBackend();
+    const ac = new AbortController();
+    const ctx = handler.buildHandlerContext({
+      runId: "r-syn-node",
+      nodeId: "n1",
+      iteration: 0,
+      signal: ac.signal,
+      routing: {},
+      store,
+      llm: handler.makeLlmClient({
+        signal: ac.signal,
+        call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+      }),
+      http: handler.makeHttpClient({ signal: ac.signal }),
+      tools: new handler.InMemoryToolRegistry(),
+      args: {},
+      recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+    });
+    // A resume-visible real row for this node, plus a worker row it must not read.
+    seed(store, "r-syn-node", "n1", {
+      role: "assistant",
+      content: [{ type: "text", text: "NODE_OWN_TURN" }],
+      timestamp: 1,
+    });
+    seed(store, "r-syn-node", "__agent.n1#0/tc1", {
+      role: "assistant",
+      content: [{ type: "text", text: "WORKER_ONLY_TURN" }],
+      timestamp: 2,
+    });
+
+    const spec = makeLlmHandler({ node: node({ id: "n1" }), backend });
+    await spec.handler(ctx);
+    const prior = JSON.stringify(calls[0]);
+    expect(prior).toContain("NODE_OWN_TURN");
+    expect(prior).not.toContain("WORKER_ONLY_TURN");
+    store.close();
+  });
+
   test("thread_id matching a single node_id still scopes to that node only", async () => {
     // When thread_id equals an exact node_id, the loader takes the
     // node-scoped branch (no fallback).

@@ -265,6 +265,20 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
         oauthProviderFor: (url) => makeHeadlessMcpProvider(url, makeMcpOAuthStore(store)),
       }),
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
+      // Caps + defaults for the opt-in `agent` tool. Kebab config keys mapped to
+      // the backend's camelCase `agentConfig` shape, like `judge:`.
+      ...(config.agent
+        ? {
+            agentConfig: {
+              ...(config.agent["max-cost"] !== undefined ? { maxCostUsd: config.agent["max-cost"] } : {}),
+              ...(config.agent["max-turns"] !== undefined ? { maxTurns: config.agent["max-turns"] } : {}),
+              ...(config.agent["timeout-minutes"] !== undefined
+                ? { timeoutMinutes: config.agent["timeout-minutes"] }
+                : {}),
+              ...(config.agent.concurrency !== undefined ? { concurrency: config.agent.concurrency } : {}),
+            },
+          }
+        : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler — for llm
     // that would force every call to route to whichever edge appears first,

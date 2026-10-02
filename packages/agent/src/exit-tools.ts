@@ -75,7 +75,7 @@ export function summarizeMessage(message: { role: string; content?: unknown }): 
 
 /** Concatenate every text block in an assistant message. Caller clips for
  *  storage. */
-function fullAssistantText(message: { role: string; content?: unknown }): string {
+export function fullAssistantText(message: { role: string; content?: unknown }): string {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
   const parts = message.content as Array<{ type: string; text?: string }>;
   return parts

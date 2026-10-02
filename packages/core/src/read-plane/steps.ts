@@ -39,6 +39,8 @@
 // (or, with prior-message accumulation, O(N²)-ed) the wire payload for
 // no UI benefit.
 
+import { agentWorkerCaller } from "../types/summariser.ts";
+
 export interface StepEvent {
   type: string;
   payload: unknown;
@@ -273,6 +275,14 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
+    if (ev.type === "agent.worker_end") {
+      // A worker's step ends when the tool call returns, not when its caller's
+      // next step opens; stamping here is what keeps a finished worker from
+      // ticking live forever under the parentNodeId guard in fillOrphanDurations.
+      if (nodeId) stampBranchDuration(nodeId, ev.ts);
+      continue;
+    }
+
     if (ev.type === "fact.node_aborted") {
       // An aborted branch ends at its node_aborted.ts — without the stamp the
       // step keeps `durationMs === undefined` and fillOrphanDurations'
@@ -346,6 +356,12 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // Nest under the in-flight parallel parent (entry scans + their verify
       // successors alike). `!== nodeId` guards the degenerate self-tag.
       if (activeFanoutParent !== undefined && activeFanoutParent !== nodeId) step.parentNodeId = activeFanoutParent;
+      // An `agent`-tool worker (`__agent.<caller>#<n>/<call>`) nests under its
+      // caller the same way a branch nests under its parallel parent; its
+      // duration is stamped by `agent.worker_end` (below), never derived from
+      // the flat gap to the next step.
+      const workerOf = agentWorkerCaller(nodeId);
+      if (workerOf !== undefined) step.parentNodeId = workerOf;
       const stepPass = nodeId !== "" ? (lastPassForNode.get(nodeId) ?? 0) : 0;
       if (stepPass > 0) step.pass = stepPass;
       assignOptional(step, data);

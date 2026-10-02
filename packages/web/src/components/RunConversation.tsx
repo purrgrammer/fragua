@@ -26,7 +26,7 @@
 //   - `conversation-messages-error-inline` — fetch failed but stale rows render
 
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
-import { Fragment, type ReactNode, useMemo, useState } from "react";
+import { createContext, Fragment, type ReactNode, useContext, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -46,6 +46,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Terminal, TerminalStatus } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
+import { type AgentToolParams, AgentToolResult } from "@/components/run-conversation/AgentToolResult";
 import { HitlDecisionBanner } from "@/components/run-conversation/HitlDecisionBanner";
 import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
 import { JudgeNodeRow } from "@/components/run-conversation/JudgeNodeRow";
@@ -126,8 +127,48 @@ export interface RunConversationProps {
 
 const EMPTY_STREAMING: ReadonlyMap<string, StreamingMessage> = new Map();
 
+/** `agent`-tool worker transcripts, keyed by the tool-call id that spawned
+ * them, plus the run-wide toolResult index. Provided once at the conversation
+ * root so the `agent` tool card deep inside an assistant row can render its
+ * worker's mini-conversation without threading props through every layer. */
+interface WorkerRowsContextValue {
+  workerRowsByCall: ReadonlyMap<string, RunMessageRow[]>;
+  toolResultsById: Map<string, ToolResultMessage>;
+}
+
+const WorkerRowsContext = createContext<WorkerRowsContextValue>({
+  workerRowsByCall: new Map(),
+  toolResultsById: new Map(),
+});
+
+const AGENT_WORKER_PREFIX = "__agent.";
+
+/** Split `agent`-tool worker rows (synthetic node id
+ * `__agent.<caller>#<n>/<toolCallId>`) out of the main transcript and index
+ * them by their tool-call id. Worker rows never form a node section of their
+ * own: they belong inside the caller's `agent` tool card. */
+export function splitWorkerRows(messages: RunMessageRow[]): {
+  mainMessages: RunMessageRow[];
+  workerRowsByCall: Map<string, RunMessageRow[]>;
+} {
+  const mainMessages: RunMessageRow[] = [];
+  const workerRowsByCall = new Map<string, RunMessageRow[]>();
+  for (const row of messages) {
+    const nid = row.nodeId;
+    if (nid?.startsWith(AGENT_WORKER_PREFIX)) {
+      const callId = nid.slice(nid.lastIndexOf("/") + 1);
+      const list = workerRowsByCall.get(callId);
+      if (list === undefined) workerRowsByCall.set(callId, [row]);
+      else list.push(row);
+    } else {
+      mainMessages.push(row);
+    }
+  }
+  return { mainMessages, workerRowsByCall };
+}
+
 export function RunConversation({
-  messages,
+  messages: allMessages,
   streamingByNode = EMPTY_STREAMING,
   nodeStates,
   isLive = false,
@@ -141,17 +182,26 @@ export function RunConversation({
   fanout: fanoutRecords,
   className,
 }: RunConversationProps): JSX.Element {
+  // Worker transcripts leave the main flow and attach to their tool call.
+  const { mainMessages: messages, workerRowsByCall } = useMemo(() => splitWorkerRows(allMessages), [allMessages]);
+
   // toolCallId → result map, so each toolCall inside an assistant
-  // message pulls in its paired result inline.
+  // message pulls in its paired result inline. Built over ALL rows so a
+  // worker's own tool calls resolve inside its mini-conversation too.
   const toolResultsById = useMemo(() => {
     const map = new Map<string, ToolResultMessage>();
-    for (const row of messages) {
+    for (const row of allMessages) {
       if (row.content.role === "toolResult") {
         map.set(row.content.toolCallId, row.content);
       }
     }
     return map;
-  }, [messages]);
+  }, [allMessages]);
+
+  const workerCtx = useMemo<WorkerRowsContextValue>(
+    () => ({ workerRowsByCall, toolResultsById }),
+    [workerRowsByCall, toolResultsById],
+  );
 
   const stateByNodeId = useMemo(() => {
     const map = new Map<string, NodeState>();
@@ -362,166 +412,168 @@ export function RunConversation({
   const empty = noContent && (messagesError || !isLoading);
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col", className)}>
-      <Conversation className="flex-1">
-        {empty ? (
-          <ConversationContent>
-            {messagesError ? (
-              <EmptyState
-                data-testid="conversation-messages-error"
-                title="Couldn't load the conversation"
-                description="The messages request failed. It retries automatically as new events arrive — or reload the page."
-              />
-            ) : (
-              <ConversationEmptyState
-                data-testid="conversation-empty"
-                title="No conversation yet"
-                description="The agent hasn't produced any messages for this run."
-              />
-            )}
-          </ConversationContent>
-        ) : (
-          <ConversationContent>
-            {messagesError && (
-              // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" is the established live-region pattern (same rationale as EmptyState).
-              <div
-                data-testid="conversation-messages-error-inline"
-                role="status"
-                className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-xs text-sw-muted"
-              >
-                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sw-accent-warn" />
-                <span>Couldn't refresh the conversation — showing the last loaded messages.</span>
-              </div>
-            )}
-            {userInput && <UserPromptMessage text={userInput} />}
-            {decisionBuckets.before.map((d) => (
-              <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-            ))}
-            {renderItems.map((item) => {
-              if (item.kind === "parallel") {
+    <WorkerRowsContext.Provider value={workerCtx}>
+      <div className={cn("flex h-full min-h-0 flex-col", className)}>
+        <Conversation className="flex-1">
+          {empty ? (
+            <ConversationContent>
+              {messagesError ? (
+                <EmptyState
+                  data-testid="conversation-messages-error"
+                  title="Couldn't load the conversation"
+                  description="The messages request failed. It retries automatically as new events arrive — or reload the page."
+                />
+              ) : (
+                <ConversationEmptyState
+                  data-testid="conversation-empty"
+                  title="No conversation yet"
+                  description="The agent hasn't produced any messages for this run."
+                />
+              )}
+            </ConversationContent>
+          ) : (
+            <ConversationContent>
+              {messagesError && (
+                // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" is the established live-region pattern (same rationale as EmptyState).
+                <div
+                  data-testid="conversation-messages-error-inline"
+                  role="status"
+                  className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-xs text-sw-muted"
+                >
+                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sw-accent-warn" />
+                  <span>Couldn't refresh the conversation — showing the last loaded messages.</span>
+                </div>
+              )}
+              {userInput && <UserPromptMessage text={userInput} />}
+              {decisionBuckets.before.map((d) => (
+                <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+              ))}
+              {renderItems.map((item) => {
+                if (item.kind === "parallel") {
+                  return (
+                    <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
+                      <ParallelGroupSection
+                        parentId={item.parentId}
+                        branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
+                        toolResultsById={toolResultsById}
+                        streamingByNode={streamingByNode}
+                        stateByNodeId={stateByNodeId}
+                        isLive={isLive}
+                        isPaused={isPaused}
+                      />
+                      {item.indices.flatMap((i) =>
+                        (decisionBuckets.after.get(i) ?? []).map((d) => (
+                          <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                        )),
+                      )}
+                    </Fragment>
+                  );
+                }
+                const { section, index: i } = item;
+                const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
+                const nodeStream = streamingByNode.get(section.nodeId ?? UNSCOPED_NODE);
+                const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
+                // The open gate's card takes precedence over its own past
+                // decision (loop re-entry); suppress the banner there.
+                const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
                 return (
-                  <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
-                    <ParallelGroupSection
-                      parentId={item.parentId}
-                      branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
-                      toolResultsById={toolResultsById}
-                      streamingByNode={streamingByNode}
-                      stateByNodeId={stateByNodeId}
-                      isLive={isLive}
-                      isPaused={isPaused}
-                    />
-                    {item.indices.flatMap((i) =>
-                      (decisionBuckets.after.get(i) ?? []).map((d) => (
-                        <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-                      )),
-                    )}
+                  <Fragment key={section.key}>
+                    <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
+                      {section.rows.map((row) => (
+                        <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+                      ))}
+                      {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
+                      {showHitlHere && (
+                        <HitlStepCard
+                          runId={hitl.runId}
+                          label={hitl.label}
+                          options={hitl.options}
+                          optionLabels={hitl.optionLabels}
+                        />
+                      )}
+                      {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
+                    </NodeSection>
+                    {decisionBuckets.after.get(i)?.map((d) => (
+                      <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                    ))}
                   </Fragment>
                 );
-              }
-              const { section, index: i } = item;
-              const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
-              const nodeStream = streamingByNode.get(section.nodeId ?? UNSCOPED_NODE);
-              const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
-              // The open gate's card takes precedence over its own past
-              // decision (loop re-entry); suppress the banner there.
-              const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
-              return (
-                <Fragment key={section.key}>
-                  <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
-                    {section.rows.map((row) => (
-                      <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
-                    ))}
-                    {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
-                    {showHitlHere && (
-                      <HitlStepCard
-                        runId={hitl.runId}
-                        label={hitl.label}
-                        options={hitl.options}
-                        optionLabels={hitl.optionLabels}
-                      />
-                    )}
-                    {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
-                  </NodeSection>
-                  {decisionBuckets.after.get(i)?.map((d) => (
-                    <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-                  ))}
-                </Fragment>
-              );
-            })}
-            {/* Streaming buffers for nodes with no section yet: a fresh fan-out
+              })}
+              {/* Streaming buffers for nodes with no section yet: a fresh fan-out
                 whose branches are mid-first-token (grouped under the parent), or
                 a lone non-branch node streaming before its first persisted row. */}
-            {streamingOnlyParents.map((parentId) => (
-              <ParallelGroupSection
-                key={`parallel-live-${parentId}`}
-                parentId={parentId}
-                branches={liveOnlyBranches.get(parentId) ?? []}
-                toolResultsById={toolResultsById}
-                streamingByNode={streamingByNode}
-                stateByNodeId={stateByNodeId}
-                isLive={isLive}
-                isPaused={isPaused}
-              />
-            ))}
-            {[...streamingByNode.values()]
-              .filter((buf) => {
-                const nid = buf.nodeId;
-                if (nid == null) return !hasSectionFor.has(null);
-                return !hasSectionFor.has(nid) && !fanout.parentOf.has(nid);
-              })
-              .map((buf) => (
+              {streamingOnlyParents.map((parentId) => (
+                <ParallelGroupSection
+                  key={`parallel-live-${parentId}`}
+                  parentId={parentId}
+                  branches={liveOnlyBranches.get(parentId) ?? []}
+                  toolResultsById={toolResultsById}
+                  streamingByNode={streamingByNode}
+                  stateByNodeId={stateByNodeId}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                />
+              ))}
+              {[...streamingByNode.values()]
+                .filter((buf) => {
+                  const nid = buf.nodeId;
+                  if (nid == null) return !hasSectionFor.has(null);
+                  return !hasSectionFor.has(nid) && !fanout.parentOf.has(nid);
+                })
+                .map((buf) => (
+                  <NodeSection
+                    key={`orphan-stream-${buf.nodeId ?? "unscoped"}`}
+                    nodeId={buf.nodeId}
+                    state={buf.nodeId ? stateByNodeId.get(buf.nodeId) : undefined}
+                    isLive={isLive}
+                    isPaused={isPaused}
+                  >
+                    <StreamingMessageRow streaming={buf} />
+                  </NodeSection>
+                ))}
+              {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
                 <NodeSection
-                  key={`orphan-stream-${buf.nodeId ?? "unscoped"}`}
-                  nodeId={buf.nodeId}
-                  state={buf.nodeId ? stateByNodeId.get(buf.nodeId) : undefined}
+                  nodeId={hitl.nodeId}
+                  state={stateByNodeId.get(hitl.nodeId)}
                   isLive={isLive}
                   isPaused={isPaused}
                 >
-                  <StreamingMessageRow streaming={buf} />
+                  <HitlStepCard
+                    runId={hitl.runId}
+                    label={hitl.label}
+                    options={hitl.options}
+                    optionLabels={hitl.optionLabels}
+                  />
+                </NodeSection>
+              )}
+              {liveToolNodes.map(({ nodeId, stream }) => (
+                <NodeSection
+                  key={`tool-stream-${nodeId}`}
+                  nodeId={nodeId}
+                  state={stateByNodeId.get(nodeId)}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
+                  <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
                 </NodeSection>
               ))}
-            {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
-              <NodeSection
-                nodeId={hitl.nodeId}
-                state={stateByNodeId.get(hitl.nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <HitlStepCard
-                  runId={hitl.runId}
-                  label={hitl.label}
-                  options={hitl.options}
-                  optionLabels={hitl.optionLabels}
-                />
-              </NodeSection>
-            )}
-            {liveToolNodes.map(({ nodeId, stream }) => (
-              <NodeSection
-                key={`tool-stream-${nodeId}`}
-                nodeId={nodeId}
-                state={stateByNodeId.get(nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
-              </NodeSection>
-            ))}
-            {placeholderToolNodes.map((nodeId) => (
-              <NodeSection
-                key={`tool-pending-${nodeId}`}
-                nodeId={nodeId}
-                state={stateByNodeId.get(nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <ToolNodePendingRow testid={`tool-pending-${nodeId}`} />
-              </NodeSection>
-            ))}
-          </ConversationContent>
-        )}
-        <ConversationScrollButton />
-      </Conversation>
-    </div>
+              {placeholderToolNodes.map((nodeId) => (
+                <NodeSection
+                  key={`tool-pending-${nodeId}`}
+                  nodeId={nodeId}
+                  state={stateByNodeId.get(nodeId)}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
+                  <ToolNodePendingRow testid={`tool-pending-${nodeId}`} />
+                </NodeSection>
+              ))}
+            </ConversationContent>
+          )}
+          <ConversationScrollButton />
+        </Conversation>
+      </div>
+    </WorkerRowsContext.Provider>
   );
 }
 
@@ -1194,7 +1246,10 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
       // the node's structured output: both open by default so the operator
       // sees the payload without an extra click. `judge` is a decision the
       // rest of the turn builds on, so its verdicts open too.
-      const defaultOpen = chunk.name === "abort" || chunk.name === "emit_output" || chunk.name === "judge";
+      // `agent` delegations open too: the worker's status, task and cost are the
+      // signal, and a collapsed header would hide a running worker entirely.
+      const defaultOpen =
+        chunk.name === "abort" || chunk.name === "emit_output" || chunk.name === "judge" || chunk.name === "agent";
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0" defaultOpen={defaultOpen}>
           <ToolHeader
@@ -1203,9 +1258,10 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
             title={chunk.name}
           />
           <ToolContent>
-            {chunk.name !== "judge" ? <ToolInput input={chunk.arguments} /> : null}
+            {chunk.name !== "judge" && chunk.name !== "agent" ? <ToolInput input={chunk.arguments} /> : null}
             <RichToolResult
               toolName={chunk.name}
+              toolCallId={chunk.id}
               result={result}
               params={chunk.arguments as Record<string, unknown> | undefined}
             />
@@ -1280,6 +1336,35 @@ function flattenText(content: unknown): string {
   return parts.join("\n");
 }
 
+/** The `agent` tool card: looks up the worker's transcript by the tool-call id
+ * and renders each worker row with the same `MessageRow` the main transcript
+ * uses, so a worker's own tool calls, reasoning and text look identical. */
+function AgentToolCard({
+  callId,
+  params,
+  result,
+}: {
+  /** The caller's tool-call id — the worker's rows are keyed by it, and it is
+   * known from the toolCall block before any result lands, so a running
+   * worker's transcript streams into the card live. */
+  callId: string | undefined;
+  params: AgentToolParams | undefined;
+  result: ToolResultMessage | undefined;
+}): JSX.Element {
+  const { workerRowsByCall, toolResultsById } = useContext(WorkerRowsContext);
+  const workerRows = (callId !== undefined ? workerRowsByCall.get(callId) : undefined) ?? EMPTY_ROWS;
+  return (
+    <AgentToolResult
+      params={params}
+      result={result}
+      workerRows={workerRows}
+      renderRow={(row) => <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />}
+    />
+  );
+}
+
+const EMPTY_ROWS: readonly RunMessageRow[] = [];
+
 function toolTypeFromName(name: string): `tool-${string}` {
   return `tool-${name}` as `tool-${string}`;
 }
@@ -1328,10 +1413,12 @@ function isTextBlock(b: unknown): b is { type: "text"; text: string } {
 
 function RichToolResult({
   toolName,
+  toolCallId,
   result,
   params,
 }: {
   toolName: string;
+  toolCallId?: string | undefined;
   result: ToolResultMessage | undefined;
   params?: Record<string, unknown> | undefined;
 }): JSX.Element | null {
@@ -1362,6 +1449,9 @@ function RichToolResult({
   // of either would hide the probabilities the agent acted on.
   if (toolName === "judge") {
     return <JudgeToolResult params={params as JudgeToolParams | undefined} result={result} />;
+  }
+  if (toolName === "agent") {
+    return <AgentToolCard callId={toolCallId} params={params as AgentToolParams | undefined} result={result} />;
   }
   if (toolName === "route") {
     return <RouteToolResult params={params as { name?: string } | undefined} result={result} />;

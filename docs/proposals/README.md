@@ -34,6 +34,6 @@ See [`archive/README.md`](archive/README.md) for the state of each. Shipped:
 `mcp-tools.md`, `reversible-migrations.md`, `typed-routing-struct.md`,
 `concurrency.md`, `structured-outputs.md`, `tool-outputs.md` (+ critique),
 `pi-085-auth-migration.md`, `secret-scrubbing.md` (experimental),
-`workflow-ir.md` (A + C). Superseded: `db-import.md`. Parked without a
+`workflow-ir.md` (A + C), `agent-tool.md`. Superseded: `db-import.md`. Parked without a
 sponsor: `tool-exec-variant.md`, `hitl-channel.md`, `cache-retention.md`,
 `fan-out-runs.md`, `worktree-opt-out.md`.

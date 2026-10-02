@@ -81,10 +81,10 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const pass = readGoalGateRetries(opts.routing as Record<string, unknown>);
 
   const messages: MessagesApi = {
-    append(message: AgentMessage) {
+    append(message: AgentMessage, opts?: { nodeId?: string }) {
       return store.appendMessage(runId, {
         content: message,
-        nodeId,
+        nodeId: opts?.nodeId ?? nodeId,
         iteration,
         pass,
       });

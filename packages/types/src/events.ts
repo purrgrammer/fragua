@@ -42,6 +42,7 @@ export type EventType =
   | "agent.message_end"
   | "agent.warning"
   | "agent.info"
+  | "agent.worker_end"
   // LLM layer
   | "llm.start"
   | "llm.text_delta"
@@ -113,6 +114,7 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "agent.message_end",
   "agent.warning",
   "agent.info",
+  "agent.worker_end",
   "llm.start",
   "llm.text_delta",
   "llm.text_end",

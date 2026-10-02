@@ -465,3 +465,31 @@ describe("eventsToSteps — judge steps", () => {
     expect(s.startedAt).toBe(new Date(1000).toISOString());
   });
 });
+
+describe("eventsToSteps — agent-tool workers", () => {
+  test("a worker's llm.start nests under its caller and agent.worker_end stamps its duration", () => {
+    const worker = "__agent.implement#0/toolu_abc";
+    const steps = eventsToSteps([
+      ev("fact.node_started", 1_000, { nodeId: "implement" }),
+      ev("llm.start", 1_100, { nodeId: "implement", provider: "anthropic", model: "m" }),
+      ev("llm.start", 1_200, {
+        nodeId: worker,
+        worker_of: "implement",
+        worker_id: "toolu_abc",
+        provider: "anthropic",
+        model: "w",
+      }),
+      ev("cost.recorded", 1_500, { nodeId: worker, cost_usd: 0.01 }),
+      ev("agent.worker_end", 4_200, { nodeId: worker, worker_of: "implement", status: "completed" }),
+      ev("fact.node_completed", 9_000, { nodeId: "implement", outcome: "success" }),
+    ]);
+    const callerStep = steps.find((s) => s.nodeId === "implement");
+    const workerStep = steps.find((s) => s.nodeId === worker);
+    expect(callerStep?.parentNodeId).toBeUndefined();
+    expect(workerStep?.parentNodeId).toBe("implement");
+    expect(workerStep?.model).toBe("w");
+    expect(workerStep?.durationMs).toBe(3_000);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 9_000, runIsTerminal: true });
+    expect(filled.find((s) => s.nodeId === worker)?.durationMs).toBe(3_000);
+  });
+});

@@ -1,12 +1,13 @@
 // PiLlmBackend — LlmBackend backed by pi-agent-core + pi-ai.
 
-import { Agent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import type { LlmBackend, LlmInput, Outcome, OutputsDecl, SummariserBackend } from "@fragua/core";
 import { fail } from "@fragua/core";
 import type { SteerDelivery } from "@fragua/types";
-import type { ExecutionEnvironment, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
+import type { AnyTool, ExecutionEnvironment, McpConnector, Skill, ToolRegistry } from "@fragua/workspace";
+import { type AgentToolConfig, buildAgentTool, DEFAULT_AGENT_CONCURRENCY, WorkerSlots } from "./agent-tool.ts";
 import { resolveExitOutcome } from "./exit-tools.ts";
 import { MessageStore } from "./message-store.ts";
 import { classifyTerminalMessage, parseRetryAfterMs } from "./provider-errors.ts";
@@ -24,6 +25,13 @@ import {
   sessionKey,
 } from "./transcript.ts";
 
+export {
+  type AgentToolConfig,
+  type AgentWorkerResult,
+  type AgentWorkerStatus,
+  WorkerSlots,
+  WorkerSlotsAborted,
+} from "./agent-tool.ts";
 export { findAbortToolCall, findEmitOutputCall, findRouteToolCall } from "./exit-tools.ts";
 export {
   ANTHROPIC_OVERLOADED_STATUS,
@@ -95,6 +103,11 @@ export interface PiLlmBackendOptions {
    * the same `runId` finds the live-agent slot it expects. Omit in
    * tests/one-shots that don't need cross-backend steering. */
   steering?: SteeringRegistry;
+  /** Caps + defaults for the opt-in `agent` tool (orchestrator-workers). Kebab
+   * keys in `~/.fragua/config.yaml` (`agent.max-cost`, `agent.max-turns`,
+   * `agent.timeout-minutes`, `agent.concurrency`) are resolved to this shape by
+   * the CLI and threaded here like `judge:`. Omit in tests for the defaults. */
+  agentConfig?: AgentToolConfig;
 }
 
 export class PiLlmBackend implements LlmBackend {
@@ -133,6 +146,8 @@ export class PiLlmBackend implements LlmBackend {
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
   private readonly mcpConnector: McpConnector | undefined;
+  /** Resolved caps + defaults for the opt-in `agent` tool. */
+  private readonly agentConfig: AgentToolConfig;
 
   constructor(opts: PiLlmBackendOptions) {
     this.registry = opts.registry;
@@ -149,6 +164,7 @@ export class PiLlmBackend implements LlmBackend {
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
     this.mcpConnector = opts.mcpConnector;
+    this.agentConfig = opts.agentConfig ?? {};
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -258,12 +274,22 @@ export class PiLlmBackend implements LlmBackend {
     const nodeRoutes = input.node.attrs.routes as string[] | undefined;
     const outputsDecl = (input.outputsDecl ?? input.node.attrs.outputs) as OutputsDecl | undefined;
     const hasRoutes = Array.isArray(nodeRoutes) && nodeRoutes.length > 0;
+    const agentTool = this.maybeBuildAgentTool({
+      input,
+      allow,
+      finalTools,
+      effectiveEnv,
+      effectiveSkills,
+      provider,
+      modelId,
+    });
     const { tools, fraguaContext } = assembleAgentTools({
       input,
       finalTools,
       effectiveEnv,
       nodeRoutes,
       outputsDecl,
+      ...(agentTool !== undefined ? { agentTool } : {}),
     });
 
     const { systemPrompt, contextFileRecords } = await buildSystemPromptForCall(
@@ -383,6 +409,46 @@ export class PiLlmBackend implements LlmBackend {
     if (terminal !== null) return terminal;
 
     return resolveExitOutcome({ messages: agent.state.messages, hydratedCount, nodeRoutes, outputsDecl });
+  }
+
+  /** Opt-in `agent` tool (orchestrator-workers): synthesised only when the node
+   * lists it in `allowed-tools`, never force-included. Closes over the caller's
+   * effective tools / env / skills / model so every worker knob clamps to the
+   * caller's set. */
+  private maybeBuildAgentTool(args: {
+    input: LlmInput;
+    allow: string[] | undefined;
+    finalTools: AnyTool[];
+    effectiveEnv: ExecutionEnvironment;
+    effectiveSkills: readonly Skill[];
+    provider: string;
+    modelId: string;
+  }): AgentTool | undefined {
+    const { input, allow, finalTools, effectiveEnv, effectiveSkills, provider, modelId } = args;
+    if (!allow?.includes("agent")) return undefined;
+    const effort = (input.node.attrs as Record<string, unknown>)["reasoning_effort"];
+    return buildAgentTool(
+      {
+        registry: this.registry,
+        resolveModel: this.resolveModel,
+        getApiKey: this.getApiKey,
+        systemPrompt: this.systemPrompt,
+        runEnv: this.runEnv,
+        agentConfig: this.agentConfig,
+        resolveThinkingLevel,
+        sdkRetry: { maxRetries: PROVIDER_SDK_MAX_RETRIES, maxRetryDelayMs: PROVIDER_SDK_MAX_RETRY_DELAY_MS },
+      },
+      {
+        input,
+        slots: new WorkerSlots(this.agentConfig.concurrency ?? DEFAULT_AGENT_CONCURRENCY),
+        callerFinalTools: finalTools,
+        callerAllow: allow,
+        effectiveEnv,
+        callerEffectiveSkills: effectiveSkills,
+        callerModel: { provider, modelId },
+        callerEffort: typeof effort === "string" ? (effort as "low" | "medium" | "high") : undefined,
+      },
+    );
   }
 
   /** Inject a user message into the currently active agent for `runId`,
