@@ -247,7 +247,7 @@ The agent-callable tool surface is deliberately minimal:
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
 
-**`bash` is not a containment boundary.** It spawns `/bin/sh -c <command>` on
+**`bash` is not a containment boundary.** (threat model: [`SECURITY.md`](./SECURITY.md) §4–§5.) It spawns `/bin/sh -c <command>` on
 the host with the run's cwd as working directory. The workflow's own YAML is the
 trust boundary (PR review gates the library; SPEC §1); the shell is not. There
 are exactly three guardrails, none of which is isolation:

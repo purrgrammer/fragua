@@ -13,6 +13,7 @@ Authoritative docs:
 - `docs/SPEC.md` — what fragua is, invariants
 - `docs/ARCHITECTURE.md` — schema, design, property matrix
 - `docs/handler-contract.md` — handler API
+- `docs/SECURITY.md` — threat model: trusted parties, defended boundaries and the test pinning each, what is explicitly not defended
 - `docs/execution-model.md` — filesystem layout for workflow authors (worktree location, fresh shell per bash call, snapshot delta-suppression, accept/discard)
 
 ## Stack

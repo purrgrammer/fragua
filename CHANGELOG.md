@@ -8,6 +8,10 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/SECURITY.md`, the threat model.** One page states who is trusted, which boundaries are defended and the test that pins each, and what is explicitly not defended (`bash` is arbitrary code execution on the host; the worktree is working-tree isolation, not security isolation; no API auth beyond loopback plus the origin gate). SPEC, STATUS, the handler contract, and the execution model point at it instead of each carrying a partial account.
+
 ### Fixed
 
 - **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
