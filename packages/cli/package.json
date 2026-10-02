@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@earendil-works/pi-mcp": "0.99.2",
     "@sinclair/typebox": "0.34.49",
     "@fragua/agent": "workspace:*",
     "@fragua/core": "workspace:*",
@@ -34,8 +34,8 @@
     "react": "18.3.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1"
+    "@earendil-works/pi-agent-core": "0.99.2",
+    "@earendil-works/pi-ai": "0.99.2"
   },
   "devDependencies": {
     "@fragua/daemon": "workspace:*",

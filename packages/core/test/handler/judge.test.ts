@@ -477,6 +477,15 @@ describe("judge handler — failure modes", () => {
     }
   });
 
+  test("a bare 404 (wrong base-url, no code) is a routable node fail, not a provider pause", async () => {
+    const cap = fresh();
+    const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
+    const err = new JudgeProviderError("not found", "lab", 404);
+    const result = await spec.handler(stubCtx(cap, { judge: throwingJudge(err) }));
+    expect(result).toMatchObject({ kind: "transition", outcomeStatus: "fail" });
+    if (result.kind === "transition") expect(result.failureReason).toMatch(/rejected the request \(404\)/);
+  });
+
   test("a 422 is a node fail carrying the provider detail; no credential is a halt", async () => {
     // 422 moved from halt to fail once a second backend showed the same
     // oversized-state condition arriving under two different codes: it is data
