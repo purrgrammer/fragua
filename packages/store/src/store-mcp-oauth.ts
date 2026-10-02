@@ -1,3 +1,4 @@
+import { tableExists } from "./catalog-queries.ts";
 import {
   deleteMcpOAuth as queryDeleteMcpOAuth,
   upsertMcpOAuth as queryUpsertMcpOAuth,
@@ -12,6 +13,7 @@ export function getMcpOAuth(ctx: StoreCtx, url: string): string | undefined {
 }
 
 export function listMcpOAuth(ctx: StoreCtx): { url: string; payload: string }[] {
+  if (!tableExists(ctx.db, "mcp_oauth")) return [];
   return selectAllMcpOAuth(ctx.db).map((row) => ({ url: row.url, payload: row.payload }));
 }
 

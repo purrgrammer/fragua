@@ -179,6 +179,54 @@ describe("seedCredsFromGlobalStore", () => {
     }
   });
 
+  test("copies MCP OAuth logins as access-token-only blobs; skips expired ones", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
+    const globalPath = join(dir, "global.db");
+    const targetPath = join(dir, "ci.db");
+    const LIVE = "https://mcp.example.com/mcp";
+    const EXPIRED = "https://old.example.com/mcp";
+    try {
+      const global = new SqliteStore({ path: globalPath });
+      global.upsertMcpOAuth(
+        LIVE,
+        JSON.stringify({
+          serverUrl: LIVE,
+          clientInformation: { client_id: "c" },
+          tokens: { access_token: "AT", refresh_token: "RT", token_type: "Bearer" },
+          tokensExpireAt: Date.now() + 3_600_000,
+          codeVerifier: "CV",
+          oauthState: "ST",
+        }),
+      );
+      global.upsertMcpOAuth(
+        EXPIRED,
+        JSON.stringify({ serverUrl: EXPIRED, tokens: { access_token: "DEAD" }, tokensExpireAt: Date.now() - 1 }),
+      );
+      global.close();
+
+      const target = new SqliteStore({ path: targetPath });
+      try {
+        const seeded = await seedCredsFromGlobalStore(target, targetPath, globalPath);
+        expect(seeded).toContain(`mcp:${LIVE}`);
+        expect(seeded).not.toContain(`mcp:${EXPIRED}`);
+        const copied = JSON.parse(target.getMcpOAuth(LIVE) ?? "{}");
+        expect(copied.tokens).toEqual({ access_token: "AT", token_type: "Bearer" }); // refresh token stripped
+        expect(copied.clientInformation).toEqual({ client_id: "c" });
+        expect(copied.codeVerifier).toBeUndefined();
+        expect(copied.oauthState).toBeUndefined();
+        expect(target.getMcpOAuth(EXPIRED)).toBeUndefined();
+        // The global row is untouched — the copy never rotates anything there.
+        const reopened = new SqliteStore({ path: globalPath, migrate: false });
+        expect(JSON.parse(reopened.getMcpOAuth(LIVE) ?? "{}").tokens.refresh_token).toBe("RT");
+        reopened.close();
+      } finally {
+        target.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("no global store → no-op", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fragua-global-"));
     const target = new SqliteStore({ path: ":memory:" });
