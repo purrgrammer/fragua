@@ -74,7 +74,7 @@ describe("loadJudgeProviders", () => {
       // a NEW provider inherits nothing, and a zero budget is not permissive —
       // it rejects every state as "over the 0-byte cap" and divides by zero in
       // the chunk planner, so the operator sees a capacity error instead.
-      seed(store, "judge:lab", { "base-url": "http://10.0.0.5:8080", "default-model": "kev" });
+      seed(store, "judge:lab", { "base-url": "https://10.0.0.5:8080", "default-model": "kev" });
       const { providers, error } = loadJudgeProviders(store);
       expect(providers["lab"]).toBeUndefined();
       expect(error).toMatch(/request-tokens/);
@@ -104,6 +104,37 @@ describe("loadJudgeProviders", () => {
       const { providers, error } = loadJudgeProviders(store);
       expect(providers["lab"]).toBeUndefined();
       expect(error).toMatch(/must be http\(s\)/);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("plaintext http to a non-loopback host with auth required is reported; loopback and auth: optional pass", () => {
+    const store = new SqliteStore();
+    try {
+      const budgets = { "request-tokens": 1000, "state-tokens": 500, "bytes-per-token": 4, "state-max-bytes": 4096 };
+      seed(store, "judge:remote", { "base-url": "http://10.0.0.5:8080", ...budgets });
+      seed(store, "judge:local", { "base-url": "http://localhost:8080", ...budgets });
+      seed(store, "judge:open", { "base-url": "http://10.0.0.6:8080", auth: "optional", ...budgets });
+      const { providers, error } = loadJudgeProviders(store);
+      expect(providers["remote"]).toBeUndefined();
+      expect(error).toMatch(/plaintext http to a non-loopback host/);
+      expect(providers["local"]).toBeDefined();
+      expect(providers["open"]).toBeDefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a `__proto__` model key cannot poison the merged limits", () => {
+    const store = new SqliteStore();
+    try {
+      seed(store, "judge:typesafe", { models: JSON.parse('{"__proto__": {"request-tokens": 1}}') });
+      const { providers } = loadJudgeProviders(store);
+      const models = providers["typesafe"]?.models ?? {};
+      expect(Object.hasOwn(models, "__proto__")).toBe(false);
+      expect((models as Record<string, unknown>)["unregistered-model"]).toBeUndefined();
+      expect(Object.getPrototypeOf(models)).toBe(Object.prototype);
     } finally {
       store.close();
     }

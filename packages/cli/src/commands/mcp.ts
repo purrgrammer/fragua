@@ -11,8 +11,16 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createServer } from "node:http";
+import { McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import {
+  adaptOAuthProvider,
+  authorizeMcp,
+  McpOAuthAuthorizationRequiredError,
+  type McpOAuthProvider,
+  OAuthCallbackServer,
+} from "@earendil-works/pi-mcp/oauth";
+import {
+  clearTransientOAuthState,
   createMcpConnector,
   hasStaticAuthHeader,
   isLoopbackHost,
@@ -23,18 +31,14 @@ import {
   type McpServerConfig,
   type McpToolset,
   makeHeadlessMcpProvider,
+  makeMcpOAuthProvider,
   mcpConfigPath,
   mcpToolPrefix,
   parseOAuthBlob,
+  persistClientInformation,
   resolveMcpServer,
   resolveProjectEnv,
-  StoredOAuthProvider,
 } from "@fragua/workspace";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import chalk from "chalk";
 import { makeMcpOAuthStore } from "../mcp-oauth-store.ts";
 import { resolveStorePath, type StoreClient, withStoreClient } from "../store-client.ts";
@@ -172,7 +176,7 @@ export async function mcpCheckCommand(server: string | undefined, opts: McpOptio
   const unsupportedCode = unsupportedEntries.length > 0 ? 1 : 0;
   if (targets.length === 0) return unsupportedCode;
 
-  const runCheck = async (oauthProviderFor?: (url: string) => StoredOAuthProvider): Promise<number> => {
+  const runCheck = async (oauthProviderFor?: (url: string) => McpOAuthProvider): Promise<number> => {
     let set: McpToolset | undefined;
     try {
       set = await createMcpConnector(oauthProviderFor ? { oauthProviderFor } : {}).materialize(targets, { cwd });
@@ -295,9 +299,12 @@ export function mcpLogoutCommand(server: string, opts: McpOptions = {}, urlOverr
   });
 }
 
-/** A login transport as `runLoginFlow` uses it — the real one wraps an MCP
- * `Client` + `StreamableHTTPClientTransport`; tests inject a fake to drive the
- * valid-token fast-path and the auth-required path without a live server. */
+/** A login transport as `runLoginFlow` uses it — the real one wraps an
+ * `McpClient` + `StreamableHttpTransport` and the two `authorizeMcp` legs;
+ * tests inject a fake to drive the valid-token fast-path and the auth-required
+ * path without a live server. `connect()` resolves when stored tokens are
+ * valid, or rejects with `McpOAuthAuthorizationRequiredError` when the user
+ * must authorize; `finishAuth(code)` exchanges the callback code for tokens. */
 export interface LoginTransport {
   connect(): Promise<void>;
   finishAuth(code: string): Promise<void>;
@@ -306,15 +313,27 @@ export interface LoginTransport {
 export type LoginTransportFactory = (
   url: string,
   headers: Record<string, string>,
-  authProvider: StoredOAuthProvider,
+  authProvider: McpOAuthProvider,
 ) => LoginTransport;
 
 const defaultLoginTransport: LoginTransportFactory = (url, headers, authProvider) => {
-  const mcpClient = new Client({ name: "fragua", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider, requestInit: { headers } });
+  const mcpClient = new McpClient({ name: "fragua", version: "0.1.0", capabilities: {} });
+  const transport = new StreamableHttpTransport({
+    url: new URL(url),
+    headers,
+    authProvider: adaptOAuthProvider(authProvider),
+  });
   return {
-    connect: () => mcpClient.connect(transport as Transport),
-    finishAuth: (code) => transport.finishAuth(code),
+    // A 401 that needs the user surfaces as McpOAuthAuthorizationRequiredError
+    // (thrown by adaptOAuthProvider via authorizeMcp's REDIRECT result).
+    connect: async () => {
+      await mcpClient.connect(transport);
+    },
+    // Exchange the authorization code for tokens; authorizeMcp persists them
+    // through the provider's store.
+    finishAuth: async (code) => {
+      await authorizeMcp(authProvider, { serverUrl: url, authorizationCode: code });
+    },
     close: async () => {
       await transport.close().catch(() => {});
       await mcpClient.close().catch(() => {});
@@ -409,11 +428,18 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
   });
 }
 
-/** Strip control bytes so a hostile `?error=` value can't inject terminal
- * escapes when we print it, and cap its length. */
-function sanitizeErrorParam(v: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
-  return v.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+/** Strip control bytes so a hostile `error_description` echoed by the auth
+ * server (it reaches us verbatim through the callback's rejection) can't inject
+ * terminal escapes when printed, and cap its length. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
+const UNSAFE_TERMINAL_CHARS = /[\x00-\x1f\x7f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+function sanitizeLoginError(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  // C0/DEL plus the Unicode controls a terminal honours: bidi overrides and
+  // isolates can re-order the rendered line, U+2028/2029 break it, and the
+  // zero-width set hides characters inside it.
+  return message.replace(UNSAFE_TERMINAL_CHARS, "").slice(0, 200);
 }
 
 async function runLoginFlow(
@@ -434,105 +460,50 @@ async function runLoginFlow(
     );
     return 1;
   }
-  const callbackPath = new URL(MCP_OAUTH_CALLBACK_URL).pathname;
+  const callbackUrl = new URL(MCP_OAUTH_CALLBACK_URL);
   // Confidential clients pre-register a fixed redirect URI, so they MUST use the
   // fixed callback port. DCR / public clients register the redirect at auth time,
   // so bind an ephemeral port — no fixed-port pre-bind clash, concurrent logins ok.
   const confidential = creds.clientId !== undefined;
-
-  let resolveCode!: (code: string) => void;
-  let rejectCode!: (err: Error) => void;
-  const codePromise = new Promise<string>((res, rej) => {
-    resolveCode = res;
-    rejectCode = rej;
-  });
   const htmlPage = (body: string): string => `<!doctype html><html><body><p>${body}</p></body></html>`;
-  // Assigned after we know the port; the handler only runs on a browser request,
-  // by which time it's set.
-  let authProvider: StoredOAuthProvider | undefined;
-  const httpServer = createServer((req, resp) => {
-    // A request can arrive after `listen()` binds but before `authProvider` is
-    // assigned (port scan, browser preconnect, a stray tab). Reject it rather than
-    // dereferencing `undefined` and crashing the CLI in the request listener.
-    if (authProvider === undefined) {
-      resp.writeHead(503).end();
-      return;
-    }
-    const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (reqUrl.pathname !== callbackPath) {
-      resp.writeHead(404).end();
-      return;
-    }
-    const error = reqUrl.searchParams.get("error");
-    const code = reqUrl.searchParams.get("code");
-    const state = reqUrl.searchParams.get("state");
-    const fail = (msg: string): void => {
-      // `Connection: close` so `httpServer.close()` in the finally block doesn't
-      // wait out the browser's HTTP/1.1 keep-alive (~5s) before resolving.
-      resp.writeHead(400, { "content-type": "text/html", connection: "close" });
-      resp.end(htmlPage("Authorization failed — return to your terminal for details."));
-      rejectCode(new Error(msg));
-    };
-    // CSRF: the returned state must match the one the SDK sent (PKCE already
-    // binds the code, but state blocks a stray/forged localhost callback).
-    if (state !== authProvider.expectedAuthState()) return fail("authorization state mismatch");
-    if (!code)
-      return fail(
-        error
-          ? `authorization failed: ${sanitizeErrorParam(error)}`
-          : "callback received without an authorization code",
-      );
-    resp.writeHead(200, { "content-type": "text/html", connection: "close" });
-    resp.end(htmlPage("Authorization complete — you can close this tab and return to your terminal."));
-    resolveCode(code);
-  });
 
+  let callbackServer: OAuthCallbackServer | undefined;
   let transport: LoginTransport | undefined;
   try {
-    await new Promise<void>((res, rej) => {
-      httpServer.once("error", rej);
-      httpServer.listen(confidential ? Number(new URL(MCP_OAUTH_CALLBACK_URL).port) : 0, "127.0.0.1", () => res());
+    callbackServer = await OAuthCallbackServer.listen({
+      host: "127.0.0.1",
+      port: confidential ? Number(callbackUrl.port) : 0,
+      path: callbackUrl.pathname,
+      timeoutMs: 300_000,
+      renderPage: (page) =>
+        page.ok
+          ? htmlPage("Authorization complete — you can close this tab and return to your terminal.")
+          : htmlPage("Authorization failed — return to your terminal for details."),
     });
-    // The bind-time `once("error")` is consumed; attach a permanent handler so a
-    // later socket error (a client resetting mid-request) can't crash the CLI as
-    // an unhandled 'error' event on the server.
-    httpServer.on("error", () => {});
-    const addr = httpServer.address();
-    const port = typeof addr === "object" && addr ? addr.port : Number(new URL(MCP_OAUTH_CALLBACK_URL).port);
-    const redirectUrl = `http://127.0.0.1:${port}${callbackPath}`;
-
-    const providerOpts: ConstructorParameters<typeof StoredOAuthProvider>[0] = {
+    const oauthStore = makeMcpOAuthStore(client.store);
+    // A stale CSRF state / PKCE verifier from an interrupted login would be
+    // REUSED by pi-mcp's provider; start every login from fresh values.
+    clearTransientOAuthState(oauthStore, url);
+    const provider = makeMcpOAuthProvider({
       url,
-      store: makeMcpOAuthStore(client.store),
-      redirectUrl,
+      store: oauthStore,
+      redirectUrl: callbackServer.redirectUrl,
       onRedirect: (authUrl) => {
         console.log(chalk.bold("Open this URL to authorize:"));
         console.log(authUrl.toString());
         openInBrowser(authUrl.toString());
       },
-    };
-    if (creds.clientId !== undefined) {
-      providerOpts.client =
-        creds.clientSecret !== undefined
-          ? { clientId: creds.clientId, clientSecret: creds.clientSecret }
-          : { clientId: creds.clientId };
-    }
-    authProvider = new StoredOAuthProvider(providerOpts);
-    // Persist a preset confidential client so the DAEMON — which builds its own
-    // provider without these flags — can read client_id/secret to refresh tokens.
-    // (With a preset, `clientInformation()` returns it in-memory and the SDK never
-    // calls `saveClientInformation`, so it would otherwise never reach the store.)
-    // Deferred to AFTER a successful login: persisting up front writes an
-    // UNVALIDATED client_id/secret, and a wrong one then silently poisons every
-    // daemon run (which reads the stored row) with no hint to `logout`.
-    const persistConfidentialClient = (): void => {
-      if (creds.clientId === undefined) return;
-      const info: OAuthClientInformation = { client_id: creds.clientId };
-      if (creds.clientSecret !== undefined) info.client_secret = creds.clientSecret;
-      authProvider?.saveClientInformation(info);
-    };
+      ...(creds.clientId !== undefined
+        ? {
+            client:
+              creds.clientSecret !== undefined
+                ? { clientId: creds.clientId, clientSecret: creds.clientSecret }
+                : { clientId: creds.clientId },
+          }
+        : {}),
+    });
 
-    transport = transportFactory(url, headers, authProvider);
+    transport = transportFactory(url, headers, provider);
 
     try {
       // Bound the initial connect so an unreachable server / hung TLS can't block
@@ -548,32 +519,45 @@ async function runLoginFlow(
       console.log(chalk.green(`Logged in to ${server}.`));
       return 0;
     } catch (e) {
-      if (!(e instanceof UnauthorizedError)) {
-        console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
+      // A 401 that needs the user surfaces as McpOAuthAuthorizationRequiredError;
+      // anything else is a genuine connect failure.
+      if (!(e instanceof McpOAuthAuthorizationRequiredError)) {
+        console.error(chalk.red(`mcp: login failed: ${sanitizeLoginError(e)}`));
         return 1;
       }
     }
 
-    const code = await withTimeout(
-      codePromise,
-      300_000,
-      "timed out after 300s waiting for the browser authorization callback",
-    );
-    // Bound the token exchange too — an auth server that goes unreachable between
-    // the redirect and this call would otherwise hang the CLI indefinitely.
+    // Interactive auth required. `onRedirect` already fired during connect()
+    // (browser opened). The callback server validates the CSRF `state` — pi-mcp's
+    // `McpOAuthProvider.state()` persisted it as `oauthState`, replacing fragua's
+    // own expected-state field.
+    const { code } = await callbackServer.waitForCallback(await provider.state());
+    // Bound the token exchange — an auth server that goes unreachable between the
+    // redirect and this call would otherwise hang the CLI indefinitely.
     await withTimeout(transport.finishAuth(code), 30_000, `timed out exchanging the auth code with ${server}`);
-    persistConfidentialClient();
+    clearTransientOAuthState(oauthStore, url);
+    // Persist a preset confidential client so the DAEMON — which builds its own
+    // provider without these flags — can read client_id/secret to refresh tokens.
+    // (With a preset, `McpOAuthProvider.saveClientInformation` is a no-op, so it
+    // would otherwise never reach the store.) Deferred to AFTER a successful login:
+    // persisting up front writes an UNVALIDATED client_id/secret, and a wrong one
+    // then silently poisons every daemon run with no hint to `logout`.
+    if (creds.clientId !== undefined) {
+      persistClientInformation(
+        oauthStore,
+        url,
+        creds.clientSecret !== undefined
+          ? { client_id: creds.clientId, client_secret: creds.clientSecret }
+          : { client_id: creds.clientId },
+      );
+    }
     console.log(chalk.green(`Logged in to ${server}.`));
     return 0;
   } catch (e) {
-    console.error(chalk.red(`mcp: login failed: ${(e as Error).message}`));
+    console.error(chalk.red(`mcp: login failed: ${sanitizeLoginError(e)}`));
     return 1;
   } finally {
-    // Force any lingering keep-alive browser socket shut so `close()` resolves
-    // promptly instead of waiting out the socket's idle timeout (the callback
-    // already sends `Connection: close`; this covers a client that ignores it).
-    httpServer.closeAllConnections?.();
-    await new Promise<void>((res) => httpServer.close(() => res()));
+    await callbackServer?.close().catch(() => {});
     await transport?.close().catch(() => {});
   }
 }
