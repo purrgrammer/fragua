@@ -143,6 +143,22 @@ describe("exportRunBundle", () => {
     expect(extractMcpOAuthLiterals("not json{")).toEqual([]);
   });
 
+  test("extractMcpOAuthLiterals picks the same literals from a new McpOAuthState blob (serverUrl field present)", () => {
+    // The pi-mcp blob adds `serverUrl` but keeps tokens/clientInformation/codeVerifier
+    // field names, so the scrubber still extracts every secret without change.
+    expect(
+      extractMcpOAuthLiterals(
+        JSON.stringify({
+          serverUrl: "https://mcp.example.com/mcp",
+          tokens: { access_token: "AT", refresh_token: "RT", token_type: "Bearer" },
+          clientInformation: { client_id: "conf", client_secret: "CS" },
+          codeVerifier: "CV",
+          oauthState: "not-a-secret",
+        }),
+      ).sort(),
+    ).toEqual(["AT", "CS", "CV", "RT"]);
+  });
+
   test("scrubEventPayload redacts a secret in an agent.warning message, leaving structural fields", () => {
     const SECRET = "xoxp-DO-NOT-LEAK-0123456789abcdef";
     const { registry } = buildExportRegistry({
