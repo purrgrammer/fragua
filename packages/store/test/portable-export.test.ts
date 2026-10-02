@@ -51,6 +51,17 @@ describe("retainPortableTables", () => {
     store.close();
   });
 
+  test("a pruned store still exports a bundle — absent credential tables read as empty", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.retainPortableTables();
+    expect(store.listProviderCredentials()).toEqual([]);
+    expect(store.listMcpOAuth()).toEqual([]);
+    const { bytes } = store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    expect(bytes.byteLength).toBeGreaterThan(0);
+    store.close();
+  });
+
   test("is idempotent — re-pruning a portable store is a no-op", async () => {
     const store = freshStore();
     await seedRun(store);
