@@ -25,6 +25,7 @@ import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai/c
 import { AuthStorage, getFraguaHome } from "@fragua/agent";
 import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { type IProviderCredentialStore, SqliteStore } from "@fragua/store";
+import { portableOAuthBlob } from "@fragua/workspace";
 import chalk from "chalk";
 
 // pi-ai's github-copilot env fallback includes the generic GH_TOKEN /
@@ -487,7 +488,8 @@ export function seedCredsFromEnv(store: IProviderCredentialStore): string[] {
  *
  * A no-op when there's no global store (a fresh CI machine), so ci falls back to
  * env-only there. Layer `seedCredsFromEnv` AFTER this so an env/CI secret
- * overrides a configured provider (env wins). Returns the providers seeded.
+ * overrides a configured provider (env wins). Returns the providers seeded,
+ * plus one `mcp:<url>` entry per MCP login copied.
  */
 export async function seedCredsFromGlobalStore(
   target: SqliteStore,
@@ -509,6 +511,17 @@ export async function seedCredsFromGlobalStore(
       if (!key || key === "<authenticated>") continue;
       to.set(provider, { type: "api_key", key });
       seeded.push(provider);
+    }
+    // Remote MCP logins ride along the same way: the access token only, never
+    // the refresh token (see the rotation note above), skipped when expired.
+    // Without this an `mcp-servers:` step against an OAuth server reads as
+    // "not logged in" under ci, however many times the operator logged in.
+    const now = Date.now();
+    for (const row of source.listMcpOAuth()) {
+      const blob = portableOAuthBlob(row.payload, now);
+      if (blob === undefined) continue;
+      target.upsertMcpOAuth(row.url, blob);
+      seeded.push(`mcp:${row.url}`);
     }
     // Custom-provider definitions (Ollama / vLLM / proxies) live in
     // provider_config, separate from the credential rows. listProviderConfigs

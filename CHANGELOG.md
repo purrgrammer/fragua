@@ -103,6 +103,20 @@ guarantee.
   printed line.
 - **A timed-out MCP connect cannot surface as an unhandled rejection.** The
   losing connect promise is observed before teardown closes the transport.
+- **`fragua ci` carries MCP OAuth logins.** The ephemeral ci store now receives
+  each stored MCP login as an access-token-only copy (no refresh token, so
+  nothing can rotate out from under the operator's store; expired logins are
+  skipped), so a step with `mcp-servers:` against an OAuth server no longer
+  reads as "not logged in" under ci.
+- **`fragua ci --db` on an existing store leaves it alone.** A pre-existing
+  `--db` store is used as-is: no credentials are seeded over its rows and its
+  credential tables are no longer dropped on exit. Only a store ci created is
+  pruned to the portable tables. `runs export` against a pruned store now
+  succeeds instead of failing on the missing credential tables.
+- **An empty `${VAR}` in `.mcp.json` counts as missing.** A var that is set but
+  blank no longer resolves a server as ready: `mcp ls` reports `missing env:`,
+  and the connector skips the server instead of sending an empty `Authorization`
+  header.
 - **`fragua runs tail` and `runs wait` settle on legacy runs.** The follow loop
   tested only the current contract's terminal facts, so a run terminated under
   an older event contract never settled and the command waited forever.
