@@ -90,7 +90,9 @@ export function extractCredentialLiterals(row: ProviderCredentialRow): string[] 
  * that appears verbatim in an event/artifact is redacted from an export bundle.
  */
 // NOTE: this walks the `mcp_oauth` blob shape owned by `PersistedOAuthState` in
-// @fragua/workspace (mcp/oauth.ts) — { tokens, clientInformation, codeVerifier }.
+// @fragua/workspace (mcp/oauth.ts) — pi-mcp's `McpOAuthState`: { serverUrl,
+// tokens, clientInformation, codeVerifier, tokensExpireAt, oauthState, discovery }.
+// Only tokens / clientInformation.client_secret / codeVerifier hold secrets.
 // @fragua/store can't import across that boundary, so keep the fields below in
 // sync with that type: any field that can hold a secret must be enumerated here.
 export function extractMcpOAuthLiterals(payload: string): string[] {
