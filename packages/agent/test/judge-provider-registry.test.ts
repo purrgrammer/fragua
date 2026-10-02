@@ -126,6 +126,18 @@ describe("loadJudgeProviders", () => {
     }
   });
 
+  test("a `judge:__proto__` row is reported, not registered", () => {
+    const store = new SqliteStore();
+    try {
+      seed(store, "judge:__proto__", { "base-url": "https://x.example.com" });
+      const { providers, error } = loadJudgeProviders(store);
+      expect(Object.hasOwn(providers, "__proto__")).toBe(false);
+      expect(error).toMatch(/not a usable judge provider id/);
+    } finally {
+      store.close();
+    }
+  });
+
   test("a `__proto__` model key cannot poison the merged limits", () => {
     const store = new SqliteStore();
     try {
