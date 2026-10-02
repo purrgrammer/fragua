@@ -1,3 +1,4 @@
+import { tableExists } from "./catalog-queries.ts";
 import {
   deleteProviderCredential as queryDeleteProviderCredential,
   upsertProviderCredential as queryUpsertProviderCredential,
@@ -14,6 +15,8 @@ export function getProviderCredential(ctx: StoreCtx, provider: string): Provider
 }
 
 export function listProviderCredentials(ctx: StoreCtx): ProviderCredentialRow[] {
+  // A store pruned to the portable tables has no credential table at all.
+  if (!tableExists(ctx.db, "provider_credentials")) return [];
   return selectAllProviderCredentials(ctx.db).map(rowToProviderCredential);
 }
 
