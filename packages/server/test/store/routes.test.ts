@@ -1277,6 +1277,17 @@ describe("GET /metrics/global", () => {
     expect(bad.total_runs).toBe(def.total_runs);
     expect(bad.total_runs).toBe(1);
   });
+
+  test("windowHours is clamped, so an oversized window cannot force a full-history scan", async () => {
+    store.enqueueRun({ runId: "old1", workflowSha: "wf" });
+    // A clock six years ahead: the run is inside an unbounded window but
+    // outside the clamped five-year one.
+    const ahead = createRoutes({ store, workflowReader, now: () => Date.now() + 6 * 365 * 24 * 3_600_000 });
+    const get = async (q: string) =>
+      (await (await ahead.request(`/metrics/global${q}`)).json()) as { total_runs: number };
+    expect((await get("")).total_runs).toBe(0);
+    expect((await get("?windowHours=99999999")).total_runs).toBe(0);
+  });
 });
 
 describe("GET /runs/:id — worktreePath resolution", () => {
