@@ -86,6 +86,16 @@ export function planBranchTerminal(nodeId: string): FactEvent {
   };
 }
 
+/** The structural halt for a `type: parallel` node that declares no join or no
+ * branches (`planFanoutStep` → `malformed`). The validator rejects the shape at
+ * save; this is the runtime backstop for an unvalidated save. */
+export function planFanoutMalformed(): FactEvent {
+  return {
+    type: "fact.run_terminated",
+    payload: { status: "errored", reason: "error", detail: "fanout_malformed" },
+  };
+}
+
 /** The per-branch abort-loop pause: a branch that aborted `ceiling` turns in a
  * row parks the run regardless of sibling success. Returns the first such
  * branch's pause fact, or undefined when every streak is below the ceiling. */

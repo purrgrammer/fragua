@@ -231,6 +231,68 @@ export function collectImports(sf: ts.SourceFile): ImportInfo[] {
   return out;
 }
 
+export interface ImportBinding {
+  /** Module specifier the symbol comes from. */
+  module: string;
+  /** Original exported name (`existsSync` for `import { existsSync as e }`);
+   * `"default"` for a default import, `"*"` for a namespace import. */
+  imported: string;
+}
+
+/** Local binding name → its origin, for every value `import` in the file, so an
+ * aliased `import { existsSync as e }` can be matched against the imported symbol
+ * rather than the local name. Type-only imports carry no runtime binding and are
+ * skipped. */
+export function importBindings(sf: ts.SourceFile): Map<string, ImportBinding> {
+  const out = new Map<string, ImportBinding>();
+  walk(sf, (n) => {
+    if (!ts.isImportDeclaration(n) || !ts.isStringLiteral(n.moduleSpecifier)) return;
+    const clause = n.importClause;
+    if (clause === undefined || clause.isTypeOnly) return;
+    const module = n.moduleSpecifier.text;
+    if (clause.name !== undefined) out.set(clause.name.text, { module, imported: "default" });
+    const bindings = clause.namedBindings;
+    if (bindings === undefined) return;
+    if (ts.isNamespaceImport(bindings)) {
+      out.set(bindings.name.text, { module, imported: "*" });
+    } else {
+      for (const spec of bindings.elements) {
+        if (spec.isTypeOnly) continue;
+        out.set(spec.name.text, { module, imported: (spec.propertyName ?? spec.name).text });
+      }
+    }
+  });
+  return out;
+}
+
+/** Alias name → its underlying type node, for every `type X = …` in the file, so
+ * a bare `: X` annotation can be resolved to what `X` actually stands for. */
+export function resolveTypeAliases(sf: ts.SourceFile): Map<string, ts.TypeNode> {
+  const out = new Map<string, ts.TypeNode>();
+  walk(sf, (n) => {
+    if (ts.isTypeAliasDeclaration(n)) out.set(n.name.text, n.type);
+  });
+  return out;
+}
+
+/** Resolve a called symbol to the body of the same-named function it is imported
+ * from over a RELATIVE import, so a lint scanning a call site can follow into the
+ * imported module. Returns the imported module's SourceFile alongside the body so
+ * the caller can keep following same-file helpers there. */
+export function resolveImportedFunctionBody(
+  sf: ts.SourceFile,
+  fromDir: string,
+  name: string,
+): { sf: ts.SourceFile; body: ts.Node } | undefined {
+  const binding = importBindings(sf).get(name);
+  if (binding === undefined || !binding.module.startsWith(".")) return undefined;
+  const resolved = resolveModule(fromDir, binding.module);
+  if (resolved === undefined) return undefined;
+  const moduleSf = parseSource(resolved);
+  const body = sameFileFunctionBodies(moduleSf).get(binding.imported);
+  return body === undefined ? undefined : { sf: moduleSf, body };
+}
+
 export interface MemberAccessInfo {
   objectName: string | undefined;
   name: string;

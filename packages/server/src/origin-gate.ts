@@ -34,6 +34,12 @@ export interface OriginGateOptions {
    * is known only after `Bun.serve` returns (port auto-bump). Returns
    * undefined until the listener is bound — before any request can arrive. */
   boundOrigin: () => { host: string; port: number } | undefined;
+  /** Dev only: trust the Vite dev origin (`http://localhost:5173`, any
+   * loopback host) so `bun run dev:web` can proxy to this listener. OFF by
+   * default — the compiled binary and `fragua harness` never set it, so the
+   * unauthenticated control plane is not drivable from a rogue loopback:5173
+   * page. Set exclusively by `fragua serve --dev`. */
+  devMode?: boolean;
 }
 
 function parsedHost(raw: string | undefined): { hostname: string; port: string } | null {
@@ -46,7 +52,12 @@ function parsedHost(raw: string | undefined): { hostname: string; port: string }
   }
 }
 
-function originAllowed(origin: string, bound: { host: string; port: number } | undefined, hostHeader: string): boolean {
+function originAllowed(
+  origin: string,
+  bound: { host: string; port: number } | undefined,
+  hostHeader: string,
+  devMode: boolean,
+): boolean {
   let u: URL;
   try {
     u = new URL(origin);
@@ -56,7 +67,7 @@ function originAllowed(origin: string, bound: { host: string; port: number } | u
   if (u.protocol !== "http:") return false;
   const host = bareHost(u.hostname);
   const port = u.port;
-  if (isLoopbackBind(host) && port === VITE_DEV_PORT) return true;
+  if (devMode && isLoopbackBind(host) && port === VITE_DEV_PORT) return true;
   if (bound === undefined) return isLoopbackBind(host);
   if (isWildcardBind(bound.host)) {
     const delivered = parsedHost(hostHeader);
@@ -103,11 +114,12 @@ function effectiveHost(c: Context): string {
 }
 
 export function createOriginGate(opts: OriginGateOptions): MiddlewareHandler {
+  const devMode = opts.devMode === true;
   return async (c: Context, next: Next) => {
     const bound = opts.boundOrigin();
     const hostHeader = effectiveHost(c);
     const origin = c.req.header("origin");
-    if (origin !== undefined && !originAllowed(origin, bound, hostHeader)) {
+    if (origin !== undefined && !originAllowed(origin, bound, hostHeader, devMode)) {
       return c.json({ error: "cross-origin request refused", code: "forbidden_origin" }, 403);
     }
     if (!hostAllowed(hostHeader, bound)) {

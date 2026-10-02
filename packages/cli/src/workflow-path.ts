@@ -12,8 +12,8 @@
 // on disk.
 
 import { access } from "node:fs/promises";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { getFraguaHome } from "@fragua/agent";
 
 export type WorkflowScope = "global" | "local" | "path";
 
@@ -31,7 +31,7 @@ export interface ResolvedWorkflow {
 }
 
 export function globalWorkflowsDir(home?: string): string {
-  return resolve(home ?? homedir(), ".fragua/workflows");
+  return home !== undefined ? resolve(home, ".fragua/workflows") : resolve(getFraguaHome(), "workflows");
 }
 
 export function projectWorkflowsDir(cwd: string): string {

@@ -94,9 +94,11 @@ Provider credentials are read by fragua itself. Everything else a workflow's
 `tool` steps need (e.g. `GH_TOKEN` for `gh`) goes through `--allow-env`,
 because `fragua ci` gives tool subprocesses (and the `bash` tool) a
 **deny-by-default** env: a shell inherits only the built-in baseline — `PATH`,
-`HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `LANG`, every `LC_*`, and every
-`FRAGUA_*` engine var — plus the names you pass with `--allow-env`. Everything
-else in the CI job's environment, including the provider credentials, is dropped.
+`HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `LANG`, and every `LC_*` — plus the
+names you pass with `--allow-env`. Everything else in the CI job's environment,
+including the provider credentials and any ambient `FRAGUA_*` var, is dropped;
+engine vars such as `$FRAGUA_OUTPUT` are injected per-step by the engine, not
+admitted by an ambient prefix.
 
 ```yaml
 - run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN

@@ -127,13 +127,16 @@ export function failProvider(
 
 /**
  * Mark an outcome as a hard halt with a named HaltReason. The llm
- * agent boundary uses this for routing-node failure modes
- * (`route_not_picked`, `route_call_not_isolated`) so the handler-bridge
- * converts the outcome into `HandlerResult { kind: "halt", reason }`
- * instead of a transition. Status stays "fail" so any downstream code
- * that checks status alone still treats this as not-success. The outcome
- * becomes a halt (never a transition), so `non_retryable` is inert here —
- * set only for parity with the other failure factories.
+ * agent boundary uses this for the routing-node missing-exit failure
+ * (`route_not_picked`) so the handler-bridge converts the outcome into
+ * `HandlerResult { kind: "halt", reason }` instead of a transition. Status
+ * stays "fail" so any downstream code that checks status alone still treats
+ * this as not-success. The outcome becomes a halt (never a transition), so
+ * `non_retryable` is inert here — set only for parity with the other failure
+ * factories. (Exit-tool isolation breaches — non-isolated `route` / `emit_output`
+ * / `abort` — use `fail(…, { non_retryable: true })` instead, so a fail-edge or
+ * goal-gate can react; `route_call_not_isolated` is a legacy, no-longer-emitted
+ * HaltReason kept only for folding old logs.)
  */
 export function failHalt(reason: HaltReason, message: string): Outcome {
   return {

@@ -12,6 +12,7 @@ import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import { planLeakHalt } from "../src/predispatch-planner.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
@@ -665,6 +666,50 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       .getEvents("leak1")
       .find((e) => e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored");
     expect((halted?.payload as { detail?: string }).detail).toBe("handler_leaked");
+    r.store.close();
+  });
+
+  test("a fan-out branch leak commits exactly planLeakHalt output", async () => {
+    const r = rig({ yaml: HUNG_YAML });
+    r.dispatcher.register(r.workflowSha, "begin", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1000,
+      handler: async () => ({ kind: "transition", nextNode: "fan", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "hung", {
+      kind: "llm",
+      sideEffect: "external",
+      handler: () => new Promise<never>(() => {}),
+    });
+    const instant = (id: string) =>
+      r.dispatcher.register(r.workflowSha, id, {
+        kind: "llm",
+        sideEffect: "external",
+        maxMs: 1000,
+        handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+      });
+    instant("ok");
+    instant("synth");
+    enqueue(r, "leakpair", "begin");
+
+    await drive(r, "leakpair", { fanoutBranchTimeoutMs: 40, leakGraceMs: 20 });
+
+    const events = r.store.getEvents("leakpair");
+    const leaked = events.find((e) => e.type === "fact.handler_timeout_leaked");
+    const terminated = events.find(
+      (e) => e.type === "fact.run_terminated" && (e.payload as { detail?: string }).detail === "handler_leaked",
+    );
+    expect(leaked).toBeDefined();
+    expect(terminated).toBeDefined();
+    const nodeId = (leaked!.payload as { nodeId: string }).nodeId;
+    const leakedAt = (leaked!.payload as { leakedAt: number }).leakedAt;
+    // The two facts the fan-out leak arm committed must be byte-identical to the
+    // pure planner's output for the same (nodeId, leakedAt) — no inline drift.
+    expect([
+      { type: leaked!.type, payload: leaked!.payload },
+      { type: terminated!.type, payload: terminated!.payload },
+    ]).toEqual(planLeakHalt({ nodeId, leakedAt }).facts);
     r.store.close();
   });
 

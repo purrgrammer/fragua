@@ -114,6 +114,13 @@ export interface ServeCommandOptions {
    * production callers so the real `homedir()` is used.
    */
   homeDir?: string;
+  /**
+   * Dev only (`fragua serve --dev`): trust the Vite dev origin
+   * (`http://localhost:5173`) for the same-origin gate so `bun run dev:web`
+   * can proxy to this listener. Also honoured via `FRAGUA_DEV_ORIGIN=1`.
+   * OFF by default — the compiled binary and `fragua harness` never set it.
+   */
+  dev?: boolean;
 }
 
 export interface ServerHandle {
@@ -177,12 +184,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     typeof cfg["max-queued-runs"] === "number" && Number.isFinite(cfg["max-queued-runs"]) && cfg["max-queued-runs"] > 0
       ? cfg["max-queued-runs"]
       : undefined;
+  const devMode = opts.dev === true || process.env["FRAGUA_DEV_ORIGIN"] === "1";
   let bound: { host: string; port: number } | undefined;
   const app = createServer({
     cwd,
     store,
     ports,
     boundOrigin: () => bound,
+    devMode,
     preflightProviders: registryPreflight({
       // `getAvailable()` counts pi-ai MODELS, so a judge-only operator — whose
       // single credential is `typesafe`, which contributes no models — read as
@@ -337,6 +346,10 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
 
   console.log(chalk.green(`fragua serve listening on ${handle.origin}`));
   console.log(chalk.dim(`  store: ${handle.storePath}`));
+  if (opts.dev === true || process.env["FRAGUA_DEV_ORIGIN"] === "1") {
+    console.log(chalk.yellow("  dev:   trusting the Vite dev origin http://localhost:5173 for the same-origin gate"));
+    console.log(chalk.dim(`         point Vite at this API: FRAGUA_API_URL=${handle.url} bun run dev:web`));
+  }
   if (handle.webDistDir) {
     console.log(chalk.dim(`  web:   ${handle.origin}/ (${handle.webDistDir})`));
     console.log(chalk.dim(`  api:   ${handle.url}`));

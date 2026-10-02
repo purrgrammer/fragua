@@ -6,6 +6,9 @@
 // `process.env` breaks the invariant — the executor can't enforce AbortSignal,
 // idempotency keys, or accounting on those paths. A justified seam (the tool
 // handler's injected default spawner) is marked `// handler-discipline-allow:`.
+// The `sideEffect:"external"` -> `ctx.externalCall` check is AST-based and
+// follows the handler's transitive relative imports, so a handler that routes its
+// external call through a helper module OUTSIDE handlers/ is still recognised.
 //
 // Browser safety: @fragua/core's MAIN entry must stay browser-safe. This is a
 // TRANSITIVE walk from `src/index.ts` over relative value imports/re-exports —
@@ -14,7 +17,7 @@
 // though that file lives under a server-only sub-entry.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   allowMarked,
@@ -25,6 +28,7 @@ import {
   lineOf,
   parseSource,
   transitiveRelativeImports,
+  walk,
 } from "@fragua/test-utils";
 import ts from "typescript";
 
@@ -32,6 +36,7 @@ const SRC_DIR = join(__dirname, "..", "..", "src");
 const HANDLERS_DIR = join(SRC_DIR, "handler", "handlers");
 const ENTRY = join(SRC_DIR, "index.ts");
 const ALLOW_MARKER = "handler-discipline-allow:";
+const EXTERNAL_FIXTURES = join(__dirname, "fixtures", "handler-external");
 
 const PURE_HANDLER_FILES = ["handler/types.ts", "handler/intent-fold.ts"].map((p) => join(SRC_DIR, ...p.split("/")));
 
@@ -97,6 +102,46 @@ function scanString(src: string, includeRuntime = true): Offense[] {
   );
 }
 
+/** True when the file defines a handler spec literal with `sideEffect: "external"`. */
+function declaresExternalSideEffect(sf: ts.SourceFile): boolean {
+  let found = false;
+  walk(sf, (n) => {
+    if (
+      ts.isPropertyAssignment(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === "sideEffect" &&
+      ts.isStringLiteralLike(n.initializer) &&
+      n.initializer.text === "external"
+    ) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/** True when the file contains a `ctx.externalCall(...)` call. */
+function usesExternalCall(sf: ts.SourceFile): boolean {
+  return collectCalls(sf, sf).some((c) => {
+    const e = c.node.expression;
+    return (
+      ts.isPropertyAccessExpression(e) &&
+      e.name.text === "externalCall" &&
+      ts.isIdentifier(e.expression) &&
+      e.expression.text === "ctx"
+    );
+  });
+}
+
+/** A handler declaring `sideEffect:"external"` whose import graph never reaches a
+ * `ctx.externalCall` — including through helper modules outside handlers/. */
+function externalSideEffectOffender(file: string): boolean {
+  if (!declaresExternalSideEffect(parseSource(file))) return false;
+  for (const reachable of transitiveRelativeImports(file)) {
+    if (usesExternalCall(parseSource(reachable))) return false;
+  }
+  return true;
+}
+
 describe("handler discipline", () => {
   test("no banned imports / raw fetch / Bun.* / process.env in handlers/", () => {
     const offenders: string[] = [];
@@ -132,17 +177,22 @@ describe("handler discipline", () => {
   });
 
   test('every sideEffect:"external" handler in handlers/ uses ctx.externalCall', () => {
-    const externalRe = /sideEffect\s*:\s*["']external["']/;
-    const usesRe = /\bctx\.externalCall\s*\(/;
     const offenders: string[] = [];
     for (const file of collect(HANDLERS_DIR)) {
-      const src = readFileSync(file, "utf8");
-      if (externalRe.test(src) && !usesRe.test(src)) offenders.push(file);
+      if (externalSideEffectOffender(file)) offenders.push(file);
     }
     if (offenders.length > 0) {
       throw new Error(`Handlers declaring sideEffect:"external" must call ctx.externalCall:\n${offenders.join("\n")}`);
     }
     expect(offenders).toHaveLength(0);
+  });
+
+  test("external side-effect satisfied via an imported helper is not flagged", () => {
+    expect(externalSideEffectOffender(join(EXTERNAL_FIXTURES, "delegated.ts"))).toBe(false);
+  });
+
+  test("external side-effect with no reachable ctx.externalCall is flagged", () => {
+    expect(externalSideEffectOffender(join(EXTERNAL_FIXTURES, "missing.ts"))).toBe(true);
   });
 
   test("pure handler modules (types.ts, intent-fold.ts) have no I/O imports", () => {

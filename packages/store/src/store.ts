@@ -242,6 +242,8 @@ import {
   type DaemonLockRow,
   type EnqueueRunParams,
   type EventWriter,
+  type ExportBundleOptions,
+  type ExportBundleResult,
   type FactAppendResult,
   type FactEvent,
   type GetDaemonEventsOpts,
@@ -252,6 +254,7 @@ import {
   type GetGlobalEventsLatestOpts,
   type GetMessagesOpts,
   type IEventStore,
+  type ImportBundleResult,
   type IntentAppendResult,
   type IntentEvent,
   type IntentType,
@@ -473,34 +476,6 @@ export interface SqliteStoreOpts {
    * store-client (no daemon up) uses this so a stray open can't mutate schema.
    * Default true — the fact-writer owners (harness/daemon) auto-migrate. */
   migrate?: boolean;
-}
-
-/** Options for {@link SqliteStore.exportRunBundle}. */
-export interface ExportBundleOptions {
-  fraguaVersion: string;
-  /** `"source"` (default): markers are `[REDACTED:source]`. `"generic"`:
-   * markers are `[REDACTED]` with no source label (CI bundles). */
-  labelMode?: "source" | "generic";
-  /** Extra literal needles merged into the registry before compilation.
-   * Used by the CI profile to inject captured env secrets. */
-  extraLiterals?: Array<{ value: string; source: string }>;
-  /** The run's terminal result envelope (`fragua ci`'s
-   * `{ runId, status, outputs, usage }`). When supplied it is scrubbed as JSON
-   * and shipped as `runs/<id>/result.json` so an imported run carries the same
-   * object the `--json` stream emitted. Omitted for a non-terminal run. */
-  runResult?: unknown;
-}
-
-/** Return value of {@link SqliteStore.exportRunBundle}. */
-export interface ExportBundleResult {
-  bytes: Uint8Array;
-  /** `true` when a live secret value (provider-credential or `env:*` literal)
-   * was found VERBATIM in an UN-SCRUBBED binary artifact blob. Text surfaces
-   * are always scrubbed, so a literal hit there is non-fatal by design. Binary
-   * blobs ship as-is (§13 residual) and are scanned — a hit means the secret
-   * reached an egress surface the scrubber does NOT redact. Pattern-only
-   * matches never set this flag. */
-  liveLiteralHit: boolean;
 }
 
 export class SqliteStore implements IEventStore {
@@ -2039,10 +2014,7 @@ export class SqliteStore implements IEventStore {
    * blob absent / failing its sha256. The event-contract version is reported
    * (`resumeCompatible`), not gated — a too-new/too-old run still imports for
    * inspection. Idempotent: a run already present is a no-op. */
-  importRunBundle(bytes: Uint8Array): {
-    runs: { runId: string; imported: boolean }[];
-    resumeCompatible: boolean;
-  } {
+  importRunBundle(bytes: Uint8Array): ImportBundleResult {
     const entries = readTar(bytes);
     const byName = new Map(entries.map((e) => [e.name, e.data] as const));
     const manifestEntry = byName.get(MANIFEST_ENTRY);

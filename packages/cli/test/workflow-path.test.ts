@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveWorkflow } from "../src/workflow-path.ts";
+import { globalWorkflowsDir, resolveWorkflow } from "../src/workflow-path.ts";
 
 describe("resolveWorkflow", () => {
   let cwd: string;
@@ -92,5 +92,26 @@ describe("resolveWorkflow", () => {
 
   test("missing path → null", async () => {
     expect(await resolveWorkflow(cwd, "./missing.yaml", { homeDir: home })).toBeNull();
+  });
+});
+
+describe("globalWorkflowsDir", () => {
+  const saved = process.env["FRAGUA_HOME"];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env["FRAGUA_HOME"];
+    else process.env["FRAGUA_HOME"] = saved;
+  });
+
+  test("honours $FRAGUA_HOME when no home arg is passed", () => {
+    const fraguaHome = resolve(tmpdir(), "fragua-env-home");
+    process.env["FRAGUA_HOME"] = fraguaHome;
+    expect(globalWorkflowsDir()).toBe(resolve(fraguaHome, "workflows"));
+  });
+
+  test("home arg still overrides and keeps homedir-base semantics", () => {
+    process.env["FRAGUA_HOME"] = resolve(tmpdir(), "fragua-env-home");
+    const base = resolve(tmpdir(), "some-home");
+    expect(globalWorkflowsDir(base)).toBe(resolve(base, ".fragua/workflows"));
   });
 });

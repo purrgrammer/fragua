@@ -10,6 +10,7 @@ export {
 export {
   type ArtifactListRow,
   type ArtifactScope,
+  type DiffContext,
   type FleetSummary,
   type FleetSummaryOpts,
   type FleetWorkflowRow,

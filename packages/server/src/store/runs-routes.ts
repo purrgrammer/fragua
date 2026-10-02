@@ -81,14 +81,18 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   });
 
   // Full event log. Returns raw store events as-is (fact.* and
-  // intent.* payloads); the web adapter translates. Uncapped — this is
-  // the canonical "give me everything that happened" endpoint, used for
-  // ad-hoc debugging (`curl /api/runs/:id/events.json | jq …`) and as
-  // the source of truth for any post-hoc reducer. Per-step / per-message
-  // shapes have their own narrowed endpoints (`/messages`, `/steps`).
+  // intent.* payloads); the web adapter translates. Uncapped by default —
+  // this is the canonical "give me everything that happened" endpoint, used
+  // for ad-hoc debugging (`curl /api/runs/:id/events.json | jq …`) and as
+  // the source of truth for any post-hoc reducer, so a silent default cap
+  // would drop late events and corrupt those reducers. An optional
+  // `?limit=N` (clamped to [1, EVENTS_LIMIT_MAX]) bounds the scan for a
+  // client that opts in. Per-step / per-message shapes have their own
+  // narrowed endpoints (`/messages`, `/steps`).
   app.get("/runs/:id/events.json", (c) => {
     const runId = c.req.param("id");
-    const events = readPlane.events(runId);
+    const limit = parseEventsLimit(c.req.query("limit"));
+    const events = readPlane.events(runId, limit !== undefined ? { limit } : undefined);
     if (events == null) {
       return c.json({ error: "run not found" }, 404);
     }
@@ -127,7 +131,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // so the web transcript can align looped-node sections to their
   // per-iteration nodeState.
   //
-  // No `limit` is applied — the transcript view shows the full list.
+  // No `limit` is applied by default — the transcript view shows the full
+  // list. An explicit `?limit=N` is clamped to [1, EVENTS_LIMIT_MAX].
   // Clients that need paging pass `?sinceOrdinal=<last>`.
   app.get("/runs/:id/messages", (c) => {
     const runId = c.req.param("id");
@@ -140,10 +145,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       const n = Number(sinceParam);
       if (Number.isFinite(n) && n >= 0) opts.sinceOrdinal = Math.floor(n);
     }
-    if (limitParam) {
-      const n = Number(limitParam);
-      if (Number.isFinite(n) && n > 0) opts.limit = Math.floor(n);
-    }
+    const clampedLimit = parseEventsLimit(limitParam);
+    if (clampedLimit !== undefined) opts.limit = clampedLimit;
     const messages = readPlane.messages(runId, opts);
     if (messages == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
@@ -157,6 +160,9 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
 const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(RUN_STATUSES);
 
 const LIMIT_MAX = 200;
+// Ceiling on the event/message read paths, matching the already-clamped SSE
+// backfill sibling in routes.ts (`{ fallback: 1000, max: 5000 }`).
+const EVENTS_LIMIT_MAX = 5000;
 
 /** Parse + clamp `?limit=N`. Non-numeric or `<= 0` returns undefined
  * (no cap). The clamp guards against a malformed client asking the
@@ -166,6 +172,16 @@ function parseLimit(raw: string | undefined): number | undefined {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return undefined;
   return Math.min(Math.floor(n), LIMIT_MAX);
+}
+
+/** Parse + clamp an event/message `?limit=N` to [1, EVENTS_LIMIT_MAX].
+ * Absent / non-numeric / `<= 0` returns undefined (no cap — the default
+ * for these full-fidelity endpoints is uncapped). */
+function parseEventsLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.floor(n), EVENTS_LIMIT_MAX);
 }
 
 /** Parse `?status=a,b,c` into a deduped list of valid `RunStatus`

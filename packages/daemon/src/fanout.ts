@@ -48,12 +48,14 @@ import {
   planBranchAbortLoop,
   planBranchSettlement,
   planBudgetDisposition,
+  planFanoutMalformed,
   planFanoutStep,
   planJoin,
   planSeedFanout,
 } from "./fanout-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
+import { planLeakHalt } from "./predispatch-planner.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
@@ -453,10 +455,7 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
     deps.leakBudget.recordLeak(deps.runId, outcome.nodeId);
     abortInflightPool(ctx);
     await drainInflightPool(ctx);
-    return commitFanoutDisposition(ctx, [
-      { type: "fact.handler_timeout_leaked", payload: { nodeId: outcome.nodeId, leakedAt: outcome.leakedAt } },
-      { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
-    ]);
+    return commitFanoutDisposition(ctx, planLeakHalt({ nodeId: outcome.nodeId, leakedAt: outcome.leakedAt }).facts);
   }
 
   if (outcome.kind === "abort") {
@@ -685,7 +684,7 @@ export async function runFanout(
         iteration,
         expectedVersion: runState.version,
       },
-      [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "fanout_malformed" } }],
+      [planFanoutMalformed()],
     );
   }
 

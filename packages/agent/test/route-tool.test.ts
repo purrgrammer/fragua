@@ -92,7 +92,7 @@ interface RunWithRouteOpts {
 
 async function runWithRoute(opts: RunWithRouteOpts): Promise<{
   events: CapturedEvent[];
-  outcome: { status: string; route?: string; halt_reason?: string; failure_reason?: string };
+  outcome: { status: string; route?: string; halt_reason?: string; failure_reason?: string; non_retryable?: boolean };
 }> {
   const faux = registerFauxProvider();
   try {
@@ -219,7 +219,7 @@ describe("PiLlmBackend route tool synthesis", () => {
     }
   });
 
-  test("route call alongside another tool call yields halt outcome with reason route_call_not_isolated", async () => {
+  test("route call alongside another tool call yields a non-retryable fail (isolation breach)", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "fragua-route-isolation-"));
     try {
       const { outcome } = await runWithRoute({
@@ -244,7 +244,9 @@ describe("PiLlmBackend route tool synthesis", () => {
         ],
       });
       expect(outcome.status).toBe("fail");
-      expect(outcome.halt_reason).toBe("route_call_not_isolated");
+      expect(outcome.non_retryable).toBe(true);
+      expect(outcome.halt_reason).toBeUndefined();
+      expect(outcome.failure_reason).toContain("shared an assistant response");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
@@ -376,12 +378,13 @@ describe("PiLlmBackend route tool synthesis", () => {
           fauxAssistantMessage([fauxText("done")], { stopReason: "stop" }),
         ],
       });
-      // abort precedence: fail with the abort reason, non_retryable.
-      // The route_call_not_isolated path does NOT fire because abort
-      // short-circuits before the route scan.
+      // abort precedence: the abort scan runs before the route scan, so the
+      // failure is attributed to abort. With abort + route sharing one batch,
+      // that is now the abort isolation breach (non-retryable, never a halt).
       expect(outcome.status).toBe("fail");
-      expect(outcome.failure_reason).toBe("blocked by missing input");
+      expect(outcome.non_retryable).toBe(true);
       expect(outcome.halt_reason).toBeUndefined();
+      expect(outcome.failure_reason).toContain("abort shared an assistant response");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

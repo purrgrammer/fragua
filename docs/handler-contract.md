@@ -254,10 +254,12 @@ are exactly three guardrails, none of which is isolation:
 
 1. **An env allow-list.** The subprocess inherits from the host env only a
    built-in baseline — `PATH`, `HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`,
-   `LANG`, every `LC_*`, every `FRAGUA_*` — plus the operator-declared
+   `LANG`, every `LC_*` — plus the operator-declared
    allow-list (`bash.env-passthrough` under the daemon/harness, `--allow-env`
    under `fragua ci`). Everything else, including the operator's provider
-   credentials, is dropped by default (deny-by-default). Provider-credential
+   credentials and any ambient `FRAGUA_*` var, is dropped by default
+   (deny-by-default); engine vars such as `$FRAGUA_OUTPUT` reach a producing
+   `tool` step through the engine's per-step `opts.env`, not an ambient prefix. Provider-credential
    names are refused from the allow-list outright. This keeps secrets out of the
    shell; it does **not** stop the command from reading the host filesystem or
    reaching the network.

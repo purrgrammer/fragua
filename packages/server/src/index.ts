@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
 import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { makeReadPlane } from "@fragua/core/read-plane";
 import { type IEventStore, newRunId } from "@fragua/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
@@ -61,6 +62,11 @@ export interface ServerOptions {
    * When omitted (or returning undefined), the gate falls back to accepting
    * only loopback-family Origins/Hosts. */
   boundOrigin?: () => { host: string; port: number } | undefined;
+  /** Dev only: trust the Vite dev origin (`http://localhost:5173`) for the
+   * same-origin gate so `bun run dev:web` can proxy to this listener. OFF by
+   * default; set exclusively by `fragua serve --dev`. The compiled binary and
+   * `fragua harness` never enable it. */
+  devMode?: boolean;
   /** Absolute path to the built web bundle (`packages/web/dist/`). When set,
    * the server also hosts the SPA from `/` with the existing API remounted
    * under `/api/*` (matching the client's BASE_URL = "/api"). Leave unset
@@ -114,12 +120,16 @@ function buildApiApp(opts: ServerOptions): Hono {
   const snapshotReader: RunSnapshotReader = ports.runSnapshotReader ?? createRunSnapshotReader();
 
   const api = new Hono();
-  api.use("*", createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined) }));
+  const readPlane = makeReadPlane({ store: opts.store, analytics: opts.store });
+  api.use(
+    "*",
+    createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined), devMode: opts.devMode ?? false }),
+  );
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
-  api.route("/", projectsRoutes({ store: opts.store, reader: projectTreeReader }));
+  api.route("/", projectsRoutes({ readPlane, reader: projectTreeReader }));
   api.route("/", runSnapshotsRoutes({ store: opts.store, reader: snapshotReader }));
-  api.route("/", runFilesRoutes({ store: opts.store, reader: projectTreeReader }));
+  api.route("/", runFilesRoutes({ readPlane, reader: projectTreeReader }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
   api.route("/", analyticsRoutes({ store: opts.store, workflowReader }));
   api.route(
@@ -223,7 +233,10 @@ export function createServer(opts: ServerOptions): Hono {
   }
 
   const app = new Hono();
-  app.use("*", createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined) }));
+  app.use(
+    "*",
+    createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined), devMode: opts.devMode ?? false }),
+  );
   // In web mode the API lives ONLY at `/api/*`. The bare paths (`/runs/:id`,
   // `/workflows`) are client-side routes owned by React Router — anything
   // unmatched on the server falls through to index.html so SPA routing works.
