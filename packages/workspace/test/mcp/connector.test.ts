@@ -328,6 +328,30 @@ describe("createMcpConnector.materialize — live stdio server", () => {
   }, 30_000);
 });
 
+describe("createMcpConnector.materialize — stderr redaction", () => {
+  test("a bare positional secret arg echoed on stderr is redacted from the diagnostic", async () => {
+    const secret = "ghp_positional_secret_value_1234";
+    const cwd = projectWith({
+      mcpServers: {
+        leaky: {
+          command: process.execPath,
+          args: ["-e", "console.error(process.argv[1]); process.exit(3)", secret],
+        },
+      },
+    });
+    const set = await createMcpConnector().materialize(["leaky"], { cwd, connectTimeoutMs: 10_000 });
+    try {
+      expect(set.tools).toEqual([]);
+      expect(set.errors).toHaveLength(1);
+      const message = set.errors[0]?.message ?? "";
+      expect(message).not.toContain(secret);
+      expect(message).toContain("«redacted»");
+    } finally {
+      await set.dispose();
+    }
+  }, 30_000);
+});
+
 const httpServer = (headers: Record<string, string>): ResolvedMcpServer => ({
   transport: "http",
   url: "https://mcp.example.com/mcp",

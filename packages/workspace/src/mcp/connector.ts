@@ -279,8 +279,13 @@ async function connectWithDeadline(
   signal?: AbortSignal,
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // When the deadline or the abort wins the race the connect keeps running
+  // unobserved; a later rejection from it (the caller's close tears the
+  // transport down) must not surface as an unhandled rejection.
+  const connecting = client.connect(transport);
+  connecting.catch(() => {});
   const races: Promise<unknown>[] = [
-    client.connect(transport),
+    connecting,
     new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`connect timed out after ${timeoutMs}ms`)), timeoutMs);
       timer.unref?.();
@@ -409,11 +414,11 @@ function redactSecrets(text: string, server: ResolvedMcpServer): string {
       secrets.push(arg.slice(eq + 1));
       continue;
     }
-    // `--token SECRET` → a non-flag arg that FOLLOWS a flag is a candidate value.
-    // (Over-redacting a boolean-flag operand only blanks a token in the stderr
-    // diagnostic — harmless — whereas missing it leaks a live credential.)
-    const prev = args[i - 1];
-    if (i > 0 && prev !== undefined && prev.startsWith("-") && !arg.startsWith("-")) secrets.push(arg);
+    // Every non-flag arg is a candidate value: `--token SECRET`, but also a
+    // bare positional `SECRET`. Over-redacting a script path or a boolean
+    // flag's operand only blanks a token in the stderr diagnostic — harmless —
+    // whereas missing one leaks a live credential.
+    if (!arg.startsWith("-")) secrets.push(arg);
   }
   let out = text;
   for (const v of secrets) {

@@ -431,10 +431,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 /** Strip control bytes so a hostile `error_description` echoed by the auth
  * server (it reaches us verbatim through the callback's rejection) can't inject
  * terminal escapes when printed, and cap its length. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
+const UNSAFE_TERMINAL_CHARS = /[\x00-\x1f\x7f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
 function sanitizeLoginError(e: unknown): string {
   const message = e instanceof Error ? e.message : String(e);
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control bytes to remove them.
-  return message.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+  // C0/DEL plus the Unicode controls a terminal honours: bidi overrides and
+  // isolates can re-order the rendered line, U+2028/2029 break it, and the
+  // zero-width set hides characters inside it.
+  return message.replace(UNSAFE_TERMINAL_CHARS, "").slice(0, 200);
 }
 
 async function runLoginFlow(

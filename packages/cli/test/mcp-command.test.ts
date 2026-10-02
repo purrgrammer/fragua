@@ -334,6 +334,28 @@ describe("mcp login error paths (no listener / browser)", () => {
     expect(out()).not.toContain("\u0007");
   });
 
+  test("bidi overrides and line separators in the auth error are stripped too", async () => {
+    const dbPath = tempStore();
+    const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });
+    const code = await mcpLoginCommand(
+      "remote",
+      {},
+      { cwd, dbPath },
+      {
+        transportFactory: () => ({
+          connect: async () => {
+            throw new Error("denied\u202e\u2028 ni deggoL\u2069\u200b");
+          },
+          finishAuth: async () => {},
+          close: async () => {},
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(out()).toContain("denied ni deggoL");
+    for (const ch of ["\u202e", "\u2028", "\u2069", "\u200b"]) expect(out()).not.toContain(ch);
+  });
+
   test("valid stored token → fast-path connect resolves → exit 0, transport closed", async () => {
     const dbPath = tempStore();
     const cwd = project({ mcpServers: { remote: { type: "http", url: "https://x.example.com/mcp" } } });

@@ -94,6 +94,15 @@ guarantee.
 
 ### Fixed
 
+- **MCP stdio diagnostics redact every non-flag argument.** A credential passed
+  as a bare positional argument (not only `--flag=VALUE` / `--flag VALUE`) no
+  longer survives into the connect-failure diagnostic or an export bundle.
+- **`fragua mcp login` strips Unicode controls from auth-server errors.** Bidi
+  overrides, isolates, line separators and zero-width characters are removed
+  alongside C0 bytes, so a hostile `error_description` cannot re-order the
+  printed line.
+- **A timed-out MCP connect cannot surface as an unhandled rejection.** The
+  losing connect promise is observed before teardown closes the transport.
 - **`fragua ci` carries MCP OAuth logins.** The ephemeral ci store now receives
   each stored MCP login as an access-token-only copy (no refresh token, so
   nothing can rotate out from under the operator's store; expired logins are
