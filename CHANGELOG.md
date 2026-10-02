@@ -96,6 +96,16 @@ guarantee.
 
 ### Fixed
 
+- **`fragua validate` resolves a bare `judge` step against the configured
+  default provider.** The offline check read `typesafe` regardless of
+  `judge.provider` in the global config, so a workflow could validate green
+  and fail E056 at enqueue.
+- **Judge usage counts are read as finite, non-negative numbers.** A provider
+  response carrying `Infinity` or a negative token count no longer lands a
+  non-finite cost in the event log.
+- **Judge retry backoff has a floor.** The judge client's exponential backoff
+  used full jitter; it now waits at least half its exponential per attempt,
+  matching the llm retry path.
 - **`provider:` on a judge step no longer does nothing.** It parsed, validated,
   and was then dropped before the handler saw it.
 - **A judge state the provider refuses now fails the node instead of halting

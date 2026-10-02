@@ -39,7 +39,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getModels, getProviders } from "@earendil-works/pi-ai/compat";
-import { parseWorkflow } from "@fragua/core";
+import { JUDGE_DEFAULT_PROVIDER, parseWorkflow } from "@fragua/core";
 import { JUDGE_BUILTIN_PROVIDERS, type JudgeProviderRecord } from "@fragua/core/handler";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { findByBareId } from "./credentials/index.ts";
@@ -312,6 +312,9 @@ export function validateWorkflowJudgeProviders(
  * visible, so an unknown provider warns rather than fails — it may be a
  * `judge:<id>` row this process cannot see. A provider that IS known and
  * declares no default model is still a hard error: that one needs no store. */
-export function validateWorkflowJudgeProvidersOffline(source: string): JudgeProviderDiagnostic[] {
-  return checkJudge(source, JUDGE_BUILTIN_PROVIDERS, "typesafe", "warning");
+export function validateWorkflowJudgeProvidersOffline(
+  source: string,
+  defaultProvider: string = JUDGE_DEFAULT_PROVIDER,
+): JudgeProviderDiagnostic[] {
+  return checkJudge(source, JUDGE_BUILTIN_PROVIDERS, defaultProvider, "warning");
 }
