@@ -317,7 +317,7 @@ Common keys (kebab-case; the parser lowers them to the engine's snake_case):
 | `model` | string | Provider-native model id (must be registered). |
 | `provider` | string | Provider key (defaults to daemon default / `defaults:`). |
 | `thread` | string | Share an LLM conversation across steps (§6). |
-| `outputs` | map | Typed step outputs (`llm` only; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
+| `outputs` | map | Typed step outputs (`llm` or `tool`; mutually exclusive with `routes:`). Read downstream as `${{ outputs.X.f }}` (§6). |
 | `allowed-tools` | string[] | Tool whitelist. Name them — unconstrained is usually wrong. |
 | `denied-tools` | string[] | Subtractive filter. |
 | `mcp-servers` | string[] | MCP servers (from `.mcp.json`) to connect for this `llm` step; their tools materialise as `mcp__<server>__<tool>` (§7 · The toolset). |
