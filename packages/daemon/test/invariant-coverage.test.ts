@@ -1,10 +1,10 @@
 // Invariant → owner coverage map. The single checked-in place that answers
 // "which invariant is proven where," so it's tracked instead of reconstructed
-// by grep. Covers SPEC §4 (I1–I10), the ARCH §10 property matrix (P1–P27), and
+// by grep. Covers SPEC §4 (I1–I10), the ARCH §10 property matrix (P1–P32), and
 // the finer state-machine invariants (executor-pbt-decomposition §5) that the
 // driven harness + the shared checkRunInvariants add on top.
 //
-// The tests assert the map stays well-formed: every I1–I10 and P1–P27 is
+// The tests assert the map stays well-formed: every I1–I10 and P1–P32 is
 // present, every entry is triaged (has an owner or a GAP reason), no id is
 // duplicated. Adding/removing an invariant forces updating this map.
 //
@@ -39,6 +39,8 @@ const INVARIANTS = "packages/daemon/test/invariants.ts";
 const TRANSITION = "packages/daemon/test/transition-planner.property.test.ts";
 const ABORT_PLANNER = "packages/daemon/test/abort-planner.property.test.ts";
 const PAUSE_MAPPING = "packages/daemon/test/pause-mapping.test.ts";
+const FANOUT_PBT = "packages/daemon/test/executor.fanout.property.test.ts";
+const FANOUT_EXAMPLE = "packages/daemon/test/executor.fanout.test.ts";
 const REAPER = "packages/daemon/test/reaper-event.test.ts";
 const SERVER_ROUTES = "packages/server/test/store/routes.test.ts";
 
@@ -321,6 +323,41 @@ const COVERAGE: InvariantCoverage[] = [
     owner: "matrix.property.test.ts",
     ownerFiles: [MATRIX],
   },
+  {
+    id: "P28",
+    statement: "fan-out replay-equivalence: deriveRunState(log) ≡ live; each branch runs once; joined once",
+    status: "covered",
+    owner: "executor.fanout.property.test.ts (generative) + executor.fanout.test.ts (example)",
+    ownerFiles: [FANOUT_PBT, FANOUT_EXAMPLE],
+  },
+  {
+    id: "P29",
+    statement: "fan-out crash recovery: only uncommitted sub-nodes re-run; the region converges",
+    status: "covered",
+    owner: "executor.fanout.property.test.ts (generative crash) + executor.fanout.test.ts (asymmetric example)",
+    ownerFiles: [FANOUT_PBT, FANOUT_EXAMPLE],
+  },
+  {
+    id: "P30",
+    statement: "OCC on the fan-out seams: region joins exactly once; replay ≡ live; never wedged in running",
+    status: "covered",
+    owner: "executor.fanout.property.test.ts (OCC fault schedule over fault-store.ts)",
+    ownerFiles: [FANOUT_PBT, FAULTS],
+  },
+  {
+    id: "P31",
+    statement: "per-branch liveness: a hung branch leak-halts the run rather than wedging the pool",
+    status: "covered",
+    owner: "executor.fanout.property.test.ts (hung-branch deadline) + executor.fanout.test.ts (leak/abort examples)",
+    ownerFiles: [FANOUT_PBT, FANOUT_EXAMPLE],
+  },
+  {
+    id: "P32",
+    statement: "fan-out frontier isolation: only the four fan-out fact types change the active-node frontier",
+    status: "covered",
+    owner: "executor.fanout.property.test.ts (prefix-fold frontier delta)",
+    ownerFiles: [FANOUT_PBT],
+  },
 
   // ── executor-pbt-decomposition §5 — finer state-machine invariants ───────
   {
@@ -405,10 +442,10 @@ describe("invariant coverage map", () => {
     }
   });
 
-  test("every SPEC §4 (I1–I10) and ARCH §10 (P1–P27) invariant is present", () => {
+  test("every SPEC §4 (I1–I10) and ARCH §10 (P1–P32) invariant is present", () => {
     const ids = new Set(COVERAGE.map((c) => c.id));
     for (let i = 1; i <= 10; i++) expect(ids.has(`I${i}`)).toBe(true);
-    for (let i = 1; i <= 27; i++) expect(ids.has(`P${i}`)).toBe(true);
+    for (let i = 1; i <= 32; i++) expect(ids.has(`P${i}`)).toBe(true);
   });
 
   test("no untracked gaps: any `gap` carries a GAP: reason", () => {

@@ -191,12 +191,12 @@ export function scheduleDispatcherTick(opts: ScheduleDispatcherOpts): FireOutcom
         ? { workflowName: resolved.name, workflowScope: resolved.scope }
         : { workflowScope: "path" as const, workflowPath: resolved.dotPath }),
       scheduleId: row.id,
+      ...(row.title != null && row.title.length > 0 ? { title: row.title } : {}),
     });
     if (!enq.ok) continue; // unreachable: no inputDecls ⇒ no validation failure
     plane.commitEnqueue(enq.params);
     const runId = enq.runId;
     opts.store.recordScheduleFire(row.id, runId, now);
-    if (row.title != null && row.title.length > 0) opts.store.setRunTitle(runId, row.title);
     opts.store.appendDaemonEvent(
       {
         type: "fact.schedule_fired",

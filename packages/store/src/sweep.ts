@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { insertDaemonEvent } from "./daemon-queries.ts";
+import { crashRequeueActiveMsDelta } from "./reducers.ts";
 import type { SweepResult } from "./types.ts";
 
 interface RunningRow {
@@ -174,20 +175,11 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
         `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_requeued_after_crash', 'daemon', ?, ?)`,
       ).run(row.run_id, seq, requeuePayloads.get(row.run_id) ?? "{}", ts);
-      // Sweep bypasses the reducer, so the activeMs credit logic in
-      // applyFact for fact.run_requeued_after_crash doesn't fire here.
-      // Mirror it in SQL: when priorHeartbeatAt is set and strictly
-      // after dispatchStartedAt, credit the pre-crash span. Otherwise
-      // drop it (heartbeat unavailable or stale).
-      const lastAlive = opts?.priorHeartbeatAt;
-      let activeMsDelta = 0;
-      if (
-        typeof lastAlive === "number" &&
-        current.dispatch_started_at != null &&
-        lastAlive > current.dispatch_started_at
-      ) {
-        activeMsDelta = lastAlive - current.dispatch_started_at;
-      }
+      // Sweep bypasses the reducer, so the activeMs credit in applyFact for
+      // fact.run_requeued_after_crash doesn't fire here. Compute it via the
+      // same shared helper the reducer calls, then apply it in SQL — one
+      // source of truth so the fold and the projection can't drift.
+      const activeMsDelta = crashRequeueActiveMsDelta(current.dispatch_started_at, opts?.priorHeartbeatAt);
       // Preserve current_node so the executor resumes on the in-flight node
       // instead of re-emitting fact.run_started and re-running the workflow
       // from the start node. Partial-side-effect safety is covered by the

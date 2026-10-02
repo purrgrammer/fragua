@@ -399,7 +399,7 @@ function buildParallelGraph(branchSpecs: readonly BranchSpec[]): Graph {
   return { id: "g", directed: true, attrs: {}, nodes, edges };
 }
 
-const arbParallelGraph: fc.Arbitrary<Graph> = fc
+export const arbParallelGraph: fc.Arbitrary<Graph> = fc
   .array(fc.record({ length: fc.constantFrom<1 | 2>(1, 2) }), { minLength: 2, maxLength: 3 })
   .map((branchSpecs) => buildParallelGraph(branchSpecs));
 

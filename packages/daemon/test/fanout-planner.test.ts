@@ -3,7 +3,14 @@
 // `runFanout` reads, calls, then applies.
 
 import { describe, expect, test } from "bun:test";
-import { type FanoutFrontier, planFanoutStep } from "../src/fanout-planner.ts";
+import type { FactEvent } from "@fragua/store";
+import {
+  type FanoutFrontier,
+  noteDisposition,
+  planBranchAbortLoop,
+  planBranchTerminal,
+  planFanoutStep,
+} from "../src/fanout-planner.ts";
 
 const frontier = (over: Partial<FanoutFrontier>): FanoutFrontier => ({
   active: null,
@@ -105,5 +112,67 @@ describe("planFanoutStep", () => {
     const second = planFanoutStep(input);
     expect(first).toEqual(second);
     expect(input).toEqual(snapshot);
+  });
+});
+
+const halt = (detail: string): FactEvent => ({
+  type: "fact.run_terminated",
+  payload: { status: "errored", reason: "error", detail },
+});
+const pause = (nodeId: string): FactEvent => ({
+  type: "fact.run_paused",
+  payload: { reason: "operator", nodeId },
+});
+
+describe("noteDisposition", () => {
+  test("keeps the first halt over any subsequent pause", () => {
+    const first = halt("a");
+    expect(noteDisposition(first, pause("b"))).toBe(first);
+  });
+
+  test("a halt overrides a previously-captured pause", () => {
+    const incoming = halt("a");
+    expect(noteDisposition(pause("b"), incoming)).toBe(incoming);
+  });
+
+  test("first halt wins over a later halt", () => {
+    const first = halt("a");
+    expect(noteDisposition(first, halt("b"))).toBe(first);
+  });
+
+  test("first pause wins over a later pause", () => {
+    const first = pause("a");
+    expect(noteDisposition(first, pause("b"))).toBe(first);
+  });
+
+  test("undefined current takes the incoming fact", () => {
+    const incoming = pause("a");
+    expect(noteDisposition(undefined, incoming)).toBe(incoming);
+  });
+});
+
+describe("planBranchTerminal", () => {
+  test("fails closed with fanout_branch_terminal:<node>", () => {
+    expect(planBranchTerminal("scan")).toEqual({
+      type: "fact.run_terminated",
+      payload: { status: "errored", reason: "error", detail: "fanout_branch_terminal:scan" },
+    });
+  });
+});
+
+describe("planBranchAbortLoop", () => {
+  test("pauses the run at the per-branch ceiling", () => {
+    const streaks = new Map([
+      ["a", 2],
+      ["b", 5],
+    ]);
+    expect(planBranchAbortLoop(streaks, 5)).toEqual({
+      type: "fact.run_paused",
+      payload: { reason: "abort_loop", nodeId: "b", consecutiveAborts: 5 },
+    });
+  });
+
+  test("no branch at the ceiling → undefined", () => {
+    expect(planBranchAbortLoop(new Map([["a", 1]]), 5)).toBeUndefined();
   });
 });

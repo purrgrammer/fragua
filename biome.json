@@ -66,6 +66,25 @@
   },
   "overrides": [
     {
+      "includes": ["packages/core/src/handler/handlers/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "node:fs": "handlers are pure; persist via ctx.artifacts",
+                  "node:child_process": "handlers must not spawn processes",
+                  "undici": "go through ctx.http"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["packages/web/src/components/ui/**", "packages/web/src/components/ai-elements/**"],
       "linter": {
         "rules": {

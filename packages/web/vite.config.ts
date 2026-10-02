@@ -12,13 +12,13 @@
 //     returns JSON and bypasses React Router entirely. In prod the web
 //     bundle is served from the same origin as the fragua server so there
 //     is no proxy at all.
-//   - Target selection: always proxy to the daemon. The daemon's
-//     `/health` is the only one that carries the `daemon` key the UI
-//     keys its job-queue features off of, so pointing the dev proxy at a
-//     plain `fragua serve` (port 3000) would hide the banner state we
-//     want. Read the live port from `.fragua/daemon/daemon.json`; if the
-//     pidfile isn't there yet, fall back to the daemon's default port
-//     (3737) so starting the daemon after Vite just works on reload.
+//   - Target selection: the primary path is the `FRAGUA_API_URL` env var
+//     set by `fragua serve --dev` (the parent binds the API and tells Vite
+//     where it is). Runtime server discovery otherwise lives in the store's
+//     `server_endpoint` row, which the browser UI reads directly — the Vite
+//     dev proxy can't open the store, so absent the env var it falls back to
+//     the harness default port (6767) so starting the harness after Vite
+//     just works on reload.
 //
 // Path alias:
 //   - `@/` → `src/`. Required by shadcn/ui + AI Elements components,
@@ -26,10 +26,9 @@
 //     `@/lib/utils`. Kept in lockstep with `tsconfig.json#paths`.
 //
 // Build: emits a static bundle into `dist/` that `fragua serve` can host.
-// Test:  happy-dom (see test/setup.ts) keeps tests runtime-agnostic.
+// Test:  jsdom (see test/vitest.setup.ts + vitest.config.ts) — Radix portals
+//        need its layout/focus shims, which happy-dom does not provide.
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -57,21 +56,11 @@ function resolveServerTarget(): ProxyTarget {
     const origin = apiSuffixed.slice(0, -"/api".length);
     return { target: origin, stripApiPrefix: false };
   }
-  // 2. Legacy fallback: read the daemon pidfile and proxy to its built-in
-  //    HTTP (API at root, requires `/api` rewrite). Walks up from
-  //    `packages/web/vite.config.ts` to the repo root.
-  const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
-  try {
-    const raw = readFileSync(resolve(repoRoot, ".fragua/daemon/daemon.json"), "utf8");
-    const { port } = JSON.parse(raw) as { port?: number };
-    if (typeof port === "number" && port > 0) {
-      return { target: `http://localhost:${port}`, stripApiPrefix: true };
-    }
-  } catch {
-    // No daemon pidfile yet — fall through to the daemon's default port
-    // so starting the daemon after Vite just works on next reload.
-  }
-  return { target: "http://localhost:3737", stripApiPrefix: true };
+  // 2. Fallback: proxy to the harness's built-in HTTP on its default port
+  //    (API at root, requires the `/api` rewrite). The live port lives in the
+  //    store's `server_endpoint` row, which this config can't open, so use the
+  //    default — override with `FRAGUA_API_URL` if the harness bound elsewhere.
+  return { target: "http://localhost:6767", stripApiPrefix: true };
 }
 
 const proxy = resolveServerTarget();

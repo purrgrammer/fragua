@@ -10,7 +10,7 @@
 *fragua — Spanish for forge.*
 
 [![CI](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml/badge.svg)](https://github.com/purrgrammer/fragua/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.10.0-blue)](https://github.com/purrgrammer/fragua/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.11.1-blue)](https://github.com/purrgrammer/fragua/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **A durable, steerable, auditable control plane for an AI coding harness.** Wire LLM agents into a YAML state machine; fragua runs it deterministically — survives crashes and provider outages, lets you steer a live run mid-flight, and records every run as a replayable artifact. It's the control plane, not the model — not a replacement for Claude Code or Codex, but the layer that makes an agent loop durable, inspectable, and safe to leave running. On your laptop and in CI.

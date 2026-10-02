@@ -2,23 +2,11 @@
 // Reads/writes schedule rows + their daemon-event audit trail straight on the
 // local store (no HTTP). Store path: --db, else ~/.fragua/fragua.db (harness).
 
-import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
-import type { Schedule, ScheduleOverlapPolicy } from "@fragua/store";
+import type { Schedule } from "@fragua/store";
 import chalk from "chalk";
 import { resolveProject } from "../project.ts";
 import { withStoreClient } from "../store-client.ts";
-
-/** Interval shorthand \u2192 ms. `interval_ms` is forward-compatible if cron lands. */
-const INTERVAL_MS: Record<string, number> = {
-  "30m": 30 * 60 * 1000,
-  "1h": 60 * 60 * 1000,
-  "6h": 6 * 60 * 60 * 1000,
-  "24h": 24 * 60 * 60 * 1000,
-  "3d": 3 * 24 * 60 * 60 * 1000,
-  "7d": 7 * 24 * 60 * 60 * 1000,
-};
-const ALLOWED_OVERLAP = new Set(["skip", "queue", "concurrent"]);
 
 interface ScheduleOpts {
   cwd?: string;
@@ -33,15 +21,6 @@ interface RecentRun {
 
 type ScheduleListRow = Schedule & { recentRuns?: RecentRun[] };
 
-/** Mint a schedule id \u2014 same Crockford-ish form the server used. */
-function newScheduleId(): string {
-  const buf = randomBytes(6);
-  const alph = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let s = "";
-  for (let i = 0; i < buf.length; i++) s += alph[buf[i]! % 36];
-  return `sch_${s}`;
-}
-
 export interface ScheduleAddOptions extends ScheduleOpts {
   workflow: string;
   every: string;
@@ -52,51 +31,28 @@ export interface ScheduleAddOptions extends ScheduleOpts {
 }
 
 export async function scheduleAddCommand(opts: ScheduleAddOptions): Promise<number> {
-  const intervalMs = INTERVAL_MS[opts.every];
-  if (intervalMs === undefined) {
-    console.error(chalk.red(`schedule add: --every must be one of 30m, 1h, 6h, 24h, 3d, 7d`));
-    return 1;
-  }
-  const overlap = opts.overlap ?? "skip";
-  if (!ALLOWED_OVERLAP.has(overlap)) {
-    console.error(chalk.red(`schedule add: --on-overlap must be one of skip, queue, concurrent`));
-    return 1;
-  }
-  const overlapPolicy = overlap as ScheduleOverlapPolicy;
   // Resolve project identity at the boundary (walk-up + auto-init); the
   // schedule records cwd as the project root and carries the project id so
   // fired runs attribute correctly.
   const project = await resolveProject(opts.cwd ?? process.cwd());
-  const fireOnCreate = opts.noFireOnCreate !== true;
-  return withStoreClient(opts, ({ store }) => {
-    const id = newScheduleId();
-    const created = store.createSchedule(
-      {
-        id,
-        workflowRef: opts.workflow,
-        cwd: project.projectRoot,
-        projectId: project.projectId,
-        intervalMs,
-        intervalText: opts.every,
-        ...(opts.title !== undefined ? { title: opts.title } : {}),
-        overlapPolicy,
-        fireOnCreate,
-      },
-      Date.now(),
-    );
-    store.appendDaemonEvent({
-      type: "intent.schedule_create",
-      payload: {
-        scheduleId: id,
-        workflowRef: opts.workflow,
-        cwd: project.projectRoot,
-        intervalMs,
-        intervalText: opts.every,
-        ...(opts.title !== undefined ? { title: opts.title } : {}),
-        overlapPolicy,
-        fireOnCreate,
-      },
+  return withStoreClient(opts, ({ plane }) => {
+    // Validation (interval / overlap whitelists), id mint, and the atomic
+    // row + audit-event write all live in the intent plane — the single
+    // implementation the server route shares.
+    const build = plane.buildScheduleCreate({
+      workflow: opts.workflow,
+      cwd: project.projectRoot,
+      projectId: project.projectId,
+      every: opts.every,
+      ...(opts.title !== undefined ? { title: opts.title } : {}),
+      ...(opts.overlap !== undefined ? { overlap: opts.overlap } : {}),
+      fireOnCreate: opts.noFireOnCreate !== true,
     });
+    if (!build.ok) {
+      console.error(chalk.red(`schedule add: ${build.error}`));
+      return 1;
+    }
+    const created = plane.commitScheduleCreate(build.create, Date.now());
     console.log(chalk.green(`schedule created: ${created.id}`));
     console.log(
       chalk.dim(
@@ -142,39 +98,36 @@ export interface ScheduleIdOptions extends ScheduleOpts {
 }
 
 export async function scheduleRmCommand(opts: ScheduleIdOptions): Promise<number> {
-  return withStoreClient(opts, ({ store }) => {
+  return withStoreClient(opts, ({ store, plane }) => {
     if (store.getSchedule(opts.id) == null) {
       console.error(chalk.red(`schedule rm: not found: ${opts.id}`));
       return 1;
     }
-    store.deleteSchedule(opts.id);
-    store.appendDaemonEvent({ type: "intent.schedule_delete", payload: { scheduleId: opts.id } });
+    plane.commitScheduleDelete(opts.id, plane.buildScheduleDelete(opts.id), Date.now());
     console.log(chalk.green(`schedule deleted: ${opts.id}`));
     return 0;
   });
 }
 
 export async function schedulePauseCommand(opts: ScheduleIdOptions): Promise<number> {
-  return withStoreClient(opts, ({ store }) => {
+  return withStoreClient(opts, ({ store, plane }) => {
     if (store.getSchedule(opts.id) == null) {
       console.error(chalk.red(`schedule pause: not found: ${opts.id}`));
       return 1;
     }
-    store.pauseSchedule(opts.id, Date.now());
-    store.appendDaemonEvent({ type: "intent.schedule_pause", payload: { scheduleId: opts.id } });
+    plane.commitSchedulePause(opts.id, plane.buildSchedulePause(opts.id), Date.now());
     console.log(chalk.green(`schedule paused: ${opts.id}`));
     return 0;
   });
 }
 
 export async function scheduleResumeCommand(opts: ScheduleIdOptions): Promise<number> {
-  return withStoreClient(opts, ({ store }) => {
+  return withStoreClient(opts, ({ store, plane }) => {
     if (store.getSchedule(opts.id) == null) {
       console.error(chalk.red(`schedule resume: not found: ${opts.id}`));
       return 1;
     }
-    store.resumeSchedule(opts.id, Date.now());
-    store.appendDaemonEvent({ type: "intent.schedule_resume", payload: { scheduleId: opts.id } });
+    plane.commitScheduleResume(opts.id, plane.buildScheduleResume(opts.id), Date.now());
     console.log(chalk.green(`schedule resumed: ${opts.id}`));
     return 0;
   });

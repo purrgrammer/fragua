@@ -40,15 +40,19 @@ export const ModelBreakdownRow = Type.Object({
 export type ModelBreakdownRow = Static<typeof ModelBreakdownRow>;
 
 /**
- * One row in `GET /projects`. A "project" is just a distinct
- * `run_state.cwd` — no separate registration table. `cwd` is the wire
- * identity (full absolute path); `name` is `basename(cwd)`, surfaced
- * server-side so the web doesn't reimplement path parsing. Two
- * checkouts of the same repo at different paths are distinct projects.
+ * One row in `GET /projects`. A "project" is a distinct `run_state.project_id`
+ * (IDENTITY) — the stable UUID committed in `<cwd>/.fragua/config.yaml`, so
+ * clones, machines, and imports of the same project fold into one row. There is
+ * no separate registration table. `projectId` is the wire identity; `name` is
+ * the display label; `cwd` / `cwdHint` carry the most-recent local checkout as a
+ * LOCATION hint for the file/tree views — either is `null` for an imported-only
+ * project with no local checkout.
  */
 export const ProjectSummary = Type.Object({
-  cwd: Type.String(),
+  projectId: Type.String(),
   name: Type.String(),
+  cwd: Type.Union([Type.String(), Type.Null()]),
+  cwdHint: Type.Union([Type.String(), Type.Null()]),
   lastUpdatedAt: Type.Integer({ minimum: 0 }),
   runCount: Type.Integer({ minimum: 0 }),
 });

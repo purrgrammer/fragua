@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { LlmBackend, Node, OutcomeStatus } from "@fragua/core";
-import { CURRENT_IR_VERSION, fail, failProvider, ok, parseWorkflow, serializeGraph } from "@fragua/core";
+import {
+  CURRENT_IR_VERSION,
+  fail,
+  failProvider,
+  ok,
+  parseWorkflow,
+  serializeGraph,
+  wrapOutputValue,
+} from "@fragua/core";
 import * as handler from "@fragua/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@fragua/store";
 import fc from "fast-check";
@@ -365,7 +373,9 @@ describe("makeLlmHandler", () => {
       backend: capture,
     });
     await spec.handler(ctx);
-    expect(seenPrompt).toBe("Fix BUG-42 on prod");
+    // Inputs are wrapped in the content-hash delimiter for prompt consumption
+    // (prompt-injection hardening) — the same fence outputs get.
+    expect(seenPrompt).toBe(`Fix ${wrapOutputValue("BUG-42")} on ${wrapOutputValue("prod")}`);
     store.close();
   });
 
@@ -401,7 +411,7 @@ describe("makeLlmHandler", () => {
     expect(seenPrompt).toBe(
       `Operator instruction from gate "plan_gate" (chose route "revise")${tail}\nuse the v2 schema\n\n` +
         `Operator instruction from gate "scope_gate" (chose route "approve")${tail}\nskip the migration\n\n` +
-        "Fix BUG-42",
+        `Fix ${wrapOutputValue("BUG-42")}`,
     );
     store.close();
   });

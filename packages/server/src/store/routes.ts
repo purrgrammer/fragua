@@ -437,15 +437,13 @@ export function createRoutes(deps: ServerDeps): Hono {
         ? { workflowScope: body.workflowScope }
         : {}),
       ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
+      ...(typeof body.title === "string" && body.title.length > 0 ? { title: body.title } : {}),
     });
     if (!enq.ok) {
       return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
     }
     try {
       plane.commitEnqueue(enq.params);
-      if (typeof body.title === "string" && body.title.length > 0) {
-        deps.store.setRunTitle(enq.runId, body.title);
-      }
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
@@ -770,7 +768,14 @@ export function createRoutes(deps: ServerDeps): Hono {
   return app;
 }
 
-async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promise<T | null> {
+async function readJson<T>(c: Context): Promise<T | null> {
+  // Fail closed on non-JSON bodies even if a request reaches here without the
+  // same-origin gate: Hono's `json()` is `text().then(JSON.parse)` and would
+  // otherwise accept a text/plain body. A null return maps to the route's 400.
+  const ct = c.req.header("content-type");
+  if (ct !== undefined && !ct.trim().toLowerCase().startsWith("application/json")) {
+    return null;
+  }
   try {
     return (await c.req.json()) as T;
   } catch {

@@ -329,6 +329,45 @@ describe("validate — E031 retry gate without max_retries", () => {
   });
 });
 
+describe("validate — E057 retry_target on a non-goal-gate step", () => {
+  test("retry_target set without goal_gate → E057 error", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        work: { type: "llm", attrs: { retry_target: "fix" } },
+        fix: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "work"],
+        ["work", "done"],
+        ["fix", "work"],
+      ],
+    });
+    const e057 = validate(g).filter((d) => d.code === "E057");
+    expect(e057).toHaveLength(1);
+    expect(e057[0]?.nodeId).toBe("work");
+    expect(e057[0]?.severity).toBe("error");
+  });
+
+  test("a proper retry: gate (goal_gate + retry_target) does not trip E057", () => {
+    const g = mkGraph({
+      nodes: {
+        s: "start",
+        gate: { type: "llm", attrs: { goal_gate: true, retry_target: "fix", max_retries: 2 } },
+        fix: "llm",
+        done: "exit",
+      },
+      edges: [
+        ["s", "gate"],
+        ["gate", "done"],
+        ["fix", "gate"],
+      ],
+    });
+    expect(codesOf(g)).not.toContain("E057");
+  });
+});
+
 describe("validate — E032 step without a success successor", () => {
   test("llm step with no outgoing edge → E032", () => {
     const g = mkGraph({

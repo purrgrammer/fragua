@@ -72,213 +72,243 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
 
   // Result-specific facts.
   switch (result.kind) {
-    case "transition": {
-      // The executor resolves edge selection before calling resultToFacts,
-      // so nextNode is populated by this point. Defaulting to __end__
-      // matches the "no outgoing edges" terminal rule if anything upstream
-      // missed the substitution.
-      const nextNode = result.nextNode ?? "__end__";
-      const pass = readGoalGateRetries(ctx.state.routing);
-      const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
-        nodeId: ctx.state.currentNode ?? "",
-        iteration: nodeRetryCount(ctx.state.routing, ctx.state.currentNode ?? ""),
-        tokens: result.tokens,
-        costUsd: result.costUsd,
-        nextNode,
-      };
-      // Goal-gate re-entry epoch: a retarget pass resets per-node retry
-      // counters (§3.4), so `(nodeId, iteration)` alone collides across
-      // passes — the epoch keeps each pass's facts distinct.
-      Object.assign(payload, passField(pass));
-      if (result.modelName != null) payload.modelName = result.modelName;
-      if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
-      // Route field lands on the fact when a routing node picked a branch —
-      // an llm via the synthesised `route` tool, or a judge via
-      // `decide.route`. Non-routing nodes leave `result.route` undefined;
-      // the field stays absent from the JSON.
-      if (result.route != null && result.route.length > 0) payload.route = result.route;
-      // Structured outputs: attach unconditionally. The store spills an
-      // oversized struct to the blob CAS at append time (the event keeps a tiny
-      // `{$fragua_blob}` ref under the 4 KiB cap), so size is no longer a node
-      // failure — `result-to-facts` stays a pure size-agnostic projection.
-      if (result.outputs !== undefined) {
-        payload.outputs = result.outputs as Record<string, unknown>;
-      }
-      // Input/output/cache split — emit only when non-zero so legacy
-      // handlers without the split keep their payload size unchanged
-      // (§I7 keeps events ≤4KB).
-      if (result.inputTokens != null && result.inputTokens > 0) payload.inputTokens = result.inputTokens;
-      if (result.outputTokens != null && result.outputTokens > 0) payload.outputTokens = result.outputTokens;
-      if (result.cacheReadTokens != null && result.cacheReadTokens > 0) {
-        payload.cacheReadTokens = result.cacheReadTokens;
-      }
-      if (result.cacheWriteTokens != null && result.cacheWriteTokens > 0) {
-        payload.cacheWriteTokens = result.cacheWriteTokens;
-      }
-      if (result.inputCostUsd != null && result.inputCostUsd > 0) payload.inputCostUsd = result.inputCostUsd;
-      if (result.outputCostUsd != null && result.outputCostUsd > 0) payload.outputCostUsd = result.outputCostUsd;
-      if (result.cacheReadCostUsd != null && result.cacheReadCostUsd > 0) {
-        payload.cacheReadCostUsd = result.cacheReadCostUsd;
-      }
-      if (result.cacheWriteCostUsd != null && result.cacheWriteCostUsd > 0) {
-        payload.cacheWriteCostUsd = result.cacheWriteCostUsd;
-      }
-      facts.push({ type: "fact.node_completed", payload });
-
-      if (isTerminalNode(nextNode)) {
-        // A failure reaches a terminal in two ways, and they mean
-        // opposite things:
-        //   - `__end__` is the executor's no-fail-route sentinel — the
-        //     node failed and the author declared no fail edge. That
-        //     halts the run (`aborted_exit`); the reducer maps "halted"
-        //     to the UI's "fail" status. The handler's `failureReason`
-        //     (e.g. the agent's `<abort>reason</abort>`) surfaces
-        //     verbatim as the halt detail.
-        //   - An explicit sink (`exit`) reached via a fail edge is a
-        //     sanctioned graceful landing the author opted into — the
-        //     run completes, not halts.
-        if (nextNode === "__end__" && result.outcomeStatus === "fail") {
-          const detail =
-            typeof result.failureReason === "string" && result.failureReason.length > 0
-              ? result.failureReason
-              : `node ${ctx.state.currentNode ?? "?"} failed with no fail route`;
-          facts.push({
-            type: "fact.run_terminated",
-            payload: { status: "errored", reason: "aborted_exit", detail },
-          });
-        } else {
-          facts.push({
-            type: "fact.run_terminated",
-            payload: { status: "completed", finalNode: nextNode },
-          });
-        }
-      } else {
-        const startedPayload: Extract<FactEvent, { type: "fact.node_started" }>["payload"] = {
-          nodeId: nextNode,
-          iteration: nodeRetryCount(ctx.state.routing, nextNode),
-        };
-        Object.assign(startedPayload, passField(pass));
-        facts.push({ type: "fact.node_started", payload: startedPayload });
-      }
+    case "transition":
+      facts.push(...transitionToFacts(result, ctx));
       return facts;
-    }
-    case "yield_human": {
+    case "yield_human":
+      facts.push(...yieldHumanToFacts(result, ctx));
+      return facts;
+    case "halt":
+      facts.push(...haltToFacts(result, ctx));
+      return facts;
+    case "pause_provider":
+      facts.push(...pauseProviderToFacts(result, ctx));
+      return facts;
+  }
+}
+
+/** The `transition` arm — `fact.node_completed` (with the token/cost splits)
+ * plus the terminal / `node_started` continuation. */
+function transitionToFacts(result: Extract<HandlerResult, { kind: "transition" }>, ctx: ResultContext): FactEvent[] {
+  const facts: FactEvent[] = [];
+  // The executor resolves edge selection before calling resultToFacts,
+  // so nextNode is populated by this point. Defaulting to __end__
+  // matches the "no outgoing edges" terminal rule if anything upstream
+  // missed the substitution.
+  const nextNode = result.nextNode ?? "__end__";
+  const pass = readGoalGateRetries(ctx.state.routing);
+  const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
+    nodeId: ctx.state.currentNode ?? "",
+    iteration: nodeRetryCount(ctx.state.routing, ctx.state.currentNode ?? ""),
+    tokens: result.tokens,
+    costUsd: result.costUsd,
+    nextNode,
+  };
+  // Goal-gate re-entry epoch: a retarget pass resets per-node retry
+  // counters (§3.4), so `(nodeId, iteration)` alone collides across
+  // passes — the epoch keeps each pass's facts distinct.
+  Object.assign(payload, passField(pass));
+  if (result.modelName != null) payload.modelName = result.modelName;
+  if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
+  // Route field lands on the fact when a routing node picked a branch —
+  // an llm via the synthesised `route` tool, or a judge via
+  // `decide.route`. Non-routing nodes leave `result.route` undefined;
+  // the field stays absent from the JSON.
+  if (result.route != null && result.route.length > 0) payload.route = result.route;
+  // Structured outputs: attach unconditionally. The store spills an
+  // oversized struct to the blob CAS at append time (the event keeps a tiny
+  // `{$fragua_blob}` ref under the 4 KiB cap), so size is no longer a node
+  // failure — `result-to-facts` stays a pure size-agnostic projection.
+  if (result.outputs !== undefined) {
+    payload.outputs = result.outputs as Record<string, unknown>;
+  }
+  // Input/output/cache split — emit only when non-zero so legacy
+  // handlers without the split keep their payload size unchanged
+  // (§I7 keeps events ≤4KB).
+  if (result.inputTokens != null && result.inputTokens > 0) payload.inputTokens = result.inputTokens;
+  if (result.outputTokens != null && result.outputTokens > 0) payload.outputTokens = result.outputTokens;
+  if (result.cacheReadTokens != null && result.cacheReadTokens > 0) {
+    payload.cacheReadTokens = result.cacheReadTokens;
+  }
+  if (result.cacheWriteTokens != null && result.cacheWriteTokens > 0) {
+    payload.cacheWriteTokens = result.cacheWriteTokens;
+  }
+  if (result.inputCostUsd != null && result.inputCostUsd > 0) payload.inputCostUsd = result.inputCostUsd;
+  if (result.outputCostUsd != null && result.outputCostUsd > 0) payload.outputCostUsd = result.outputCostUsd;
+  if (result.cacheReadCostUsd != null && result.cacheReadCostUsd > 0) {
+    payload.cacheReadCostUsd = result.cacheReadCostUsd;
+  }
+  if (result.cacheWriteCostUsd != null && result.cacheWriteCostUsd > 0) {
+    payload.cacheWriteCostUsd = result.cacheWriteCostUsd;
+  }
+  facts.push({ type: "fact.node_completed", payload });
+
+  if (isTerminalNode(nextNode)) {
+    // A failure reaches a terminal in two ways, and they mean
+    // opposite things:
+    //   - `__end__` is the executor's no-fail-route sentinel — the
+    //     node failed and the author declared no fail edge. That
+    //     halts the run (`aborted_exit`); the reducer maps "halted"
+    //     to the UI's "fail" status. The handler's `failureReason`
+    //     (e.g. the agent's `<abort>reason</abort>`) surfaces
+    //     verbatim as the halt detail.
+    //   - An explicit sink (`exit`) reached via a fail edge is a
+    //     sanctioned graceful landing the author opted into — the
+    //     run completes, not halts.
+    if (nextNode === "__end__" && result.outcomeStatus === "fail") {
+      const detail =
+        typeof result.failureReason === "string" && result.failureReason.length > 0
+          ? result.failureReason
+          : `node ${ctx.state.currentNode ?? "?"} failed with no fail route`;
       facts.push({
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "aborted_exit", detail },
+      });
+    } else {
+      facts.push({
+        type: "fact.run_terminated",
+        payload: { status: "completed", finalNode: nextNode },
+      });
+    }
+  } else {
+    const startedPayload: Extract<FactEvent, { type: "fact.node_started" }>["payload"] = {
+      nodeId: nextNode,
+      iteration: nodeRetryCount(ctx.state.routing, nextNode),
+    };
+    Object.assign(startedPayload, passField(pass));
+    facts.push({ type: "fact.node_started", payload: startedPayload });
+  }
+  return facts;
+}
+
+/** The `yield_human` arm — the HITL pause. */
+function yieldHumanToFacts(result: Extract<HandlerResult, { kind: "yield_human" }>, ctx: ResultContext): FactEvent[] {
+  return [
+    {
+      type: "fact.run_paused",
+      payload: {
+        reason: "human",
+        nodeId: ctx.state.currentNode ?? "",
+        text: result.text,
+        routes: result.routes,
+        ...(result.routeLabels ? { routeLabels: result.routeLabels } : {}),
+      },
+    },
+  ];
+}
+
+/** The `halt` arm — the recoverable-pause translations plus the terminal
+ * `fact.run_terminated{errored}` with partial-spend fields. */
+function haltToFacts(result: Extract<HandlerResult, { kind: "halt" }>, ctx: ResultContext): FactEvent[] {
+  const facts: FactEvent[] = [];
+  // Stage 3 of recoverable-budget-pause.md converts three reasons to
+  // operator-resumable pauses. `goal_gate_unsatisfied` and `max_loops`
+  // still flow through here (the executor sets
+  // `result = { kind: "halt", reason: <X> }` at those sites for
+  // legibility). `max_retries_exceeded` has migrated to the
+  // `retriesExhaustedPause` sentinel in executor.ts and no longer
+  // reaches this branch from the executor; the translation below
+  // is retained as a safety net for any future caller that still
+  // constructs the handler-contract halt shape. Other halts pass
+  // through to fact.run_terminated{errored} unchanged.
+  const reason = result.reason;
+  const nodeId = ctx.state.currentNode ?? "";
+  const ctxCurrentLimit = result.pauseContext?.currentLimit ?? 0;
+  const ctxAttempts = result.pauseContext?.attempts ?? 0;
+  if (reason === "max_retries_exceeded") {
+    facts.push({
+      type: "fact.run_paused",
+      payload: { reason: "max_retries", nodeId, currentLimit: ctxCurrentLimit, attempts: ctxAttempts },
+    });
+    return facts;
+  }
+  if (reason === "goal_gate_unsatisfied") {
+    // result.detail names the failed gate (set by the executor at
+    // the goal_gate halt site). Fall back to the current node when
+    // detail is missing — defensive, shouldn't normally fire.
+    const gateNodeId = result.detail && result.detail.length > 0 ? result.detail : nodeId;
+    facts.push({
+      type: "fact.run_paused",
+      payload: { reason: "goal_gate", gateNodeId, currentLimit: ctxCurrentLimit },
+    });
+    return facts;
+  }
+  if (reason === "max_loops") {
+    facts.push({
+      type: "fact.run_paused",
+      payload: { reason: "max_loops", currentLimit: ctxCurrentLimit, dispatches: ctxAttempts },
+    });
+    return facts;
+  }
+  const payload: Extract<Extract<FactEvent, { type: "fact.run_terminated" }>["payload"], { status: "errored" }> = {
+    status: "errored",
+    reason,
+  };
+  if (result.detail != null) payload.detail = result.detail;
+  // Halts reaching this point bypass fact.node_completed AND
+  // fact.node_aborted, so the turn's spend would otherwise vanish
+  // from run totals. Surface it as partial* fields (same shape and
+  // >0 gating as abortResultToFacts) for the reducer to fold. The
+  // budget-halt sentinel path never comes through here (it keeps the
+  // transition shape so node_completed lands first), so this cannot
+  // double-count a turn.
+  const usage = ctx.usage;
+  if (usage != null && (usage.turnBilled > 0 || usage.totalCostUsd > 0)) {
+    payload.nodeId = nodeId;
+    payload.partialTokens = usage.turnBilled;
+    payload.partialCostUsd = usage.totalCostUsd;
+    if (usage.totalInputTokens > 0) payload.partialInputTokens = usage.totalInputTokens;
+    if (usage.totalOutputTokens > 0) payload.partialOutputTokens = usage.totalOutputTokens;
+    if (usage.totalCacheReadTokens > 0) payload.partialCacheReadTokens = usage.totalCacheReadTokens;
+    if (usage.totalCacheWriteTokens > 0) payload.partialCacheWriteTokens = usage.totalCacheWriteTokens;
+    const inputCostUsd = usage.totalInputCostUsd ?? 0;
+    const outputCostUsd = usage.totalOutputCostUsd ?? 0;
+    const cacheReadCostUsd = usage.totalCacheReadCostUsd ?? 0;
+    const cacheWriteCostUsd = usage.totalCacheWriteCostUsd ?? 0;
+    if (inputCostUsd > 0) payload.partialInputCostUsd = inputCostUsd;
+    if (outputCostUsd > 0) payload.partialOutputCostUsd = outputCostUsd;
+    if (cacheReadCostUsd > 0) payload.partialCacheReadCostUsd = cacheReadCostUsd;
+    if (cacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = cacheWriteCostUsd;
+  }
+  facts.push({ type: "fact.run_terminated", payload });
+  return facts;
+}
+
+/** The `pause_provider` arm — payment-required vs generic provider-error pause. */
+function pauseProviderToFacts(
+  result: Extract<HandlerResult, { kind: "pause_provider" }>,
+  ctx: ResultContext,
+): FactEvent[] {
+  // 402 → reason="payment_required" (top-up off-ledger). Anything else
+  // in the manual class lands as reason="provider_error"; the
+  // executor rewrites to reason="provider_retry" if the
+  // provider-retry decision returns auto-retry (transient transport
+  // class — 408/429/5xx/529/network).
+  if (result.httpStatus === 402) {
+    return [
+      {
         type: "fact.run_paused",
         payload: {
-          reason: "human",
+          reason: "payment_required",
           nodeId: ctx.state.currentNode ?? "",
-          text: result.text,
-          routes: result.routes,
-          ...(result.routeLabels ? { routeLabels: result.routeLabels } : {}),
+          provider: result.provider,
+          errorMessage: result.errorMessage,
         },
-      });
-      return facts;
-    }
-    case "halt": {
-      // Stage 3 of recoverable-budget-pause.md converts three reasons to
-      // operator-resumable pauses. `goal_gate_unsatisfied` and `max_loops`
-      // still flow through here (the executor sets
-      // `result = { kind: "halt", reason: <X> }` at those sites for
-      // legibility). `max_retries_exceeded` has migrated to the
-      // `retriesExhaustedPause` sentinel in executor.ts and no longer
-      // reaches this branch from the executor; the translation below
-      // is retained as a safety net for any future caller that still
-      // constructs the handler-contract halt shape. Other halts pass
-      // through to fact.run_terminated{errored} unchanged.
-      const reason = result.reason;
-      const nodeId = ctx.state.currentNode ?? "";
-      const ctxCurrentLimit = result.pauseContext?.currentLimit ?? 0;
-      const ctxAttempts = result.pauseContext?.attempts ?? 0;
-      if (reason === "max_retries_exceeded") {
-        facts.push({
-          type: "fact.run_paused",
-          payload: { reason: "max_retries", nodeId, currentLimit: ctxCurrentLimit, attempts: ctxAttempts },
-        });
-        return facts;
-      }
-      if (reason === "goal_gate_unsatisfied") {
-        // result.detail names the failed gate (set by the executor at
-        // the goal_gate halt site). Fall back to the current node when
-        // detail is missing — defensive, shouldn't normally fire.
-        const gateNodeId = result.detail && result.detail.length > 0 ? result.detail : nodeId;
-        facts.push({
-          type: "fact.run_paused",
-          payload: { reason: "goal_gate", gateNodeId, currentLimit: ctxCurrentLimit },
-        });
-        return facts;
-      }
-      if (reason === "max_loops") {
-        facts.push({
-          type: "fact.run_paused",
-          payload: { reason: "max_loops", currentLimit: ctxCurrentLimit, dispatches: ctxAttempts },
-        });
-        return facts;
-      }
-      const payload: Extract<Extract<FactEvent, { type: "fact.run_terminated" }>["payload"], { status: "errored" }> = {
-        status: "errored",
-        reason,
-      };
-      if (result.detail != null) payload.detail = result.detail;
-      // Halts reaching this point bypass fact.node_completed AND
-      // fact.node_aborted, so the turn's spend would otherwise vanish
-      // from run totals. Surface it as partial* fields (same shape and
-      // >0 gating as abortResultToFacts) for the reducer to fold. The
-      // budget-halt sentinel path never comes through here (it keeps the
-      // transition shape so node_completed lands first), so this cannot
-      // double-count a turn.
-      const usage = ctx.usage;
-      if (usage != null && (usage.turnBilled > 0 || usage.totalCostUsd > 0)) {
-        payload.nodeId = nodeId;
-        payload.partialTokens = usage.turnBilled;
-        payload.partialCostUsd = usage.totalCostUsd;
-        if (usage.totalInputTokens > 0) payload.partialInputTokens = usage.totalInputTokens;
-        if (usage.totalOutputTokens > 0) payload.partialOutputTokens = usage.totalOutputTokens;
-        if (usage.totalCacheReadTokens > 0) payload.partialCacheReadTokens = usage.totalCacheReadTokens;
-        if (usage.totalCacheWriteTokens > 0) payload.partialCacheWriteTokens = usage.totalCacheWriteTokens;
-        const inputCostUsd = usage.totalInputCostUsd ?? 0;
-        const outputCostUsd = usage.totalOutputCostUsd ?? 0;
-        const cacheReadCostUsd = usage.totalCacheReadCostUsd ?? 0;
-        const cacheWriteCostUsd = usage.totalCacheWriteCostUsd ?? 0;
-        if (inputCostUsd > 0) payload.partialInputCostUsd = inputCostUsd;
-        if (outputCostUsd > 0) payload.partialOutputCostUsd = outputCostUsd;
-        if (cacheReadCostUsd > 0) payload.partialCacheReadCostUsd = cacheReadCostUsd;
-        if (cacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = cacheWriteCostUsd;
-      }
-      facts.push({ type: "fact.run_terminated", payload });
-      return facts;
-    }
-    case "pause_provider": {
-      // 402 → reason="payment_required" (top-up off-ledger). Anything else
-      // in the manual class lands as reason="provider_error"; the
-      // executor rewrites to reason="provider_retry" if the
-      // provider-retry decision returns auto-retry (transient transport
-      // class — 408/429/5xx/529/network).
-      if (result.httpStatus === 402) {
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "payment_required",
-            nodeId: ctx.state.currentNode ?? "",
-            provider: result.provider,
-            errorMessage: result.errorMessage,
-          },
-        });
-      } else {
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "provider_error",
-            nodeId: ctx.state.currentNode ?? "",
-            httpStatus: result.httpStatus,
-            provider: result.provider,
-            errorMessage: result.errorMessage,
-          },
-        });
-      }
-      return facts;
-    }
+      },
+    ];
   }
+  return [
+    {
+      type: "fact.run_paused",
+      payload: {
+        reason: "provider_error",
+        nodeId: ctx.state.currentNode ?? "",
+        httpStatus: result.httpStatus,
+        provider: result.provider,
+        errorMessage: result.errorMessage,
+      },
+    },
+  ];
 }
 
 export function abortResultToFacts(

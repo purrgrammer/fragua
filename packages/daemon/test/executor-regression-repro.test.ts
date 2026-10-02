@@ -276,7 +276,7 @@ steps:
     expect(active.size).toBe(0);
   });
 
-  test("fact.run_requeued_after_crash requeues and clears currentNode for a clean re-claim", () => {
+  test("fact.run_requeued_after_crash requeues but PRESERVES currentNode (agrees with the sweep)", () => {
     const r = rig();
     enqueue(r, "replay-crash", "start");
     r.store.claimNextRun(1);
@@ -294,12 +294,13 @@ steps:
       live.updatedAt + 2,
     );
 
-    // A crash-requeue puts the run back to `queued` and clears currentNode
-    // (and dispatchStartedAt): the next claim re-derives the start node and
-    // re-dispatches it fresh. `prevNode` is retained on the fact for
-    // analytics/resume provenance, not projected onto currentNode.
+    // A crash-requeue puts the run back to `queued` and clears dispatchStartedAt,
+    // but leaves currentNode on the in-flight node so the executor resumes it
+    // instead of re-running from the start node. The reducer matches sweep.ts
+    // here (which never touched current_node); nulling it made deriveRunState
+    // disagree with the live projection for every crash-requeued run.
     expect(replayed.status).toBe("queued");
-    expect(replayed.currentNode).toBeNull();
+    expect(replayed.currentNode).toBe("work");
     expect(replayed.dispatchStartedAt).toBeNull();
   });
 

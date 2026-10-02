@@ -7,6 +7,13 @@
 // plan against the store. The closure scope a parallel node's budget cap sums
 // over still comes from the shared `fanoutClosureUnion` walk in
 // `@fragua/core`; this planner reasons only about the frontier transition.
+//
+// The run-level DISPOSITION decisions a fan-out superstep makes as branches
+// settle — the halt-over-pause precedence, the fail-closed branch-terminal halt,
+// and the per-branch abort-loop pause — are lifted here too (pure fact choices,
+// no store / clock / RNG), so the driver only applies them.
+
+import type { FactEvent } from "@fragua/store";
 
 /** The frontier of one `type: parallel` node at the start of a fan-out turn,
  * as plain data. `active`/`redispatch` are already folded by the caller — the
@@ -52,4 +59,39 @@ export function planFanoutStep(frontier: FanoutFrontier): FanoutPlan {
   if (active === null) return { kind: "seed", branches };
   if (active.length === 0) return { kind: "join", nextNode: join, branchesCompleted: branches.length };
   return { kind: "dispatch", active, redispatch };
+}
+
+/** Fold one settling branch's run-level fact into the pool's single disposition
+ * slot with the precedence rule: a halt (`run_terminated`) always overrides a
+ * pause (terminal beats resumable), first-of-each-kind wins, and a pause never
+ * downgrades a captured halt. Returns the (possibly unchanged) disposition. */
+export function noteDisposition(current: FactEvent | undefined, incoming: FactEvent): FactEvent | undefined {
+  if (incoming.type === "fact.run_terminated") {
+    return current?.type === "fact.run_terminated" ? current : incoming;
+  }
+  return current ?? incoming;
+}
+
+/** The fail-closed halt for a branch that resolved to a run terminal (`next:
+ * exit`, a fail-only edge succeeding into `__end__`, or a sentinel/dangling
+ * successor). Completing the run mid-fan-out would strand the in-flight siblings
+ * — the validator rejects the shape (E032/E039/E041), so this is the runtime
+ * backstop for an unvalidated save. */
+export function planBranchTerminal(nodeId: string): FactEvent {
+  return {
+    type: "fact.run_terminated",
+    payload: { status: "errored", reason: "error", detail: `fanout_branch_terminal:${nodeId}` },
+  };
+}
+
+/** The per-branch abort-loop pause: a branch that aborted `ceiling` turns in a
+ * row parks the run regardless of sibling success. Returns the first such
+ * branch's pause fact, or undefined when every streak is below the ceiling. */
+export function planBranchAbortLoop(branchAborts: ReadonlyMap<string, number>, ceiling: number): FactEvent | undefined {
+  for (const [nodeId, streak] of branchAborts) {
+    if (streak >= ceiling) {
+      return { type: "fact.run_paused", payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak } };
+    }
+  }
+  return undefined;
 }

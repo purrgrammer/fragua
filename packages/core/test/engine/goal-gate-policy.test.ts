@@ -14,7 +14,6 @@ import {
   checkGoalGates,
   type GateOutcomes,
   goalGateStep,
-  resolveFailRetarget,
   resolveRetargetChain,
 } from "../../src/engine/goal-gate-policy.ts";
 import { goalGateOutcomeKey, readGateOutcomes, readGoalGateRetries } from "../../src/routing.ts";
@@ -148,33 +147,6 @@ describe("routing-key helpers", () => {
   test("readGateOutcomes — unknown statuses ignored", () => {
     const out = readGateOutcomes({ "goal_gates.bad": "weird" });
     expect(out.size).toBe(0);
-  });
-});
-
-describe("resolveFailRetarget — §3.7", () => {
-  test("node.retry_target wins", () => {
-    const g = graph({
-      nodes: [node("a", { retry_target: "fix" }), node("fix")],
-    });
-    expect(resolveFailRetarget(g, "a")).toBe("fix");
-  });
-
-  test("graph-level retarget NOT consulted (§3.7 is node-only)", () => {
-    const g = graph({
-      nodes: [node("a"), node("z")],
-      attrs: { retry_target: "z" } as Graph["attrs"],
-    });
-    expect(resolveFailRetarget(g, "a")).toBeNull();
-  });
-
-  test("retarget references undefined node → null", () => {
-    const g = graph({ nodes: [node("a", { retry_target: "ghost" })] });
-    expect(resolveFailRetarget(g, "a")).toBeNull();
-  });
-
-  test("nothing set → null (caller halts the run)", () => {
-    const g = graph({ nodes: [node("a")] });
-    expect(resolveFailRetarget(g, "a")).toBeNull();
   });
 });
 

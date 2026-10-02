@@ -83,6 +83,25 @@ guarantee.
 - **Updated the agent runtime (`pi-ai` / `pi-agent-core`) to 0.99.2.** No change
   to how workflows are authored. The bundled default model per provider for
   fireworks, together, and opencode-go moved to its catalogue successor.
+- **Plain `on: {fail: <step>}` back-edges honour `max-retries`.** When a step's
+  `fail` edge re-enters the step itself or an upstream step, the engine now
+  counts the re-entries against that step's `max-retries` and pauses
+  `max_retries` on exhaustion (operator-resumable, raise via the cap intent) —
+  the same bound goal gates already had. `max-retries` still **defaults to 0 =
+  unbounded**, so every existing workflow that sets none is unchanged; set
+  `max-retries: N` to cap a check→fix cycle cleanly. The counter resets on the
+  step's next success.
+- **Internal discipline lints are AST-based rather than regex source scans.** The
+  transaction-purity, routing-index, inline-import, handler-I/O, and
+  browser-safety checks now parse the TypeScript AST, so a forbidden call can no
+  longer slip past by renaming a binding or routing through a helper.
+- **A run's title and its schedule's audit trail now land with the write they
+  belong to.** An operator-supplied run title (`fragua run --title`, the API
+  `title`, a schedule's title) is folded into the enqueue event instead of a
+  second write after it, so it is part of the replayable log. Creating,
+  pausing, resuming, or deleting a schedule writes the schedule row and its
+  audit event in one transaction rather than two, so the two can no longer land
+  separately.
 - **`review` resolves its target and posts its verdict with tool steps.**
   Turning a free-form `--input target` into a diff spec, a path list, and a PR
   number is mechanism, and so is choosing between `--approve`,
@@ -151,6 +170,35 @@ guarantee.
 - **Judge retry backoff has a floor.** The judge client's exponential backoff
   used full jitter; it now waits at least half its exponential per attempt,
   matching the llm retry path.
+- **A shared `thread:` no longer lets one step inherit another's route or
+  output.** The scans that recover a step's `route()` / `emit_output()` call
+  walked the whole rehydrated transcript, so on a shared thread a step that
+  ended its turn without calling the tool picked up an upstream step's call:
+  `route_not_picked` could never fire and a downstream `outputs:` step inherited
+  the upstream struct. All three scans (route, emit, and the emit reminder) are
+  now scoped to the current turn, like the self-abort scan already was.
+- **A non-goal-gate `retry_target` no longer creates an unbounded fail loop.**
+  A step could carry `retry_target` without being a goal gate; on failure the
+  engine retargeted through it forever. `retry_target` on a non-gate step is now
+  a validate-time error (E057), and a plain step that fails with no `fail` edge
+  halts (`aborted_exit`) instead of retargeting.
+- **A halt or pause that lost an OCC race no longer leaves the run stranded in
+  `running`.** The pre-dispatch pauses and halts (engine-incompatible,
+  unparseable workflow, worktree-provision failure, `max_loops`, leaked handler,
+  abort-loop) now commit through the same park-or-terminal routine the fan-out
+  path already used: a conflicted commit re-drives the turn or escalates to
+  `occ_exhausted`, so the run always leaves `running` instead of sitting idle
+  with no executor until the next daemon restart.
+- **A crash-requeued run reports the same in-flight node whether read live or
+  replayed.** Reconstructing a run's state from its event log (bundle import,
+  `fragua show`) used to blank the current node for any run recovered from a
+  daemon crash, disagreeing with the live view, which kept it so the run
+  resumes on that node. Both now preserve it, and the pre-crash active-time
+  credit is computed one way so the log fold and the live projection can't drift.
+- **The HTTP server enforces a same-origin gate.** Every route now refuses a
+  cross-origin `Origin`, a foreign `Host` (DNS-rebinding defence), or a bodied
+  request that isn't `application/json`, so a web page open in the operator's
+  browser on another origin can no longer drive the control plane.
 - **`provider:` on a judge step no longer does nothing.** It parsed, validated,
   and was then dropped before the handler saw it.
 - **A judge state the provider refuses now fails the node instead of halting

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { INPUTS_KEY, validateRoutingPatch } from "@fragua/core";
+import { readRawInputs, validateRoutingPatch } from "@fragua/core";
 import type { ChangeStat, InboxStatus, RunEnqueuedPayload } from "@fragua/types";
 import { NODE_LIFECYCLE_FACT_TYPES, VALID_WRITERS } from "@fragua/types";
 import {
@@ -689,28 +689,34 @@ export class SqliteStore implements IEventStore {
     const startAt = performance.now();
 
     const truncated: { type: string; bytes: number }[] = [];
+    // Serialize + size-check (and, for an oversized event, build the truncation
+    // marker) BEFORE the transaction opens — the txn body must not serialize
+    // JSON under the write lock (I1). One oversized event must not tank the rest
+    // of the batch: swap its payload for a truncation marker that keeps routing
+    // info (nodeId, iteration) so UI step-grouping still works. Full content for
+    // llm turns is already in the `messages` table.
+    const prepared: { type: string; payload: string }[] = [];
+    for (const event of events) {
+      if (typeof event.type !== "string" || event.type.length === 0) {
+        throw new Error("observability event.type must be a non-empty string");
+      }
+      let payload: string;
+      try {
+        payload = this.validatePayload(event.payload);
+      } catch (err) {
+        if (!(err instanceof PayloadTooLargeError)) throw err;
+        truncated.push({ type: event.type, bytes: err.sizeBytes });
+        payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
+      }
+      prepared.push({ type: event.type, payload });
+    }
     this.writeTxn(() => {
       const row = selectRunStateRow(this.db, runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
-      for (const event of events) {
-        if (typeof event.type !== "string" || event.type.length === 0) {
-          throw new Error("observability event.type must be a non-empty string");
-        }
-        // One oversized event must not tank the rest of the batch. Swap
-        // the payload for a truncation marker that keeps routing info
-        // (nodeId, iteration) so UI step-grouping still works. Full
-        // content for llm turns is already in the `messages` table.
-        let payload: string;
-        try {
-          payload = this.validatePayload(event.payload);
-        } catch (err) {
-          if (!(err instanceof PayloadTooLargeError)) throw err;
-          truncated.push({ type: event.type, bytes: err.sizeBytes });
-          payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
-        }
+      for (const p of prepared) {
         const seq = bumpRunSeq(this.db, runId);
         seqs.push(seq);
-        insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
+        insertEventDaemon(this.db, runId, seq, p.type, p.payload, ts);
       }
     });
     if (truncated.length > 0) {
@@ -778,7 +784,7 @@ export class SqliteStore implements IEventStore {
     // is safer than the inverse. The rows are inserted inside writeTxn below.
     let effectiveRouting = params.initialRouting ?? {};
     let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
-    if (effectiveRouting[INPUTS_KEY] != null) {
+    if (readRawInputs(effectiveRouting) !== undefined) {
       const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
         this.blobs.put(sha, bytes);
       });
@@ -818,6 +824,7 @@ export class SqliteStore implements IEventStore {
       ...(params.workflowScope != null ? { workflowScope: params.workflowScope } : {}),
       ...(params.workflowPath != null ? { workflowPath: params.workflowPath } : {}),
       ...(params.scheduleId != null ? { scheduleId: params.scheduleId } : {}),
+      ...(params.title != null && params.title.length > 0 ? { title: params.title } : {}),
       ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
       ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
     } satisfies RunEnqueuedPayload);
@@ -854,6 +861,7 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
+        title: params.title != null && params.title.length > 0 ? params.title : null,
         baseGitSha: params.baseGitSha ?? null,
         baseGitRef: params.baseGitRef ?? null,
       });
@@ -1002,6 +1010,15 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const role = row.content.role;
     const nodeId = row.nodeId;
+    // Pre-serialize the static fields of the fact.message_appended payload. Only
+    // `ordinal` is minted under the write lock, so it is spliced in as a bare
+    // number and no JSON runs inside the transaction (I1). Size-checked here
+    // against an upper-bound ordinal so the cap is still enforced pre-lock.
+    const messageAppendedTail = `,"role":${JSON.stringify(role)},"nodeId":${nodeId == null ? "null" : JSON.stringify(nodeId)},"iteration":${iteration}}`;
+    const messageAppendedGuardBytes = utf8ByteLength(`{"ordinal":${Number.MAX_SAFE_INTEGER}${messageAppendedTail}`);
+    if (messageAppendedGuardBytes >= MAX_EVENT_PAYLOAD_BYTES) {
+      throw new PayloadTooLargeError(messageAppendedGuardBytes, MAX_EVENT_PAYLOAD_BYTES);
+    }
     let ordinal = 0;
     this.writeTxn(() => {
       // Opt-in dedup. When the caller asserts the message is replay-safe
@@ -1046,7 +1063,7 @@ export class SqliteStore implements IEventStore {
       // emits `agent.message_end`. Dedup hits don't insert a row, so
       // they don't emit either — the client's last refetch already
       // covers the existing ordinal.
-      const eventPayload = this.validatePayload({ ordinal, role, nodeId, iteration });
+      const eventPayload = `{"ordinal":${ordinal}${messageAppendedTail}`;
       const seq = bumpRunSeq(this.db, runId);
       insertEventDaemon(this.db, runId, seq, "fact.message_appended", eventPayload, ts);
     });
@@ -1551,41 +1568,21 @@ export class SqliteStore implements IEventStore {
   // ─────────────── Schedules ───────────────
 
   createSchedule(params: CreateScheduleParams, now: number): Schedule {
-    const fireOnCreate = params.fireOnCreate ?? true;
-    const overlapPolicy = params.overlapPolicy ?? "skip";
-    const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
-    const title = params.title ?? null;
-    const projectId = params.projectId ?? params.cwd;
+    const { insertArgs, schedule } = buildScheduleInsert(params, now);
     this.writeTxn(() => {
-      insertSchedule(this.db, {
-        id: params.id,
-        workflowRef: params.workflowRef,
-        cwd: params.cwd,
-        projectId,
-        intervalMs: params.intervalMs,
-        intervalText: params.intervalText,
-        title,
-        overlapPolicy,
-        nextFireAt,
-        createdAt: now,
-      });
+      insertSchedule(this.db, insertArgs);
     });
-    return {
-      id: params.id,
-      workflowRef: params.workflowRef,
-      cwd: params.cwd,
-      projectId,
-      intervalMs: params.intervalMs,
-      intervalText: params.intervalText,
-      title,
-      overlapPolicy,
-      nextFireAt,
-      lastFireAt: null,
-      lastRunId: null,
-      pausedAt: null,
-      lastError: null,
-      createdAt: now,
-    };
+    return schedule;
+  }
+
+  createScheduleAudited(params: CreateScheduleParams, event: DaemonEvent, now: number): Schedule {
+    const { insertArgs, schedule } = buildScheduleInsert(params, now);
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      insertSchedule(this.db, insertArgs);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+    return schedule;
   }
 
   getSchedule(id: string): Schedule | null {
@@ -1618,15 +1615,39 @@ export class SqliteStore implements IEventStore {
     });
   }
 
+  pauseScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      updateSchedulePaused(this.db, id, now);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+  }
+
   resumeSchedule(id: string, now: number): void {
     this.writeTxn(() => {
       updateScheduleResumed(this.db, id, now);
     });
   }
 
+  resumeScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      updateScheduleResumed(this.db, id, now);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
+    });
+  }
+
   deleteSchedule(id: string): void {
     this.writeTxn(() => {
       deleteScheduleRow(this.db, id);
+    });
+  }
+
+  deleteScheduleAudited(id: string, event: DaemonEvent, now: number): void {
+    const auditPayload = this.validatePayload(event.payload);
+    this.writeTxn(() => {
+      deleteScheduleRow(this.db, id);
+      insertDaemonEvent(this.db, event.type, auditPayload, now, null);
     });
   }
 
@@ -2577,4 +2598,38 @@ function slimLlmStartForExport(payload: unknown): Record<string, unknown> {
   if (src["budget"] !== undefined) out["budget"] = src["budget"];
   if (src["system_prompt"] !== undefined) out["system_prompt"] = src["system_prompt"];
   return out;
+}
+
+/** Derive a schedule's insert args + its public `Schedule` shape from the
+ * create params. Pure — shared by `createSchedule` and `createScheduleAudited`
+ * so the two can't compute `nextFireAt` / `projectId` / defaults differently. */
+function buildScheduleInsert(
+  params: CreateScheduleParams,
+  now: number,
+): { insertArgs: Parameters<typeof insertSchedule>[1]; schedule: Schedule } {
+  const fireOnCreate = params.fireOnCreate ?? true;
+  const overlapPolicy = params.overlapPolicy ?? "skip";
+  const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
+  const title = params.title ?? null;
+  const projectId = params.projectId ?? params.cwd;
+  const insertArgs = {
+    id: params.id,
+    workflowRef: params.workflowRef,
+    cwd: params.cwd,
+    projectId,
+    intervalMs: params.intervalMs,
+    intervalText: params.intervalText,
+    title,
+    overlapPolicy,
+    nextFireAt,
+    createdAt: now,
+  };
+  const schedule: Schedule = {
+    ...insertArgs,
+    lastFireAt: null,
+    lastRunId: null,
+    pausedAt: null,
+    lastError: null,
+  };
+  return { insertArgs, schedule };
 }

@@ -35,13 +35,14 @@ export interface SubstitutionOptions {
   args?: SubstitutionArgs;
   /** If true, wrap substituted values in single quotes for shell safety. */
   escapeForShell?: boolean;
-  /** If true, wrap each interpolated `${{ outputs.X.f }}` value in a
-   * content-derived delimiter so an upstream-laundered value can't pose as an
-   * instruction in an `llm` `prompt:`. Set ONLY for prompt consumption — `tool`
-   * `run:` uses `escapeForShell` (a shell-injection surface, not prompt), and
-   * `human` `text:` is read by a person. Ignored when `escapeForShell` is set.
-   * See docs/proposals/structured-outputs.md §6.4. */
-  wrapOutputs?: boolean;
+  /** If true, wrap each interpolated `${{ outputs.X.f }}` value AND each
+   * non-empty `${{ inputs.X }}` value in a content-derived delimiter so an
+   * upstream-laundered output or an attacker-supplied run input can't pose as
+   * an instruction in an `llm` `prompt:`. Set ONLY for prompt consumption —
+   * `tool` `run:` uses `escapeForShell` (a shell-injection surface, not
+   * prompt), and `human` `text:` is read by a person. Ignored when
+   * `escapeForShell` is set. See docs/proposals/structured-outputs.md §6.4. */
+  wrapValues?: boolean;
 }
 
 /** Boundary tag for an output value interpolated into a prompt. The content
@@ -81,7 +82,7 @@ const COMBINED_REF_RE =
   /\$\{\{\s*(?:inputs\.([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)*)|outputs\.([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*))\s*\}\}/g;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
-  const { args = {}, escapeForShell = false, wrapOutputs = false } = opts;
+  const { args = {}, escapeForShell = false, wrapValues = false } = opts;
   const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
   const inputs = args.inputs ?? {};
   const outputs = args.outputs ?? {};
@@ -96,13 +97,19 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   const result = template.replace(
     COMBINED_REF_RE,
     (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
-      if (inName !== undefined) return fmt(resolveInputRef(inputs, inName.split(".")));
+      if (inName !== undefined) {
+        const raw = resolveInputRef(inputs, inName.split("."));
+        // Wrap a non-empty input value only: an unbound / unresolvable ref is
+        // leniently "" (E030 flags the declaration), and fencing empty string
+        // is pure noise. `escapeForShell` (tool `run:`) never wraps.
+        return wrapValues && !escapeForShell && raw.length > 0 ? wrapOutputValue(raw) : fmt(raw);
+      }
       const c = classifyOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
       if (c.kind !== "value") {
         missing.push({ ref: whole.trim(), kind: c.kind });
         return whole;
       }
-      return wrapOutputs && !escapeForShell ? wrapOutputValue(c.rendered) : c.rendered;
+      return wrapValues && !escapeForShell ? wrapOutputValue(c.rendered) : c.rendered;
     },
   );
   if (missing.length > 0) throw new UnpopulatedOutputError(dedupeRefs(missing));

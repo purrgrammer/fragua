@@ -12,8 +12,15 @@
 // Enqueue (the two-op `buildSaveWorkflow` + `buildEnqueue`) and the run-id
 // minter land in a follow-on increment; this is the control-intent surface.
 
-import type { EnqueueRunParams, IEventWriter } from "@fragua/store";
-import { type IntentEvent, MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
+import type {
+  CreateScheduleParams,
+  EnqueueRunParams,
+  IDaemonCoordinator,
+  IEventWriter,
+  Schedule,
+  ScheduleOverlapPolicy,
+} from "@fragua/store";
+import { type DaemonEvent, type IntentEvent, MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
@@ -26,6 +33,7 @@ import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
+import { hasInputs, setInputs } from "../routing.ts";
 import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
@@ -83,6 +91,9 @@ export interface EnqueueInput {
   workflowScope?: "global" | "local" | "path" | "ephemeral" | undefined;
   workflowPath?: string | undefined;
   scheduleId?: string | undefined;
+  /** Operator-supplied run title, folded into the genesis event (no post-enqueue
+   * `setRunTitle`). Empty/whitespace-only titles are dropped by the store. */
+  title?: string | undefined;
   /** Pinned worktree base, resolved to a commit sha at enqueue (CLI `--base`).
    * Carried onto the genesis payload + `run_state.base_git_sha`; the provisioner
    * provisions the worktree detached at this sha. */
@@ -96,6 +107,18 @@ export type EnqueueBuild =
   | { ok: false; error: string; inputErrors: InputBindingError[] };
 
 const MAX_REPORTED_ERRORS = 10;
+
+/** Interval shorthand → milliseconds. The single source both the server route
+ * and the CLI resolve `--every` against, so they can't accept different sets. */
+const SCHEDULE_INTERVALS: Record<string, number> = {
+  "30m": 30 * 60 * 1000,
+  "1h": 60 * 60 * 1000,
+  "6h": 6 * 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "3d": 3 * 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+const SCHEDULE_OVERLAP = new Set(["skip", "queue", "concurrent"]);
 
 /** "/limits/maxRetries" → "limits.maxRetries"; array indices as "[n]"
  * ("/items/0/name" → "items[0].name"); root (empty path) → "body". */
@@ -125,7 +148,40 @@ export interface IntentPlaneDeps {
    * full-entropy ULID `newRunId`; tests/PBT pass a deterministic counter.
    * The uniqueness/import contract lives on the default, never the seam. */
   newRunId: () => string;
+  /** Daemon-coordination store, injected only by the schedule callers (server
+   * schedule routes, CLI `schedule`). The audited schedule commits write the
+   * row + its `daemon_events` audit event in one transaction. Absent for the
+   * run-intent-only callers, whose schedule commits are never reached. */
+  daemonStore?: IDaemonCoordinator;
+  /** Schedule-id minter, injected like `newRunId` so core stays browser-safe
+   * (no `node:crypto`). Required by the schedule callers. */
+  newScheduleId?: () => string;
 }
+
+/** Raw create-schedule request the plane validates. `every` is the interval
+ * shorthand; `intervalMs`/`intervalText` are derived here so server + CLI can't
+ * disagree on the mapping. */
+export interface ScheduleCreateInput {
+  workflow: string;
+  cwd: string;
+  projectId?: string | undefined;
+  every: string;
+  title?: string | undefined;
+  overlap?: string | undefined;
+  fireOnCreate?: boolean | undefined;
+}
+
+/** A validated schedule creation: the store params + its audit event, plus the
+ * minted id echoed for the caller's response. */
+export interface ScheduleCreateBuild {
+  id: string;
+  params: CreateScheduleParams;
+  event: DaemonEvent;
+}
+
+export type ScheduleCreateResult =
+  | { ok: true; create: ScheduleCreateBuild }
+  | { ok: false; error: string; code?: string };
 
 export interface IntentPlane {
   buildSteer(body: unknown): BuildResult<IntentOf<"intent.steering_requested">>;
@@ -157,6 +213,24 @@ export interface IntentPlane {
   commitSaveWorkflow(args: { sha: string; name: string; source: string; ir: string; irVersion: number }): void;
   /** The single enqueue write. Adapters never call `store.enqueueRun`. */
   commitEnqueue(params: EnqueueRunParams): void;
+  /** Validate a create-schedule request, mint the id, and build the store
+   * params + `intent.schedule_create` audit event. Pure. */
+  buildScheduleCreate(input: ScheduleCreateInput): ScheduleCreateResult;
+  /** Build the `intent.schedule_pause` audit event for a schedule id. Pure. */
+  buildSchedulePause(id: string): DaemonEvent;
+  /** Build the `intent.schedule_resume` audit event for a schedule id. Pure. */
+  buildScheduleResume(id: string): DaemonEvent;
+  /** Build the `intent.schedule_delete` audit event for a schedule id. Pure. */
+  buildScheduleDelete(id: string): DaemonEvent;
+  /** The single schedule-create write — row + audit event in one transaction.
+   * Adapters never call `store.createSchedule`. */
+  commitScheduleCreate(build: ScheduleCreateBuild, now: number): Schedule;
+  /** The single schedule-pause write — row + audit event in one transaction. */
+  commitSchedulePause(id: string, event: DaemonEvent, now: number): void;
+  /** The single schedule-resume write — row + audit event in one transaction. */
+  commitScheduleResume(id: string, event: DaemonEvent, now: number): void;
+  /** The single schedule-delete write — row + audit event in one transaction. */
+  commitScheduleDelete(id: string, event: DaemonEvent, now: number): void;
 }
 
 export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
@@ -285,11 +359,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       // can't spill yet, so an oversized one gets a clean validation error
       // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
       // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
-      if (
-        effectiveInputs != null &&
-        Object.keys(effectiveInputs).length > 0 &&
-        initialRouting["inputs"] === undefined
-      ) {
+      if (effectiveInputs != null && Object.keys(effectiveInputs).length > 0 && !hasInputs(initialRouting)) {
         const structured = new Set((input.inputDecls ?? []).filter((d) => isStructuredInput(d)).map((d) => d.name));
         const nonSpillable: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(effectiveInputs)) {
@@ -319,7 +389,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
             inputErrors: [],
           };
         }
-        initialRouting["inputs"] = effectiveInputs;
+        setInputs(initialRouting, effectiveInputs);
       }
       const runId = deps.newRunId(); // always minted — no operator/client-supplied ids
       const params: EnqueueRunParams = {
@@ -336,6 +406,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         ...(input.workflowScope !== undefined ? { workflowScope: input.workflowScope } : {}),
         ...(input.workflowPath !== undefined ? { workflowPath: input.workflowPath } : {}),
         ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.baseGitSha !== undefined ? { baseGitSha: input.baseGitSha } : {}),
         ...(input.baseGitRef !== undefined ? { baseGitRef: input.baseGitRef } : {}),
       };
@@ -350,6 +421,80 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
     },
     commitEnqueue(params) {
       deps.store.enqueueRun(params);
+    },
+    buildScheduleCreate(input) {
+      if (typeof input.workflow !== "string" || input.workflow.length === 0) {
+        return { ok: false, error: "workflow required", code: "invalid_workflow" };
+      }
+      if (typeof input.cwd !== "string" || input.cwd.length === 0) {
+        return { ok: false, error: "cwd required", code: "invalid_cwd" };
+      }
+      const intervalMs = SCHEDULE_INTERVALS[input.every];
+      if (intervalMs === undefined) {
+        return {
+          ok: false,
+          error: `every must be one of ${Object.keys(SCHEDULE_INTERVALS).join(", ")}`,
+          code: "invalid_interval",
+        };
+      }
+      const overlap = input.overlap ?? "skip";
+      if (!SCHEDULE_OVERLAP.has(overlap)) {
+        return { ok: false, error: "overlap must be one of skip, queue, concurrent", code: "invalid_overlap" };
+      }
+      const overlapPolicy = overlap as ScheduleOverlapPolicy;
+      const fireOnCreate = input.fireOnCreate !== false;
+      if (deps.newScheduleId === undefined) throw new Error("intent plane: newScheduleId not injected");
+      const id = deps.newScheduleId();
+      const params: CreateScheduleParams = {
+        id,
+        workflowRef: input.workflow,
+        cwd: input.cwd,
+        intervalMs,
+        intervalText: input.every,
+        overlapPolicy,
+        fireOnCreate,
+        ...(typeof input.projectId === "string" && input.projectId.length > 0 ? { projectId: input.projectId } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+      };
+      const event: DaemonEvent = {
+        type: "intent.schedule_create",
+        payload: {
+          scheduleId: id,
+          workflowRef: input.workflow,
+          cwd: input.cwd,
+          intervalMs,
+          intervalText: input.every,
+          overlapPolicy,
+          fireOnCreate,
+          ...(input.title !== undefined ? { title: input.title } : {}),
+        },
+      };
+      return { ok: true, create: { id, params, event } };
+    },
+    buildSchedulePause(id) {
+      return { type: "intent.schedule_pause", payload: { scheduleId: id } };
+    },
+    buildScheduleResume(id) {
+      return { type: "intent.schedule_resume", payload: { scheduleId: id } };
+    },
+    buildScheduleDelete(id) {
+      return { type: "intent.schedule_delete", payload: { scheduleId: id } };
+    },
+    commitScheduleCreate(build, now) {
+      if (deps.daemonStore === undefined) throw new Error("intent plane: daemonStore not injected");
+      return deps.daemonStore.createScheduleAudited(build.params, build.event, now);
+    },
+    commitSchedulePause(id, event, now) {
+      if (deps.daemonStore === undefined) throw new Error("intent plane: daemonStore not injected");
+      deps.daemonStore.pauseScheduleAudited(id, event, now);
+    },
+    commitScheduleResume(id, event, now) {
+      if (deps.daemonStore === undefined) throw new Error("intent plane: daemonStore not injected");
+      deps.daemonStore.resumeScheduleAudited(id, event, now);
+    },
+    commitScheduleDelete(id, event, now) {
+      if (deps.daemonStore === undefined) throw new Error("intent plane: daemonStore not injected");
+      deps.daemonStore.deleteScheduleAudited(id, event, now);
     },
   };
 }

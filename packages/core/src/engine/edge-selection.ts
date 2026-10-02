@@ -44,6 +44,25 @@ export function outgoingEdges(graph: Graph, sourceId: string): Edge[] {
   return graph.edges.filter((e) => e.from === sourceId);
 }
 
+/** Every node reachable from `startId` by forward edge traversal, INCLUDING
+ * `startId` itself. Pure BFS over `graph.edges`. Used to decide whether taking
+ * a node's `outcome=fail` edge re-enters the source (a back-edge cycle): if
+ * `reachableFrom(graph, edge.to).has(sourceId)`, the edge loops back. */
+export function reachableFrom(graph: Graph, startId: string): Set<string> {
+  const seen = new Set<string>([startId]);
+  const stack = [startId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    for (const e of graph.edges) {
+      if (e.from === id && !seen.has(e.to)) {
+        seen.add(e.to);
+        stack.push(e.to);
+      }
+    }
+  }
+  return seen;
+}
+
 export function selectEdge(input: EdgeSelectionInput): EdgeSelection | undefined {
   const edges = outgoingEdges(input.graph, input.source.id);
   if (edges.length === 0) return undefined;

@@ -174,14 +174,25 @@ fix:
   next: ci            # back-edge: fix → ci
 ```
 
-**This shape has no per-node cap.** `max-retries` does not bound it — the retry
-counter is only bumped when a handler returns `outcomeStatus: "retry"`, and a
-`tool` step returns `success`/`fail` from its exit code. Writing `max-retries`
-on `ci` above is inert. The cycle is bounded by the run `budget` and the
-executor's dispatch ceiling (`max_loops`, default 1000), both of which pause for
-an operator rather than halting cleanly (SPEC §3.5).
+**`max-retries` bounds this shape** — put it on the step that *fails*. When a
+step's `on: {fail: <step>}` edge re-enters the step itself or an upstream step (a
+back-edge, as `ci`'s `fail: fix` does via `fix`'s `next: ci`), the engine bumps a
+per-node counter and pauses `fact.run_paused{reason:"max_retries"}` once it would
+exceed the cap. The counter resets on the step's next success, so a check→fix
+cycle whose check eventually passes starts fresh.
 
-If you need a real cap, use the goal gate below — its `max-retries` is enforced.
+```yaml
+ci:
+  type: tool
+  run: bun run ci
+  max-retries: 5      # cap: after 5 failed re-entries the run pauses max_retries
+  on: {success: commit, fail: fix}
+```
+
+**`max-retries` defaults to 0, which means unbounded** on a plain back-edge — omit
+it and the cycle is bounded only by the run `budget` and the executor's dispatch
+ceiling (`max_loops`, default 1000), both of which pause for an operator rather
+than halting cleanly (SPEC §3.1). Set it when you want a clean cap.
 
 ### Goal gate (judge → re-run the author)
 

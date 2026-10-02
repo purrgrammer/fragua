@@ -24,17 +24,17 @@
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; lint rule: no `await`/`fetch`/`JSON.stringify` inside `db.transaction()` bodies |
+| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; AST lint (`packages/store/test/lint.test.ts`): no `await` / `JSON.stringify` / `JSON.parse` / `fetch` / TypeBox `Value.Check` inside a `writeTxn`/`db.transaction()` callback or a same-file helper it calls |
 | **I2** | No handler state outside the projection | HandlerContext API; pure-function handler signature |
 | **I3** | Intents always-appendable; facts OCC-checked | Two distinct store methods (`appendIntent`, `appendFact`) |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract | HandlerContext carries signal; pre-wired LLM/HTTP clients auto-propagate |
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay | `SideEffectEnvelope.idempotencyKey`; startup sweep emits `fact.run_quarantined` |
-| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
-| **I7** | Event payloads ≤ 4KB | `store.ts::validatePayload` (binding 4 KiB-**byte** guard via `TextEncoder().byteLength`); the `CHECK (length(payload) < 4096)` column constraint is a coarse code-point backstop only |
+| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts; every dispatch-driving read/write routes through the typed `@fragua/core` routing.ts accessors | `CHECK (length(routing) < 8192)` column constraint; AST routing-index lint (`packages/daemon/test/routing-index-discipline.test.ts`) flags element access / destructuring on any routing-named or `RoutingDict`-typed binding outside the accessor module |
+| **I7** | Event payloads ≤ 4KB | `store.ts::validatePayload` (binding 4 KiB-**byte** guard via `utf8ByteLength` = `Buffer.byteLength(s, "utf8")`); the `CHECK (length(payload) < 4096)` column constraint is a coarse code-point backstop only |
 | **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)`; replay-safe by default — same-content rewrite is a no-op, different-content rewrite at the same scope throws `ArtifactCollisionError` unless the caller passes `{ replace: true }` | Store API writes file→row in that order so orphans are always files, never dangling rows; `putArtifact` checks existing ref and either matches sha (no-op), throws collision, or overwrites with explicit replace |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages < 1,048,576 characters | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
-| **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal`), the per-branch active set is a log-derived **diagnostic** (the scalar `run_state.status` stays sole lifecycle authority), and branches commit through the one daemon writer (commit unit = branch-step, not a synchronised superstep) | Validator E036–E045; `runFanout` single-writer commit lane (§6.2); the fan-out property suite (P28–P31) |
+| **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal`), the per-branch active set is a log-derived **diagnostic** (the scalar `run_state.status` stays sole lifecycle authority), and branches commit through the one daemon writer (commit unit = branch-step, not a synchronised superstep) | Validator E036–E045; `runFanout` single-writer commit lane (§6.2); the fan-out property suite (P28–P32) |
 
 ---
 
@@ -69,7 +69,7 @@
 ### 1.4 Crash-recovery limbo
 **Attack.** Daemon hard-crashes while runs were `running`. On restart, those rows still say `running`; the executor only claims `queued`; runs sit dead until watchdog fires a minute later.
 
-**Resolution.** The **startup sweep** runs before the executor loop, in a single transaction: it requeues crash-interrupted `running` rows (resetting `ready_at`, bumping `version`, appending `fact.run_requeued_after_crash`) while **preserving `current_node`** so each resumes on the in-flight node rather than re-emitting `fact.run_started` and re-running from the start node; it quarantines orphan side-effects (§1.1); and it leaves `paused`, `paused_human`, and `quarantined` rows untouched. Rerun-from-start was never the intended recovery semantics — partial-side-effect safety lives in the orphan quarantine, not in re-execution. See `packages/store/src/sweep.ts`.
+**Resolution.** The **startup sweep** runs before the executor loop. Read-only scans gather the work and pre-serialize payloads outside any write; then each affected run is healed in its **own `SAVEPOINT`**, so a single corrupt or missing `run_state` row rolls back that run alone (recorded as a `daemon.sweep_run_failed` observability event) and can neither abort the sweep of any other run nor crash-loop the daemon at boot. It requeues crash-interrupted `running` rows (resetting `ready_at`, bumping `version`, appending `fact.run_requeued_after_crash`) while **preserving `current_node`** so each resumes on the in-flight node rather than re-emitting `fact.run_started` and re-running from the start node; it quarantines orphan side-effects (§1.1); and it leaves `paused`, `paused_human`, and `quarantined` rows untouched. Rerun-from-start was never the intended recovery semantics — partial-side-effect safety lives in the orphan quarantine, not in re-execution. See `packages/store/src/sweep.ts`.
 
 Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
 
@@ -79,7 +79,7 @@ Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immedi
 **Resolution.** A per-run `next_seq` counter on `run_state` is bumped atomically inside each append (the bumped value seeds the event's `seq`) — no scan — and combined with `BEGIN IMMEDIATE`, concurrent appends serialize cleanly without index pressure. I10 captures this.
 
 ### 1.6 Zombie daemon after lock reclaim
-Daemon lock has TTL; on takeover another daemon TTL-reclaims it and re-dispatches the run. The reclaimed (zombie) daemon does **not** re-read `daemon_lock` inside its turn loop — there is no loop-internal lock check. It is stopped only when its *next* fact commit fails OCC against the version the new dispatch has since advanced: the `ConcurrencyError` retries the turn, and once the OCC ceiling saturates the run halts via the `occ_exhausted` path (`packages/daemon/src/occ-append.ts`). Until that next commit, the zombie keeps running its current node and may keep burning provider tokens. This is an accepted trade — status/version is the only fence, there is no dispatch-identity token that would let the zombie notice the reclaim sooner (see the ACCEPTED TRADE note in `packages/daemon/src/recorder.ts`).
+Daemon lock has TTL; on takeover another daemon TTL-reclaims it and re-dispatches the run. The reclaimed (zombie) daemon does **not** re-read `daemon_lock` inside its turn loop — there is no loop-internal lock check. It is stopped only when its *next* fact commit fails OCC against the version the new dispatch has since advanced: the `ConcurrencyError` retries the turn, and once the OCC ceiling saturates the run halts via the `occ_exhausted` path (`packages/daemon/src/occ-append.ts`). Until that next commit, the zombie keeps running its current node and may keep burning provider tokens. This is an accepted trade — status/version is the only fence, there is no dispatch-identity token that would let the zombie notice the reclaim sooner (see the ACCEPTED TRADE note in `packages/daemon/src/recorder.ts`). The fence is now uniform across *every* fact-choosing commit path: the linear pre-dispatch pauses/halts (engine-incompatible, unparseable, worktree, `max_loops`, leak, abort-loop) and the fan-out dispositions all commit through the single `commitParkOrTerminal`, so a lost OCC race re-drives the turn or escalates to `occ_exhausted` instead of silently dropping the fact and leaving the run `running` with no executor until the next daemon-restart sweep.
 
 ### 1.7 Heartbeat outlives stuck executor
 Consolidated into the supervisor fiber (1.3). Heartbeat, intent detection, and stuck-node detection share one 50ms tick. If the executor fiber wedges in a tight sync loop, the event loop is blocked — supervisor also stops, lock stales, another daemon reclaims. Belt and suspenders via handler-level `AbortSignal.timeout()` (§5).
@@ -104,7 +104,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Contract drift across long pauses** — `contract_version` pinned per run (`EVENT_CONTRACT_VERSION` at enqueue), the run-resume gate. It is a SEPARATE axis from the DB-migration counter `schema_version`: it bumps only on real `FactEvent`/`IntentEvent`/reducer changes, so projection-only migrations never trip the gate. The daemon resumes any pin in `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred. **Backward-compat invariant:** a daemon at contract version `V` folds-correctly every stream pinned in `[MIN_COMPATIBLE, V]`; only the *downgrade* direction parks (an older daemon meeting a newer pin) — a current daemon never parks on an older run, and may not delete reducer paths for any contract version ≥ `MIN_COMPATIBLE` until the floor ratchets past it. `MIN_COMPATIBLE_CONTRACT_VERSION` ratchets only by deliberate act (it strands every run below it). Parallel fan-out drove the first real bump: `EVENT_CONTRACT_VERSION = 2` (new `fact.fanout_started` / `fact.fanout_joined` + the active-set reducer fold), `MIN_COMPATIBLE_CONTRACT_VERSION = 1` — so the gate is now live but backward-compatible: a v2 daemon folds every pin in `[1, 2]` (pre-fan-out runs replay unchanged), and only a v1 daemon meeting a v2 pin parks (too-new). The v4 fact-taxonomy collapse (fact-taxonomy.md §3.1–3.2 — three terminal facts → one `fact.run_terminated { status }`, `fact.run_paused_human` → `fact.run_paused { reason: "human" }`) is an **emission-only** cut: new runs emit the v4 facts, but the retired `fact.run_{completed,halted,cancelled,paused_human}` types stay read-only, never-emitted members of `FactEvent` with their fold paths intact, so `MIN_COMPATIBLE_CONTRACT_VERSION` stays `1` and runs pinned `< 4` keep folding. The floor ratchets — stranding runs below it — only when a historical format becomes genuinely un-foldable, never as an emission cleanup (bumping it in lockstep with `EVENT_CONTRACT_VERSION` bricks every in-flight run pinned lower). Two discipline tests guard it: a contract-surface hash snapshot (`packages/store/test/contract-version.test.ts`) and the `reducers.ts` touch-gate (`scripts/check-contract-bump.sh`) — both force a conscious bump-or-resnapshot. **Bump iff** a daemon at the prior contract version, folding a stream with the change, would produce a different/erroneous `run_state`: new/removed fact or intent type → yes; new field a fold path reads → yes; new pause/halt reason → yes; reducer behaviour change → yes; new observability event or projection column → no (off the fold path). Separately, the DB-migration `schema_version`: `migrate()` creates the baseline on a fresh DB and walks an existing DB forward through `SCHEMA_MIGRATIONS` (keyed by target version) up to CURRENT. The *automatic* open paths still refuse a store newer than the binary (`checkVersion`) — nothing downgrades by surprise. Each step is `{ up, down? }`: a schema downgrade is a first-class but **explicit operator action** via `fragua db migrate --to <lower>`, which walks the `down` inverses (descending), backs up first, and refuses to cross an irreversible step or to race a live daemon. It is run by the *newer* binary (the one that defines the `down` steps), after which the older binary opens the store cleanly. This is the schema axis only — orthogonal to the `contract_version` resume gate above. See `packages/store/src/pragmas.ts`, `packages/store/src/migrations.ts` (`migrateTo`/`planMigration`), and `docs/proposals/archive/reversible-migrations.md`.
+- **Contract drift across long pauses** — `contract_version` pinned per run (`EVENT_CONTRACT_VERSION` at enqueue), the run-resume gate. It is a SEPARATE axis from the DB-migration counter `schema_version`: it bumps only on real `FactEvent`/`IntentEvent`/reducer changes, so projection-only migrations never trip the gate. The daemon resumes any pin in `[MIN_COMPATIBLE_CONTRACT_VERSION, EVENT_CONTRACT_VERSION]` and **pauses** (recoverable) an out-of-range pin with `fact.run_paused { reason: "engine_incompatible", pinnedVersion, supportedMin, supportedMax }`. The payload's window distinguishes the arms: `pinnedVersion > supportedMax` (too new — a downgraded daemon, or a newer-producer import) heals once a capable daemon runs; `pinnedVersion < supportedMin` (too old) needs an operator rebuild-from-source or cancel. Both project to `paused` (operator-resumable) — capability-gated auto-wake for the too-new arm is deferred. **Backward-compat invariant:** a daemon at contract version `V` folds-correctly every stream pinned in `[MIN_COMPATIBLE, V]`; only the *downgrade* direction parks (an older daemon meeting a newer pin) — a current daemon never parks on an older run, and may not delete reducer paths for any contract version ≥ `MIN_COMPATIBLE` until the floor ratchets past it. `MIN_COMPATIBLE_CONTRACT_VERSION` ratchets only by deliberate act (it strands every run below it). Parallel fan-out drove the first real bump: `EVENT_CONTRACT_VERSION = 2` (new `fact.fanout_started` / `fact.fanout_joined` + the active-set reducer fold), `MIN_COMPATIBLE_CONTRACT_VERSION = 1` — so the gate is now live but backward-compatible: a v2 daemon folds every pin in `[1, 2]` (pre-fan-out runs replay unchanged), and only a v1 daemon meeting a v2 pin parks (too-new). The v4 fact-taxonomy collapse (fact-taxonomy.md §3.1–3.2 — three terminal facts → one `fact.run_terminated { status }`, `fact.run_paused_human` → `fact.run_paused { reason: "human" }`) is an **emission-only** cut: new runs emit the v4 facts, but the retired `fact.run_{completed,halted,cancelled,paused_human}` types stay read-only, never-emitted members of `FactEvent` with their fold paths intact, so `MIN_COMPATIBLE_CONTRACT_VERSION` stays `1` and runs pinned `< 4` keep folding. `EVENT_CONTRACT_VERSION = 5` added `fact.steering_applied` (a steer's delivery receipt; observability-only, folds to `next` unchanged). `EVENT_CONTRACT_VERSION = 6` made `fact.run_requeued_after_crash` PRESERVE `currentNode` (it used to null it) so the pure fold agrees with the crash-recovery sweep — which always left `current_node` untouched — and added an optional `title` to the genesis `intent.run_enqueued` payload that `genesisToInitialState` seeds onto `run_state.title` (the operator run title, folded into the log rather than written out-of-band after enqueue). Both kept `MIN_COMPATIBLE_CONTRACT_VERSION` at `1`. The floor ratchets — stranding runs below it — only when a historical format becomes genuinely un-foldable, never as an emission cleanup (bumping it in lockstep with `EVENT_CONTRACT_VERSION` bricks every in-flight run pinned lower). Two discipline tests guard it: a contract-surface hash snapshot (`packages/store/test/contract-version.test.ts`) and the `reducers.ts` touch-gate (`scripts/check-contract-bump.sh`) — both force a conscious bump-or-resnapshot. **Bump iff** a daemon at the prior contract version, folding a stream with the change, would produce a different/erroneous `run_state`: new/removed fact or intent type → yes; new field a fold path reads → yes; new pause/halt reason → yes; reducer behaviour change → yes; new observability event or projection column → no (off the fold path). Separately, the DB-migration `schema_version`: `migrate()` creates the baseline on a fresh DB and walks an existing DB forward through `SCHEMA_MIGRATIONS` (keyed by target version) up to CURRENT. The *automatic* open paths still refuse a store newer than the binary (`checkVersion`) — nothing downgrades by surprise. Each step is `{ up, down? }`: a schema downgrade is a first-class but **explicit operator action** via `fragua db migrate --to <lower>`, which walks the `down` inverses (descending), backs up first, and refuses to cross an irreversible step or to race a live daemon. It is run by the *newer* binary (the one that defines the `down` steps), after which the older binary opens the store cleanly. This is the schema axis only — orthogonal to the `contract_version` resume gate above. See `packages/store/src/pragmas.ts`, `packages/store/src/migrations.ts` (`migrateTo`/`planMigration`), and `docs/proposals/archive/reversible-migrations.md`.
 - **Replay determinism under LLM non-determinism** — determinism is a property of the **folded event log, not of re-execution**. Reconstructing `run_state` is a pure fold over recorded `fact.*` (`deriveRunState`, `reducers.ts`), so a given log always reaches exactly one state; recorded turns rehydrate from the `messages` table as `priorMessages` (1.10) rather than re-running. Durability is **turn-grained**: a turn whose response was recorded before a crash is never re-issued, but the *un-recorded tail* — a call in flight when the process died — re-executes on resume and may return different bytes. So forward re-execution is not bit-identical; only the fold is. External-call safety across that boundary is the provider idempotency key (1.1); pure/idempotent handlers replay freely.
 
 ---
@@ -145,6 +145,8 @@ The authoritative DDL is `packages/store/src/schema.sql`; connection pragmas (WA
 `routing` is a flat, dotted JSON dict carrying load-bearing per-run state: the typed run inputs under `inputs` (with `$fragua_blob` spill refs, §0), the fan-out frontier under `internal.active_nodes` (I11), operator budget overrides under `budget_override.<scope>.<metric>`, retry/pacing counters (`internal.retry_count.<nodeId>`, `internal.timeout_retries.<nodeId>`, `internal.provider_retry.attempt`), and the auto-wake timer `internal.auto_resume_at`. The on-disk serialization is unschematized — there is no per-key column schema. The 8 KB size CHECK (I6) is a defense-in-depth tripwire (it catches a payload leaking into a variable-length namespace), not a budget the code is designed against — reads go through bounded, typed accessors. That shape is deliberate; the trust model:
 
 **Typed-routing contract (read surface).** The on-disk bytes stay flat + dotted; namespaces are a *typed view*, not a reshape (docs/proposals/archive/typed-routing-struct.md §6). This is deliberate, not a migration dodge: the column has no struct to be lifted to, because its load-bearing keys are *dynamic* — keyed by runtime values (`internal.retry_count.<nodeId>`, `budget_override.<scope>.<metric>`, `goal_gates.<nodeId>`, `max_retries_override.<nodeId>`). A map keyed by arbitrary node ids is intrinsically an open string-keyed record; the struct-shaped thing is the *decoded* namespaced view (`inputs` / `frontier` / `budget` / `retry` / `goalGate` / `limits` / `timer` / `context`), and that view is what gets typed. A single accessor module (`packages/core/src/routing.ts`) is the source of truth for the dotted-key vocabulary (the key constants / builders) and the READ surface: eight validate-and-degrade accessors (`getInputs`, `getFrontier`, `getBudget`, `getRetry`, `getGoalGate`, `getLimits`, `getTimer`, `getContext`) that fold each family of dynamic keys into a typed lookup (`getRetry(routing).count(nodeId)`, `getBudget(routing).override(scope, metric)`) — the accessors, plus the documentary `RoutingStruct` schema, *are* the lift. Each generalises a former ad-hoc inline cast and degrades to the conservative authored default — never pausing — so a mis-folded key or a tampered import bundle yields a safe default, never a wrong dispatch decision (budget override → the lower authored cap; frontier → no fan-out; counters → 0). Retyping the view needs no `EVENT_CONTRACT_VERSION` bump and no schema migration — and not as cost-avoidance: `routing` is a `run_state` projection, not an emitted event payload, so the fold-all-versions rule (ground rule 11, which governs the append-only log) does not govern its in-memory type; the bytes don't move and, because routing only ever grows additively, every historical blob reads identically. A discipline lint bans raw `routing[…]` indexing outside the accessor module (the one sanctioned exception beyond the reducer's frontier write).
+
+**One sanctioned eventless projection transition.** `run_state` is otherwise a pure fold of the event log — `deriveRunState` reconstructs it from the raw log and must agree with the live projection (bundle import and `fragua show` depend on it). The single deliberate exception is the queue claim: `claimNextRun` flips `status` `queued → running` and bumps `version` in one OCC-guarded UPDATE **without** appending a fact. This is scheduling state, not audited truth — which run a daemon picked up next is not a causal fact about the workflow; the audited truth is `fact.run_started` / `fact.dispatch_started`, which the claimed daemon emits immediately after and which the fold *does* project. A consequence: a derived `run_state`'s `version` never equals the live `version` (the live one carries the extra claim bump), so `deriveRunState`-vs-`getState` comparisons normalise `version` away. Every *other* transition — including crash requeue (`fact.run_requeued_after_crash`, which preserves `currentNode` exactly as the startup sweep leaves it) — rides a fact, so the two projections agree field-for-field modulo that version/seq bookkeeping.
 
 **Trust model.** `routing` is a projection cache, not a second source of truth. It is written only inside the same transaction as an event append (I1), through exactly two seams: the reducer fold (`reducers.ts` — the genesis `intent.run_enqueued` seeds `inputs`, facts evolve `internal.active_nodes` via the relocated `getFrontier`) and the `routingPatch` option on `appendFact` (the daemon materializing applied intents and retry/abort bookkeeping into the projection it just evolved, through the key-wise spread). There is no out-of-band writer — the web/CLI write plane only appends intents; the single daemon writer is the only process that folds them into `routing`. Validation runs on READ, in the accessors, never in the write txn (I1) — the txn body stays pure SQL + the key-wise spread, with no TypeBox `Check`/`Compile` reachable from `writeTxn`. The accessors are exactly the typed form of the prior casts, so a pre-wrapper run's flat dotted bytes read identically and legacy runs never brick.
 
@@ -249,15 +251,15 @@ Schedule events ride `daemon_events` (not the per-run `events` table) because th
 
 ## 4. Store interfaces
 
-The store contract is segregated into four sub-interfaces along the
+The store contract is segregated into six sub-interfaces along the
 fault lines that actually matter (write vs read, run-state vs analytics
-vs daemon coordination). `IEventStore` is preserved as a composite
-type alias so existing callers don't break, but new code should depend
-on the narrowest interface that fits its needs — analytics routes need
-`IAnalyticsReader`, the supervisor needs `IDaemonCoordinator`, the
-daemon executor needs the full set.
+vs daemon coordination vs the two per-provider stores). `IEventStore` is
+preserved as a composite type alias so existing callers don't break, but
+new code should depend on the narrowest interface that fits its needs —
+analytics routes need `IAnalyticsReader`, the supervisor needs
+`IDaemonCoordinator`, the daemon executor needs the full set.
 
-`SqliteStore` implements all four in a single class today. Splitting
+`SqliteStore` implements all six in a single class today. Splitting
 them by surface is **necessary but not sufficient** for any future
 shared or out-of-process backing — say, the reader interface fronted by
 a Postgres replica or the analytics one by DuckDB. It removes one
@@ -271,7 +273,7 @@ SPEC §5 is authoritative here: multi-machine / shared deployment is out
 of scope by design, and this split is groundwork, not a drop-in seam.
 See §12.
 
-The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator` in `packages/store/src/types.ts`, where every method signature is authoritative.
+The composite `IEventStore` is preserved as `IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator & IProviderCredentialStore & IProviderConfigStore` in `packages/store/src/types.ts`, where every method signature is authoritative.
 
 ### 4.1 IEventWriter
 
@@ -312,7 +314,7 @@ on `daemon_events` (see §3).
 
 ### 4.5 Errors and shared types
 
-`ArtifactScope` is `{ runId, nodeId, iteration, key }` and `ArtifactRef` extends it with `{ sha256, sizeBytes, mime }`. The store throws typed errors — `ConcurrencyError` (OCC conflict), `ArtifactCollisionError` (same-scope rewrite with differing content), `ArtifactTooLargeError`, `SchemaDriftError`, `QuarantineError`. These plus `SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`, `GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`, `RunCostTotalsRow`, `Project`, the analytics row types, and the global-feed cursor option types all live in `packages/store/src/types.ts`. SQL strings are split per-table across `event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`, `artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and `analytics-queries.ts` — each file owns its table's reads + writes. A drift-lint checks the source interface files against their implementing class so the four sub-interfaces and `SqliteStore` can't disagree.
+`ArtifactScope` is `{ runId, nodeId, iteration, key }` and `ArtifactRef` extends it with `{ sha256, sizeBytes, mime }`. The store throws typed errors — `ConcurrencyError` (OCC conflict), `ArtifactCollisionError` (same-scope rewrite with differing content), `ArtifactTooLargeError`, `SchemaDriftError`, `QuarantineError`. These plus `SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`, `GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`, `RunCostTotalsRow`, `Project`, the analytics row types, and the global-feed cursor option types all live in `packages/store/src/types.ts`. SQL strings are split per-table across `event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`, `artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and `analytics-queries.ts` — each file owns its table's reads + writes. A sub-interface discipline lint (`packages/store/test/event-store-sub-interface.lint.test.ts`) source-scans every `packages/*/src` OUTSIDE `packages/store` and fails the build if a parameter or property is annotated with the bare composite `: IEventStore` (or `& IEventStore`): consumers must type their `store` seam against the narrowest sub-interface they actually call, so the split is enforced rather than merely documented. It does NOT compare the interfaces to `SqliteStore` — that agreement is held by `implements IEventStore` on the class plus the workspace typecheck. Only four assembly seams (server + daemon entrypoints, CLI store-client + executor-deps) may hold the full composite, to hand narrow slices out.
 
 **Implementation notes:**
 - All methods synchronous; `bun:sqlite` is sync.
@@ -349,8 +351,12 @@ A `HandlerSpec` registers a node kind with its `sideEffect` class (`none` / `ide
 Handlers never compute `argsHash` themselves. The framework owns canonicalisation so structurally-equal args across replay boundaries produce a stable key regardless of how the handler built them.
 
 ### Enforced at review
-- `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.
-- AST rule: no `await`/`JSON.stringify` inside `.transaction(() => ...)` bodies.
+The discipline lints are AST scans (not regex over source text), so a forbidden call can't slip past by renaming or by routing through a helper:
+- Handler discipline (`packages/core/test/handler/discipline.test.ts`): no `node:*`/`undici` import, `fetch`/`globalThis.fetch`, `Bun.*`, or `process.env` inside `handlers/` — I/O routes through `ctx`. A biome `noRestrictedImports` rule bans `node:fs`/`node:child_process`/`undici` there as a pre-commit backstop.
+- Transaction purity (`packages/store/test/lint.test.ts`): no `await`/`JSON.stringify`/`JSON.parse`/`fetch`/`Value.Check` inside a `writeTxn`/`.transaction()` callback or a same-file helper it calls.
+- Browser safety (same file): no `node:`/`bun:`/`@fragua/store` value import transitively reachable from `packages/core/src/index.ts`.
+- SQL location (`packages/store/test/sql-location.lint.test.ts`): table DML/DQL lives only in `*-queries.ts` (a named maintenance allowlist aside).
+- Inline imports (`packages/server/test/inline-import-discipline.test.ts`): no dynamic `import()`/`require()` in production source across `packages/*/src` + `cli/bin`.
 - Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for llm-style handlers that self-bound via cost/tokens), include replay property test for external tools.
 
 ---
@@ -366,13 +372,49 @@ The executor loop (`runExecutor`) claims the next run (`claimNextRun(MAX_CONCURR
 ### 6.1 Executor module decomposition
 
 `packages/daemon/src/executor.ts` is the orchestration entry point
-(`runExecutor`, `runOne`, the `dispatchOne` turn loop) and the public
-facade — call sites and tests import `runExecutor`, `runOne`,
+(`runExecutor`, `runOne`, and the per-run turn loop that walks `dispatchOne`)
+and the public facade — call sites and tests import `runExecutor`, `runOne`,
 `ExecutorOpts`, `makeLeakBudget`, and the re-exported `classifyAbortCause`
-/ `buildSubstitutionArgs` / `resolveBackoff` from it. The behaviour-bearing
-leaf logic lives in focused sibling modules, each owning one concern and
-reaching only into the store API:
+/ `buildSubstitutionArgs` / `resolveBackoff` / `mergeFanoutAppendOpts` from it.
+`runOneInner` assembles a `RunDeps` bundle plus a fresh `RunTurnState` and
+threads them through the turn functions below; it holds no mutable closure state
+of its own. The behaviour-bearing leaf logic lives in focused sibling modules,
+each owning one concern and reaching only into the store API:
 
+- **Pure decision core** (no store / clock / RNG / I/O — injected `now` /
+  `random` / `leakedAt`, guarded by `decision-core-discipline.test.ts`;
+  SPEC §3.11 / I12): `transition-planner.ts` (`planTransition` — the
+  successful turn), `abort-planner.ts` (`planAbort` for the abort arm +
+  `planAbortLoop` for the trend-warn / ceiling-pause), `predispatch-planner.ts`
+  (`planPreDispatch` — the contract-version gate, unparseable-workflow refusal,
+  worktree-provision failure, and `max_loops` ceiling; `planLeakHalt` — the
+  leaked-handler halt), and `fanout-planner.ts` (`planFanoutStep` — the
+  seed/join/dispatch frontier decision; plus the run-level disposition helpers
+  `noteDisposition` / `planBranchTerminal` / `planBranchAbortLoop`). Each
+  returns a plan the driver applies.
+- `run-turn-state.ts` — the explicit `RunTurnState` record (the
+  consecutive-abort streak, per-branch abort streaks, the fan-out disposition +
+  pending-warn slots, the lazy graph / outputs caches, the last committed
+  fan-out projection, the provisioned env) with a `create()` and small
+  updaters. It replaces `runOneInner`'s closure locals and is threaded by
+  reference into each turn. Pure data — no store handle, no clock, no I/O
+  (guarded by `decision-core-discipline.test.ts`).
+- `dispatch-wiring.ts` — the per-dispatch wiring both the linear and
+  fan-out-branch paths use: `buildDispatchContext` (compose the abort signals +
+  deadlines, the pre-commit recorder, the streaming observability sink, the
+  usage accumulator, tool scoping, and the handler context), plus the `RunDeps`
+  dependency bundle, the store-reading lazy graph / outputs caches
+  (`graphFor` / `outputsFor` / `invalidateOutputsCacheIf`), and
+  `mergeFanoutAppendOpts`. The two paths once carried near-identical copies of
+  this block; one builder keeps them from drifting.
+- `dispatch-turn.ts` — `dispatchOne` (the linear turn) and its commit arms:
+  the contract-version entry gate, the cancel / operator-pause commits, the
+  run-start emit + auto-title seed, the dispatch-started marker, the `max_loops`
+  gate, the handler dispatch, and the leak / abort / transition commits. It
+  delegates a `type: parallel` node to `runFanout`.
+- `fanout.ts` — the parallel fan-out region driver: `runFanout` (the on-log
+  reactive frontier superstep), `executeBranchNode`, and the serialized
+  `commitFanoutFact` linearization lane. See §6.2.
 - `executor-helpers.ts` — pure, dependency-light helpers: abort
   classification, the leak-watchdog sentinel, routing/number/string
   coercers, the per-node retry-count reader (`internal.retry_count.<nodeId>`),
@@ -380,16 +422,24 @@ reaching only into the store API:
   observability, substitution-arg building, backoff / max-retries resolution,
   the routing-patch merge, and `sleep`. Unit-tested in isolation.
 - `occ-append.ts` — `tryAppendFact` (the OCC append primitive, conflict →
-  `false`) and `makeOccController` (the per-`runOne` conflict controller:
+  `false`), `makeOccController` (the per-`runOne` conflict controller:
   warn at 2, halt with `occ_exhausted` at 3, with the halt append itself
-  retried against fresh state).
+  retried against fresh state), and the single `commitParkOrTerminal` shared by
+  the linear and fan-out paths: it commits a run-parking / terminal fact
+  HONESTLY — on a lost OCC race it re-reads (return terminal if the run already
+  left `running`), else drives the controller (halt `occ_exhausted` at the
+  ceiling, else park the facts for a re-commit next turn). No call site discards
+  a commit result, so a conflicted halt/pause can no longer strand the run
+  `running` (§1.6). Owns `DispatchOutcome`, re-exported from `executor.ts`.
 - `snapshot-service.ts` — `captureBoundarySnapshot` (per-step / HITL Diff
   snapshots) and `disposeTerminalWorktree` (terminal snapshot then dispose,
   gated on the `fact.snapshot_recorded` append landing).
 
 Event-store invariants are unchanged across the split: facts stay
 OCC-checked, observability stays best-effort and reducer-free, and handler
-I/O still routes through `ctx`.
+I/O still routes through `ctx`. A source-scan lint
+(`function-length.lint.test.ts`) keeps every function under `packages/daemon/src`
+at or below 200 lines, so no turn function silently re-grows into a monolith.
 
 ### 6.2 Parallel fan-out execution
 

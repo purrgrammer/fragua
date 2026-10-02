@@ -533,3 +533,104 @@ describe("planTransition — properties", () => {
     );
   });
 });
+
+// Fail-edge back-edge cap (SPEC §3.1): a step whose `outcome=fail` edge re-enters
+// itself (a self-loop) is bounded by that step's `max_retries`. `ci` fails every
+// pass; the counter bumps on each re-entry and pauses `max_retries` once it
+// would exceed the cap.
+function failCycleGraph(maxRetries: number): Graph {
+  const nodes: Record<string, Node> = {
+    start: { id: "start", type: "start", attrs: { label: "start" } },
+    ci: { id: "ci", type: "tool", attrs: { label: "ci", tool_command: "true", max_retries: maxRetries } },
+    exit: { id: "exit", type: "exit", attrs: { label: "exit" } },
+  };
+  const edges: Edge[] = [
+    { from: "start", to: "ci", attrs: {} },
+    { from: "ci", to: "exit", attrs: {} },
+    { from: "ci", to: "ci", attrs: { outcome: "fail" } },
+  ];
+  return { id: "g", directed: true, attrs: {}, nodes, edges };
+}
+
+function failStateWithRouting(routing: Record<string, unknown>): RunState {
+  return {
+    runId: "r",
+    version: 1,
+    status: "running",
+    currentNode: "ci",
+    workflowSha: "g",
+    contractVersion: 1,
+    routing,
+    metrics: { totalCostUsd: 0, totalInputTokens: 0, totalOutputTokens: 0, nodeCosts: {} },
+  } as unknown as RunState;
+}
+
+function failInput(graph: Graph, state: RunState): TransitionInput {
+  return {
+    state,
+    decision: {
+      kind: "proceed",
+      routingDelta: {},
+      shouldPause: false,
+      shouldPauseAfterDispatch: false,
+      appliedSeqs: [],
+      dropped: [],
+    } as TransitionInput["decision"],
+    graph,
+    handlerResult: { kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 },
+    accounting: {
+      turnBilled: 0,
+      totalCostUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      lastModel: undefined,
+    },
+    effectiveRouting: { ...state.routing },
+    currentNode: "ci",
+    iteration: 0,
+    now: 0,
+    random: () => 0.5,
+  } satisfies TransitionInput;
+}
+
+describe("planTransition — fail-edge back-edge cap (§3.1)", () => {
+  const isMaxRetriesPause = (f: { type: string; payload: unknown }): boolean =>
+    f.type === "fact.run_paused" && (f.payload as { reason?: string }).reason === "max_retries";
+
+  test("a fail-edge self-loop with max_retries: n pauses after exactly n re-entries", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 5 }), (n) => {
+        const graph = failCycleGraph(n);
+        expect(validate(graph).filter((d) => d.severity === "error")).toHaveLength(0);
+        let routing: Record<string, unknown> = {};
+        const pausedAt: number[] = [];
+        for (let i = 1; i <= n + 1; i++) {
+          const plan = planTransition(failInput(graph, failStateWithRouting(routing)));
+          if (plan.facts.some(isMaxRetriesPause)) pausedAt.push(i);
+          if (plan.routingPatch !== undefined) routing = { ...routing, ...plan.routingPatch };
+        }
+        // Exactly the (n+1)th dispatch pauses; the counter reached n first.
+        expect(pausedAt).toEqual([n + 1]);
+        expect(routing[retryCountKey("ci")]).toBe(n);
+      }),
+      { numRuns: pbtRuns(32) },
+    );
+  });
+
+  test("max_retries: 0 (unset) never pauses a fail-edge cycle", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 20 }), (iterations) => {
+        const graph = failCycleGraph(0);
+        let routing: Record<string, unknown> = {};
+        for (let i = 0; i < iterations; i++) {
+          const plan = planTransition(failInput(graph, failStateWithRouting(routing)));
+          expect(plan.facts.some(isMaxRetriesPause)).toBe(false);
+          if (plan.routingPatch !== undefined) routing = { ...routing, ...plan.routingPatch };
+        }
+      }),
+      { numRuns: pbtRuns(16) },
+    );
+  });
+});

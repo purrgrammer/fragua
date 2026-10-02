@@ -193,11 +193,11 @@ describe("substitute() integration with outputs", () => {
   });
 });
 
-describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
+describe("substitute() — wrapValues (prompt-consumption delimiting)", () => {
   test("wraps an interpolated output value in a content-derived fragua_output tag (well-formed pair)", () => {
     const result = substitute("findings: ${{ outputs.scope.note }}", {
       args: { outputs: { scope: { note: "all good" } } },
-      wrapOutputs: true,
+      wrapValues: true,
     });
     // The hash lives in the element NAME so the open/close pair is well-formed
     // markup (a markdown renderer hides the tags instead of printing a broken
@@ -214,7 +214,7 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
   test("boundary id is a 64-hex SHA-256 (browser-safe noble-hashes, no injection)", () => {
     // One cross-env hash everywhere — core hashes with noble-hashes SHA-256, byte
     // -identical to `node:crypto`, so no server-side injection seam is needed.
-    const wrapped = substitute("x ${{ outputs.n.v }}", { args: { outputs: { n: { v: "VV" } } }, wrapOutputs: true });
+    const wrapped = substitute("x ${{ outputs.n.v }}", { args: { outputs: { n: { v: "VV" } } }, wrapValues: true });
     expect(wrapped).toMatch(/^x <fragua_output_([0-9a-f]{64})>VV<\/fragua_output_\1>$/);
     // SHA-256("VV") — pinned so a hash-impl swap is a visible test break.
     expect(wrapOutputValue("VV")).toBe(
@@ -234,24 +234,30 @@ describe("substitute() — wrapOutputs (prompt-consumption delimiting)", () => {
     expect(value).toBe("origin/main..HEAD"); // value verbatim, no padding whitespace
   });
 
-  test("inputs are NOT wrapped — only outputs", () => {
+  test("wrapValues wraps interpolated inputs in the same sha delimiter", () => {
     const result = substitute("x ${{ inputs.t }} y ${{ outputs.n.v }}", {
       args: { inputs: { t: "TT" }, outputs: { n: { v: "VV" } } },
-      wrapOutputs: true,
+      wrapValues: true,
     });
-    expect(result).toContain("x TT y ");
-    expect(result).toContain("<fragua_output_"); // the output got wrapped
-    expect(result).not.toMatch(/<fragua_output_[0-9a-f]+>TT/); // input stayed bare
+    // Both the input and the output are fenced so neither can pose as an
+    // instruction. The input's tag hash is content-derived from its own value.
+    expect(result).toMatch(/<fragua_output_[0-9a-f]+>TT<\/fragua_output_[0-9a-f]+>/);
     expect(result).toMatch(/<fragua_output_[0-9a-f]+>VV<\/fragua_output_[0-9a-f]+>/);
   });
 
-  test("wrapOutputs is ignored under escapeForShell (shell context, not prompt)", () => {
-    const result = substitute("echo ${{ outputs.n.v }}", {
-      args: { outputs: { n: { v: "hi" } } },
-      wrapOutputs: true,
+  test("an unbound input stays the lenient empty string, never a wrapped empty value", () => {
+    const result = substitute("x=${{ inputs.missing }}", { args: { inputs: {} }, wrapValues: true });
+    expect(result).toBe("x=");
+    expect(result).not.toContain("fragua_output");
+  });
+
+  test("wrapValues leaves inputs raw under escapeForShell (shell context, not prompt)", () => {
+    const result = substitute("run ${{ inputs.cmd }} out ${{ outputs.n.v }}", {
+      args: { inputs: { cmd: "my cmd" }, outputs: { n: { v: "hi" } } },
+      wrapValues: true,
       escapeForShell: true,
     });
-    expect(result).toBe("echo 'hi'");
+    expect(result).toBe("run 'my cmd' out 'hi'");
     expect(result).not.toContain("fragua_output");
   });
 });

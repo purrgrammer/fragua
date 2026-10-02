@@ -4,16 +4,19 @@
 // @fragua/store. `workflowReader` (disk-backed workflow listing) stays optional
 // for the Workflows page.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type { AuthStorage, ModelRegistry } from "@fragua/agent";
-import type { IEventStore } from "@fragua/store";
+import { makeIntentPlane } from "@fragua/core/intent-plane";
+import { type IEventStore, newRunId } from "@fragua/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
 import { createFsProjectTreeReader } from "./adapters/project-tree-reader.ts";
 import { createRunSnapshotReader } from "./adapters/run-snapshot-reader.ts";
+import { createOriginGate } from "./origin-gate.ts";
 import type { ProjectTreeReader, RunSnapshotReader, ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { projectsRoutes } from "./routes/projects.ts";
@@ -52,6 +55,12 @@ export interface ServerOptions {
   cwd?: string;
   /** Optional port overrides. Any omitted port falls back to defaults. */
   ports?: ServerPorts;
+  /** Scheme+host+port the listener is bound to, for the same-origin gate.
+   * A thunk because the real port is known only after `Bun.serve` returns
+   * (port auto-bump); `startServer` populates it once the socket is bound.
+   * When omitted (or returning undefined), the gate falls back to accepting
+   * only loopback-family Origins/Hosts. */
+  boundOrigin?: () => { host: string; port: number } | undefined;
   /** Absolute path to the built web bundle (`packages/web/dist/`). When set,
    * the server also hosts the SPA from `/` with the existing API remounted
    * under `/api/*` (matching the client's BASE_URL = "/api"). Leave unset
@@ -105,6 +114,7 @@ function buildApiApp(opts: ServerOptions): Hono {
   const snapshotReader: RunSnapshotReader = ports.runSnapshotReader ?? createRunSnapshotReader();
 
   const api = new Hono();
+  api.use("*", createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined) }));
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
   api.route("/", projectsRoutes({ store: opts.store, reader: projectTreeReader }));
@@ -125,7 +135,13 @@ function buildApiApp(opts: ServerOptions): Hono {
       ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
     }),
   );
-  api.route("/", createScheduleRoutes({ store: opts.store }));
+  const schedulePlane = makeIntentPlane({
+    store: opts.store,
+    newRunId,
+    daemonStore: opts.store,
+    newScheduleId,
+  });
+  api.route("/", createScheduleRoutes({ store: opts.store, plane: schedulePlane }));
   api.route("/", skillsRoutes({ store: opts.store, homeDir: homedir(), cwd }));
   if (opts.authStorage && opts.modelRegistry && opts.defaultModels && opts.testProvider) {
     api.route(
@@ -207,6 +223,7 @@ export function createServer(opts: ServerOptions): Hono {
   }
 
   const app = new Hono();
+  app.use("*", createOriginGate({ boundOrigin: opts.boundOrigin ?? (() => undefined) }));
   // In web mode the API lives ONLY at `/api/*`. The bare paths (`/runs/:id`,
   // `/workflows`) are client-side routes owned by React Router — anything
   // unmatched on the server falls through to index.html so SPA routing works.
@@ -284,6 +301,7 @@ export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
 export { createFsProjectTreeReader } from "./adapters/project-tree-reader.ts";
 export { createRunSnapshotReader } from "./adapters/run-snapshot-reader.ts";
+export { createOriginGate, isLoopbackBind } from "./origin-gate.ts";
 export type {
   ProjectTreeEntry,
   ProjectTreeReader,
@@ -325,3 +343,13 @@ export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export type { WorkflowJudgeValidator, WorkflowModelValidator } from "./store/routes.ts";
 export { registryPreflight } from "./store/routes.ts";
 export { storeRunsRoutes } from "./store/runs-routes.ts";
+
+/** Mint a schedule id — Crockford-ish `sch_<rand>`. Injected into the intent
+ * plane (core stays browser-safe, so id minting is a host-side seam). */
+function newScheduleId(): string {
+  const buf = randomBytes(6);
+  const alph = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let s = "";
+  for (let i = 0; i < buf.length; i++) s += alph[buf[i]! % 36];
+  return `sch_${s}`;
+}

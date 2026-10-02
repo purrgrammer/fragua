@@ -56,16 +56,6 @@ export function resolveRetargetChain(graph: Graph, failedGateId: string): string
   return null;
 }
 
-/** Resolve the §3.7 failure-routing retarget for a single node. The
- * fail-edge case lives in edge-selection; pipeline termination is the
- * absence of any retarget here. */
-export function resolveFailRetarget(graph: Graph, sourceNodeId: string): string | null {
-  const node = graph.nodes[sourceNodeId];
-  const id = node?.attrs.retry_target;
-  if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
-  return null;
-}
-
 export type GoalGateAction =
   /** All gates satisfied — let the terminal exit emit `fact.run_terminated{completed}`. */
   | { kind: "exit" }
