@@ -7,8 +7,8 @@
 // there) to keep the test output clean; the exit code + the `.db` are what we
 // assert on.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeReadPlane } from "@fragua/core/read-plane";
@@ -207,6 +207,20 @@ describe("writeCiBundle — the --export on-disk gate", () => {
     writeFileSync(dest, "from an earlier run");
     expect(writeCiBundle(dest, new TextEncoder().encode("secret-bearing"), true)).toBe(false);
     expect(existsSync(dest)).toBe(false);
+  });
+
+  test("an unremovable stale bundle is reported, not thrown — the gate still answers false", () => {
+    // A directory at dest: rmSync without `recursive` refuses it (EISDIR/EPERM).
+    const dest = join(dir, "stale-as-dir.fragua");
+    mkdirSync(dest);
+    writeFileSync(join(dest, "x"), "x");
+    const spy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(writeCiBundle(dest, new TextEncoder().encode("secret-bearing"), true)).toBe(false);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
