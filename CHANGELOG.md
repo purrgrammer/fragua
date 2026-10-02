@@ -94,6 +94,15 @@ guarantee.
 
 ### Fixed
 
+- **MCP stdio diagnostics redact every non-flag argument.** A credential passed
+  as a bare positional argument (not only `--flag=VALUE` / `--flag VALUE`) no
+  longer survives into the connect-failure diagnostic or an export bundle.
+- **`fragua mcp login` strips Unicode controls from auth-server errors.** Bidi
+  overrides, isolates, line separators and zero-width characters are removed
+  alongside C0 bytes, so a hostile `error_description` cannot re-order the
+  printed line.
+- **A timed-out MCP connect cannot surface as an unhandled rejection.** The
+  losing connect promise is observed before teardown closes the transport.
 - **`fragua runs tail` and `runs wait` settle on legacy runs.** The follow loop
   tested only the current contract's terminal facts, so a run terminated under
   an older event contract never settled and the command waited forever.
