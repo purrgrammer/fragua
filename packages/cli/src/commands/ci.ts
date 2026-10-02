@@ -79,6 +79,9 @@ export interface CiCommandOptions {
   allowEnv?: string[];
   /** Base directory used to resolve the workflow + project identity. Default cwd. */
   cwd?: string;
+  /** Home directory for the global config + skills. Default `os.homedir()`;
+   * a test seam, since Bun's `homedir()` ignores `$HOME`. */
+  homeDir?: string;
 }
 
 /** Wall-clock ms at which a `paused_auto` run becomes wake-eligible, read
@@ -206,7 +209,7 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
     const seeded = [...new Set([...seededGlobal, ...seededEnv])];
     if (preexisting)
       console.error(chalk.dim(`ci: using existing store ${storePath} as-is (no credential seeding or pruning)`));
-    const config = await loadConfig(cwd);
+    const config = await loadConfig(cwd, opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {});
     let timeouts: ReturnType<typeof resolveTimeouts>;
     try {
       timeouts = resolveTimeouts(config);
@@ -221,11 +224,16 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       timeouts,
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     });
     if (!deps.llm.useLlm) {
-      const hint =
-        seeded.length > 0
-          ? `creds seeded for ${seeded.join(", ")}`
+      // MCP logins seed alongside provider keys but say nothing about whether
+      // an llm provider resolved, so the hint names only the provider entries.
+      const seededLlm = seeded.filter((s) => !s.startsWith("mcp:"));
+      const hint = preexisting
+        ? `the existing --db store has no usable provider credentials, and a pre-existing store is never seeded`
+        : seededLlm.length > 0
+          ? `creds seeded for ${seededLlm.join(", ")}`
           : "no provider creds in the global store (`fragua providers add`) or env";
       console.error(chalk.yellow(`ci: no llm provider resolved (${hint}); llm nodes will use the stub backend`));
     }
