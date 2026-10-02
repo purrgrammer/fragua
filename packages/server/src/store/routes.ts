@@ -728,7 +728,9 @@ export function createRoutes(deps: ServerDeps): Hono {
   // ─── Aggregate metrics (dashboard) ──────────────────────────
 
   app.get("/metrics/global", (c) => {
-    const windowHours = numericQueryParam(c.req.query("windowHours"), { fallback: 24 * 30 });
+    // Bounded like `limit`: an unbounded window is a full-history aggregation
+    // per call. A year covers every dashboard range; 1h is the finest bucket.
+    const windowHours = numericQueryParam(c.req.query("windowHours"), { fallback: 24 * 30, min: 1, max: 24 * 366 });
     const cutoffMs = (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
 
     const totals = readPlane.globalMetrics({ sinceMs: cutoffMs });
