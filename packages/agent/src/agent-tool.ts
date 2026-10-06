@@ -119,14 +119,21 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
       "Partition work so concurrent workers touch disjoint files. Depth 1: a worker cannot call `agent`.",
     parameters,
     async execute(toolCallId, callParams, signal) {
+      // pi-agent-core hands every tool call the turn's abort signal; the
+      // caller's own `input.signal` is the fallback so a run cancel reaches the
+      // worker even if a host ever invokes `execute` without one.
+      const effectiveSignal = signal ?? cfg.input.signal;
       const result = await runWorker(deps, {
         cfg,
         toolCallId: typeof toolCallId === "string" && toolCallId.length > 0 ? toolCallId : `worker_${randomUUID()}`,
         args: callParams as AgentToolArgs,
-        ...(signal !== undefined ? { signal } : {}),
+        ...(effectiveSignal !== undefined ? { signal: effectiveSignal } : {}),
       });
+      // The model reads `content` only (`details` is for persistence and the
+      // UI), so the typed result rides the text: status + counters, the
+      // worker's answer, then the validated `outputs` struct as JSON.
       return {
-        content: [{ type: "text", text: result.text }],
+        content: [{ type: "text", text: renderWorkerResult(result) }],
         details: { fragua_tool: "agent", is_error: result.status !== "completed", data: result },
       };
     },
@@ -325,6 +332,11 @@ async function runWorkerInSlot(
   const setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
   if ("error" in setup) return errResult(setup.error);
   const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
+  // The worker's exact prompt persists under its node id, as the caller's does
+  // (`llm.start` is capped at 4 KB, so the row is the forensic record).
+  if (input.persistMessage && systemPrompt.length > 0) {
+    input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() }, { nodeId: workerNodeId });
+  }
 
   const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
 
@@ -569,6 +581,16 @@ export class WorkerSlotsAborted extends Error {
 }
 /** Config-cascade default wall-clock cap for a worker (`agent.timeout-minutes`). */
 const DEFAULT_AGENT_TIMEOUT_MINUTES = 15;
+
+/** The text the CALLER model reads for one worker: a status line with the
+ * counters, the worker's final answer, and the validated `outputs` as JSON. */
+export function renderWorkerResult(result: AgentWorkerResult): string {
+  const head = `[worker ${result.status}] $${result.cost_usd.toFixed(4)} · ${result.turns} turns · ${result.tool_calls} tool calls`;
+  const parts = [head];
+  if (result.text.length > 0) parts.push(result.text);
+  if (result.outputs !== undefined) parts.push(`outputs:\n${JSON.stringify(result.outputs, null, 2)}`);
+  return parts.join("\n\n");
+}
 
 /** The caps one worker runs under, innermost first. The operator's config is a
  * CEILING the model can only tighten: a per-call `max_cost_usd` /

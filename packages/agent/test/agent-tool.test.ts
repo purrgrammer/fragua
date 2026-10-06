@@ -106,6 +106,8 @@ describe("agent tool — worker transcript persistence", () => {
       expect(workerAssistant.length).toBeGreaterThan(0);
       expect(JSON.stringify(workerAssistant)).toContain("worker did the work");
       expect(workerRows.every((r) => r.nodeId === workerNodeId)).toBe(true);
+      // the worker's exact system prompt is on record under its own node id
+      expect(workerRows.some((r) => r.message.role === "system")).toBe(true);
       // the worker's own conversational turns never land on the caller's node —
       // only the tool RESULT (which legitimately echoes the worker's answer) does.
       const callerConversation = rows.filter(
@@ -192,6 +194,8 @@ describe("agent tool — declared outputs enforcement", () => {
       const toolResults = rows.filter((r) => r.nodeId === undefined && r.message.role === "toolResult");
       const text = JSON.stringify(toolResults);
       expect(text).toContain("did not call emit_output");
+      // the status reaches the caller model through content, not only details
+      expect(text).toContain("[worker error]");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
