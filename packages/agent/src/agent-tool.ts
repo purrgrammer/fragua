@@ -8,6 +8,7 @@
 // breakdown nests each worker under its caller while budget enforcement keeps
 // reading the caller's bucket.
 
+import { randomUUID } from "node:crypto";
 import {
   Agent,
   type AgentEvent,
@@ -120,7 +121,7 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
     async execute(toolCallId, callParams, signal) {
       const result = await runWorker(deps, {
         cfg,
-        toolCallId: typeof toolCallId === "string" && toolCallId.length > 0 ? toolCallId : `worker_${Date.now()}`,
+        toolCallId: typeof toolCallId === "string" && toolCallId.length > 0 ? toolCallId : `worker_${randomUUID()}`,
         args: callParams as AgentToolArgs,
         ...(signal !== undefined ? { signal } : {}),
       });
@@ -201,9 +202,13 @@ async function prepareWorkerSetup(
   const skillsCatalog = renderSkillsCatalog(workerSkills);
 
   // System prompt — as for an llm step, from the worker's skills + context files.
+  // `context_files` is MODEL-supplied here (an llm step's comes from the YAML),
+  // so it is read through `ExecutionEnvironment.readFile`'s realpath jail: an
+  // absolute path, a `..` escape, or a symlink leaving the worktree is refused
+  // and surfaces as a warning, never as prompt content.
   const contextFiles = applyDefaultContextFiles(args.context_files ?? []);
   const { text: contextBlock, warnings: ctxWarnings } = await loadContextFiles(cfg.effectiveEnv, contextFiles);
-  if (input.emit) for (const m of ctxWarnings) void input.emit("agent.warning", { message: m });
+  if (input.emit) for (const m of ctxWarnings) void input.emit("agent.warning", { nodeId: workerNodeId, message: m });
   const derivedRunEnv = deriveRunEnv(cfg.effectiveEnv);
   const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? deps.runEnv?.bootstrapCommand;
   const workerRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
@@ -515,7 +520,10 @@ export const DEFAULT_AGENT_CONCURRENCY = 4;
 export class WorkerSlots {
   private inUse = 0;
   private readonly waiters: Array<() => void> = [];
-  constructor(private readonly limit: number) {}
+  constructor(private readonly limit: number) {
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new RangeError(`WorkerSlots: limit must be a positive integer, got ${limit}`);
+  }
   acquire(signal?: AbortSignal): Promise<() => void> {
     return new Promise((resolve, reject) => {
       const grant = () => {
