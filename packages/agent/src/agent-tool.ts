@@ -93,7 +93,7 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
         Type.Unsafe<"low" | "medium" | "high">({ type: "string", enum: ["low", "medium", "high"] }),
       ),
       skills: Type.Optional(Type.Array(Type.String())),
-      context_files: Type.Optional(Type.Array(Type.String())),
+      context_files: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })),
       outputs: Type.Optional(Type.Object({}, { additionalProperties: true })),
       max_cost_usd: Type.Optional(
         Type.Number({
@@ -266,9 +266,11 @@ async function prepareWorkerSetup(
     nodeId: workerNodeId,
     iteration: iteration.n,
     http: makeHttpClient({ signal: signal ?? input.signal }),
+    // Anything a worker's tool emits lands on the WORKER's timeline; the
+    // daemon would otherwise spread the caller's node id over it.
     emit: input.emit
       ? (type, payload) => {
-          void input.emit?.(type as EventType, payload);
+          void input.emit?.(type as EventType, { nodeId: workerNodeId, ...payload });
         }
       : () => {},
     ...(input.judge !== undefined ? { judge: input.judge } : {}),
@@ -352,23 +354,27 @@ async function runWorkerInSlot(
   let setup: Awaited<ReturnType<typeof prepareWorkerSetup>>;
   try {
     setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
-    if ("error" in setup) return errResult(setup.error);
-    // The worker's exact prompt persists under its node id, as the caller's
-    // does (`llm.start` is capped at 4 KB, so the row is the forensic record).
-    if (input.persistMessage && setup.systemPrompt.length > 0) {
-      input.persistMessage(
-        { role: "system", content: setup.systemPrompt, timestamp: Date.now() },
-        { nodeId: workerNodeId },
-      );
-    }
   } catch (err) {
     return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if ("error" in setup) return errResult(setup.error);
   // Setup awaited real I/O (context files); an abort that landed meanwhile
   // would never fire the listener registered below, so re-check before any
-  // model call or write-class tool can run against a cancelled turn.
+  // row is written, any model call or write-class tool can run against a
+  // cancelled turn.
   if (signal?.aborted) return { ...errResult("worker aborted before it started"), status: "aborted" };
   const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
+  // The worker's exact prompt persists under its node id, as the caller's does
+  // (`llm.start` is capped at 4 KB, so the row is the forensic record). It is
+  // the first worker row and `llm.start` follows at once, so no transcript
+  // write ever sits outside a step envelope.
+  if (input.persistMessage && systemPrompt.length > 0) {
+    try {
+      input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() }, { nodeId: workerNodeId });
+    } catch (err) {
+      return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
 
