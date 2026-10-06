@@ -47,8 +47,11 @@ steps:
       rm -rf "$out" && mkdir -p "$out"
       { bun run typecheck; echo "typecheck exit $?"; } > "$out/typecheck.txt" 2>&1
       { bun run lint; echo "lint exit $?"; } > "$out/lint.txt" 2>&1
-      { bun run test:node 2>&1 | grep -vE '^\(pass\) '; echo "test:node exit ${PIPESTATUS[0]:-?}"; } > "$out/test-node.txt" 2>&1
-      { bun run test:web 2>&1 | tail -30; echo "test:web exit ${PIPESTATUS[0]:-?}"; } > "$out/test-web.txt" 2>&1
+      bun run test:node > "$out/test-node.raw" 2>&1; node_exit=$?
+      { grep -vE '^\(pass\) ' "$out/test-node.raw"; echo "test:node exit $node_exit"; } > "$out/test-node.txt" 2>&1
+      bun run test:web > "$out/test-web.raw" 2>&1; web_exit=$?
+      { tail -30 "$out/test-web.raw"; echo "test:web exit $web_exit"; } > "$out/test-web.txt" 2>&1
+      rm -f "$out/test-node.raw" "$out/test-web.raw"
       for p in packages/*; do
         s=$(find "$p/src" -name '*.ts' -o -name '*.tsx' 2>/dev/null | grep -v '\.test\.' | xargs cat 2>/dev/null | wc -l | tr -d ' ')
         t=$(find "$p" -path '*/node_modules' -prune -o \( -name '*.test.ts' -o -name '*.test.tsx' \) -print | xargs cat 2>/dev/null | wc -l | tr -d ' ')
@@ -56,7 +59,8 @@ steps:
       done > "$out/sizes.txt"
       for p in packages/*/; do
         n=$(basename "$p")
-        echo "$n -> $(grep -rhoE "from ['\"]@fragua/[a-z-]+" "$p/src" --include='*.ts' --include='*.tsx' 2>/dev/null | sed -E "s/.*@fragua\///" | sort | uniq -c | sort -rn | awk '{printf "%s(%s) ", $2, $1}')"
+        edges=$(grep -rhoE "from ['\"]@fragua/[a-z-]+" "$p/src" --include='*.ts' --include='*.tsx' 2>/dev/null | sed -E 's/.*@fragua\///' | sort | uniq -c | sort -rn | awk '{ printf "%s(%s) ", $2, $1 }')
+        echo "$n -> $edges"
       done > "$out/import-edges.txt"
       find packages/*/src -name '*.ts' -o -name '*.tsx' | grep -v '\.test\.' | xargs wc -l | sort -rn | head -30 > "$out/largest-files.txt"
       exit 0
