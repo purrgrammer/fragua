@@ -123,9 +123,12 @@ export function isSyntheticNodeId(nodeId: string | null | undefined): boolean {
 }
 
 /** The caller node id of an `agent`-tool worker's synthetic node id
- * (`__agent.<caller>#<n>/<call>`), or `undefined` for any other id. Shared by
- * the steps projection (nesting) and the web Cost breakdown (labels); lives on
- * the browser-safe main entry so the web bundle never pulls the read plane. */
+ * (`__agent.<caller>#<n>/<call>`), or `undefined` for any other id. Splitting
+ * on the first `#` is exact because an authored step id matches
+ * `[a-zA-Z][a-zA-Z0-9_]*` (the parser rejects anything else), so `#` can only
+ * be the separator. Shared by the steps projection (nesting) and the web Cost
+ * breakdown (labels); lives on the browser-safe main entry so the web bundle
+ * never pulls the read plane. */
 export function agentWorkerCaller(nodeId: string): string | undefined {
   if (!nodeId.startsWith(`${AGENT_SYNTHETIC_NODE_PREFIX}.`)) return undefined;
   const rest = nodeId.slice(AGENT_SYNTHETIC_NODE_PREFIX.length + 1);

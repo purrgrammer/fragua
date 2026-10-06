@@ -11,7 +11,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { agentSyntheticNodeId, type EventType, type NodeAttrs } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
-import { PiLlmBackend, WorkerSlots, WorkerSlotsAborted } from "../src/backend.ts";
+import { PiLlmBackend, resolveWorkerCaps, WorkerSlots, WorkerSlotsAborted } from "../src/backend.ts";
 import { advertisedTools } from "./context-tools.ts";
 
 interface PersistedRow {
@@ -269,6 +269,113 @@ describe("agent tool — worker step events", () => {
       expect(ends[0]?.data["status"]).toBe("completed");
       const workerCost = events.filter((e) => e.type === "cost.recorded" && e.data["nodeId"] === workerNodeId);
       expect(workerCost.length).toBeGreaterThan(0);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent tool — a pre-aborted caller never starts a worker", () => {
+  test("WorkerSlots.acquire rejects on an already-aborted signal even when a slot is free", async () => {
+    const slots = new WorkerSlots(4);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(slots.acquire(ac.signal)).rejects.toBeInstanceOf(WorkerSlotsAborted);
+    // the refused acquire consumed no slot
+    const r1 = await slots.acquire();
+    const r2 = await slots.acquire();
+    const r3 = await slots.acquire();
+    const r4 = await slots.acquire();
+    for (const r of [r1, r2, r3, r4]) r();
+  });
+});
+
+describe("agent tool — per-worker caps are ceilings the model can only tighten", () => {
+  test("max_cost_usd clamps to the operator's max-cost; absent or oversized falls back to the ceiling", () => {
+    const op = { maxCostUsd: 1 };
+    expect(resolveWorkerCaps({ max_cost_usd: 0.25 }, op).maxCostUsd).toBe(0.25);
+    expect(resolveWorkerCaps({ max_cost_usd: 999 }, op).maxCostUsd).toBe(1);
+    expect(resolveWorkerCaps({}, op).maxCostUsd).toBe(1);
+    expect(resolveWorkerCaps({ max_cost_usd: 0 }, op).maxCostUsd).toBe(1);
+    // no operator ceiling: the call's own cap is the only one (or none)
+    expect(resolveWorkerCaps({ max_cost_usd: 2 }, {}).maxCostUsd).toBe(2);
+    expect(resolveWorkerCaps({}, {}).maxCostUsd).toBeUndefined();
+  });
+
+  test("timeout_minutes clamps to the operator's timeout-minutes; 0 or oversized resolves to the ceiling", () => {
+    expect(resolveWorkerCaps({ timeout_minutes: 5 }, { timeoutMinutes: 10 }).timeoutMinutes).toBe(5);
+    expect(resolveWorkerCaps({ timeout_minutes: 60 }, { timeoutMinutes: 10 }).timeoutMinutes).toBe(10);
+    expect(resolveWorkerCaps({ timeout_minutes: 0 }, { timeoutMinutes: 10 }).timeoutMinutes).toBe(10);
+    expect(resolveWorkerCaps({ timeout_minutes: 0 }, {}).timeoutMinutes).toBe(15);
+    expect(resolveWorkerCaps({ timeout_minutes: 60 }, {}).timeoutMinutes).toBe(15);
+    // the operator's explicit 0 means "no wall-clock cap"; a call can still shorten its own
+    expect(resolveWorkerCaps({}, { timeoutMinutes: 0 }).timeoutMinutes).toBe(0);
+    expect(resolveWorkerCaps({ timeout_minutes: 3 }, { timeoutMinutes: 0 }).timeoutMinutes).toBe(3);
+  });
+
+  test("max-turns is operator-only", () => {
+    expect(resolveWorkerCaps({}, {}).maxTurns).toBe(50);
+    expect(resolveWorkerCaps({}, { maxTurns: 7 }).maxTurns).toBe(7);
+  });
+});
+
+describe("agent tool — a worker's abort ends only the worker", () => {
+  test("worker calls abort → status aborted with its reason; the caller takes its next turn", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-abort-"));
+    try {
+      const { events, rows, contexts } = await runCaller({
+        scratch,
+        attrs: CALLER_ATTRS,
+        responses: [
+          fauxAssistantMessage([fauxToolCall("agent", { task: "try" }, { id: "toolu_w1" })], {
+            stopReason: "toolUse",
+          }),
+          // worker gives up
+          fauxAssistantMessage([fauxToolCall("abort", { reason: "target file is missing" }, { id: "toolu_ab" })], {
+            stopReason: "toolUse",
+          }),
+          // caller's final turn — reached only if the worker's abort did not end the caller
+          fauxAssistantMessage([fauxText("worker could not, I did it myself")], { stopReason: "stop" }),
+        ],
+      });
+      expect(contexts).toHaveLength(3);
+      const ends = events.filter((e) => e.type === "agent.worker_end");
+      expect(ends).toHaveLength(1);
+      expect(ends[0]?.data["status"]).toBe("aborted");
+      const toolResults = rows.filter((r) => r.nodeId === undefined && r.message.role === "toolResult");
+      expect(JSON.stringify(toolResults)).toContain("target file is missing");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent tool — model-supplied context_files stay inside the worktree", () => {
+  test("a traversal path is refused with a warning and never reaches the worker's prompt", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-ctx-"));
+    try {
+      const { events, contexts } = await runCaller({
+        scratch,
+        attrs: CALLER_ATTRS,
+        responses: [
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                "agent",
+                { task: "read", context_files: ["../../../../../../etc/passwd"] },
+                { id: "toolu_w1" },
+              ),
+            ],
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage([fauxText("worker done")], { stopReason: "stop" }),
+          fauxAssistantMessage([fauxText("caller done")], { stopReason: "stop" }),
+        ],
+      });
+      const warnings = events.filter((e) => e.type === "agent.warning").map((e) => String(e.data["message"]));
+      expect(warnings.some((w) => w.includes("etc/passwd"))).toBe(true);
+      const workerSystem = String(contexts[1]?.systemPrompt ?? "");
+      expect(workerSystem).not.toContain("root:");
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

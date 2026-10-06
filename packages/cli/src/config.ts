@@ -59,9 +59,11 @@ const Defaults = Type.Object(
 
 /** Caps + defaults for the opt-in `agent` tool (orchestrator-workers). Threaded
  * to the llm backend like `judge:`. Kebab keys, matching `bash.env-passthrough`
- * / `auto-title`. `max-cost` bounds one worker's spend (a per-call `max_cost_usd`
- * argument overrides it); `max-turns` / `timeout-minutes` bound a worker that
- * spends little but never stops; `concurrency` caps concurrent workers per turn. */
+ * / `auto-title`. These are ceilings: `max-cost` bounds one worker's spend and
+ * `timeout-minutes` its wall clock (a per-call `max_cost_usd` / `timeout_minutes`
+ * argument can only tighten them; `timeout-minutes: 0` is the operator's explicit
+ * "no wall-clock cap"); `max-turns` bounds a worker that spends little but never
+ * stops; `concurrency` caps concurrent workers per turn. */
 const Agent = Type.Object(
   {
     "max-cost": Type.Optional(Type.Number({ minimum: 0 })),

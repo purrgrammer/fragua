@@ -51,7 +51,8 @@ guarantee.
   against the caller's per-node and per-run budgets, and worker transcripts are
   addressable but excluded from the caller's context. Caps default from an
   `agent:` config block (`max-cost`, `max-turns`, `timeout-minutes`,
-  `concurrency`) and can be overridden per call. New validator diagnostics: W023
+  `concurrency`); a per-call `max_cost_usd` / `timeout_minutes` can only tighten
+  them, never exceed them. New validator diagnostics: W023
   (`agent` allowed on a step that reaches no mutator tool) and E058 (a step id
   starting with the reserved `__` prefix).
   The run conversation renders each delegation as a card: worker status, the

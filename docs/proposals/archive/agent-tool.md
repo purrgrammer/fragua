@@ -251,8 +251,9 @@ node bucket and the run total and **aborts the steer controller when the node
 `max-cost` or the run `budget` is breached**, mid-turn. So the caps compose
 without new plumbing, innermost first:
 
-1. **Per worker** — `max_cost_usd` argument, default `agent.max-cost` from the
-   config cascade (global `~/.fragua/config.yaml`, project override). Enforced
+1. **Per worker** — `agent.max-cost` from the config cascade (global
+   `~/.fragua/config.yaml`, project override) is the ceiling; a `max_cost_usd`
+   argument can only tighten it (as `timeout_minutes` can `agent.timeout-minutes`). Enforced
    inside the tool by summing the worker's own `message_end` costs; the worker
    stops with `status: "max_cost"` and the caller decides.
 2. **Per node** — the caller's own `max-cost`. Worker spend lands in the same

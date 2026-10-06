@@ -29,6 +29,7 @@ export {
   type AgentToolConfig,
   type AgentWorkerResult,
   type AgentWorkerStatus,
+  resolveWorkerCaps,
   WorkerSlots,
   WorkerSlotsAborted,
 } from "./agent-tool.ts";
@@ -442,7 +443,6 @@ export class PiLlmBackend implements LlmBackend {
         input,
         slots: new WorkerSlots(this.agentConfig.concurrency ?? DEFAULT_AGENT_CONCURRENCY),
         callerFinalTools: finalTools,
-        callerAllow: allow,
         effectiveEnv,
         callerEffectiveSkills: effectiveSkills,
         callerModel: { provider, modelId },

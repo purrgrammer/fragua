@@ -61,8 +61,9 @@ export interface AgentToolDeps {
 
 /** Resolved caps for the `agent` tool. Every field optional; the tool applies
  * built-in defaults (max-turns 50, timeout-minutes 15, concurrency 4) when a
- * value is absent, and leaves `maxCostUsd` unbounded when unset. A per-call
- * `max_cost_usd` / `timeout_minutes` argument overrides these. */
+ * value is absent, and leaves `maxCostUsd` unbounded when unset. These are the
+ * operator's CEILINGS: a per-call `max_cost_usd` / `timeout_minutes` argument
+ * can only tighten them, never exceed them (`resolveWorkerCaps`). */
 export interface AgentToolConfig {
   maxCostUsd?: number;
   maxTurns?: number;
@@ -92,9 +93,19 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
       skills: Type.Optional(Type.Array(Type.String())),
       context_files: Type.Optional(Type.Array(Type.String())),
       outputs: Type.Optional(Type.Object({}, { additionalProperties: true })),
-      max_cost_usd: Type.Optional(Type.Number({ minimum: 0 })),
+      max_cost_usd: Type.Optional(
+        Type.Number({
+          exclusiveMinimum: 0,
+          description: "Spend cap for this worker in USD. Clamped to the operator's `agent.max-cost` ceiling.",
+        }),
+      ),
       max_tokens: Type.Optional(Type.Integer({ minimum: 1 })),
-      timeout_minutes: Type.Optional(Type.Number({ minimum: 0 })),
+      timeout_minutes: Type.Optional(
+        Type.Number({
+          exclusiveMinimum: 0,
+          description: "Wall-clock cap for this worker. Clamped to the operator's `agent.timeout-minutes` ceiling.",
+        }),
+      ),
     },
     { additionalProperties: false },
   );
@@ -134,6 +145,7 @@ async function prepareWorkerSetup(
     cfg: AgentToolBuildConfig;
     args: AgentToolArgs;
     signal: AbortSignal | undefined;
+    workerNodeId: string;
   },
 ): Promise<
   | { error: string }
@@ -146,7 +158,7 @@ async function prepareWorkerSetup(
       maxTokens: number | undefined;
     }
 > {
-  const { cfg, args, signal } = params;
+  const { cfg, args, signal, workerNodeId } = params;
   const { input } = cfg;
   const iteration = input.iteration ?? { n: 0, max: 0 };
 
@@ -220,9 +232,12 @@ async function prepareWorkerSetup(
   }
   if (workerSkills.length === 0) workerFraguaTools = workerFraguaTools.filter((t) => t.name !== "skill");
 
+  // The worker's tool context carries the WORKER's node id, like its persisted
+  // rows and its events, so anything a tool attributes by node lands on the
+  // worker rather than on the caller (or on a concurrent sibling).
   const workerFraguaContext: FraguaToolContext & { skillCatalog?: readonly Skill[] } = {
     runId: input.run_id,
-    nodeId: input.node.id,
+    nodeId: workerNodeId,
     iteration: iteration.n,
     http: makeHttpClient({ signal: signal ?? input.signal }),
     emit: input.emit
@@ -299,15 +314,14 @@ async function runWorkerInSlot(
 ): Promise<AgentWorkerResult> {
   const { cfg, toolCallId, args, signal, workerNodeId, errResult } = params;
   const { input } = cfg;
-  const setup = await prepareWorkerSetup(deps, { cfg, args, signal });
+  // The slot was granted on a live signal; an abort that landed in between
+  // must not open a worker step (no `llm.start`, no model call).
+  if (signal?.aborted) return { ...errResult("worker aborted before it started"), status: "aborted" };
+  const setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
   if ("error" in setup) return errResult(setup.error);
   const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
 
-  // Caps — innermost first: per-worker cost (arg, else config), max-turns
-  // (config, default 50), timeout-minutes (config, default 15).
-  const maxCostUsd = args.max_cost_usd ?? deps.agentConfig.maxCostUsd;
-  const maxTurns = deps.agentConfig.maxTurns ?? DEFAULT_AGENT_MAX_TURNS;
-  const timeoutMinutes = args.timeout_minutes ?? deps.agentConfig.timeoutMinutes ?? DEFAULT_AGENT_TIMEOUT_MINUTES;
+  const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
 
   let costUsd = 0;
   let turns = 0;
@@ -479,7 +493,6 @@ interface AgentToolBuildConfig {
    * caller's signal fires while they wait). */
   slots: WorkerSlots;
   callerFinalTools: AnyTool[];
-  callerAllow: string[] | undefined;
   effectiveEnv: ExecutionEnvironment;
   callerEffectiveSkills: readonly Skill[];
   callerModel: { provider: string; modelId: string };
@@ -515,12 +528,14 @@ export class WorkerSlots {
           this.waiters.shift()?.();
         });
       };
-      if (this.inUse < this.limit) {
-        grant();
-        return;
-      }
+      // Honour an already-fired abort BEFORE handing out a free slot: a worker
+      // queued after the caller's turn aborted must never start.
       if (signal?.aborted) {
         reject(new WorkerSlotsAborted());
+        return;
+      }
+      if (this.inUse < this.limit) {
+        grant();
         return;
       }
       const onAbort = () => {
@@ -546,6 +561,30 @@ export class WorkerSlotsAborted extends Error {
 }
 /** Config-cascade default wall-clock cap for a worker (`agent.timeout-minutes`). */
 const DEFAULT_AGENT_TIMEOUT_MINUTES = 15;
+
+/** The caps one worker runs under, innermost first. The operator's config is a
+ * CEILING the model can only tighten: a per-call `max_cost_usd` /
+ * `timeout_minutes` above it (or absent, or non-positive) resolves to the
+ * ceiling itself; `max-turns` is operator-only. Without an operator `max-cost`
+ * the call's own cap is the only one; a `timeout-minutes` of 0 is the
+ * operator's explicit "no wall-clock cap", which a call cannot re-enable past
+ * what the operator chose but can still shorten for itself. */
+export function resolveWorkerCaps(
+  args: Pick<AgentToolArgs, "max_cost_usd" | "timeout_minutes">,
+  config: AgentToolConfig,
+): { maxCostUsd: number | undefined; maxTurns: number; timeoutMinutes: number } {
+  const costArg = typeof args.max_cost_usd === "number" && args.max_cost_usd > 0 ? args.max_cost_usd : undefined;
+  const costCeiling = config.maxCostUsd;
+  const maxCostUsd = costCeiling !== undefined ? Math.min(costArg ?? costCeiling, costCeiling) : costArg;
+
+  const timeoutArg =
+    typeof args.timeout_minutes === "number" && args.timeout_minutes > 0 ? args.timeout_minutes : undefined;
+  const timeoutCeiling = config.timeoutMinutes ?? DEFAULT_AGENT_TIMEOUT_MINUTES;
+  const timeoutMinutes =
+    timeoutCeiling > 0 ? Math.min(timeoutArg ?? timeoutCeiling, timeoutCeiling) : (timeoutArg ?? 0);
+
+  return { maxCostUsd, maxTurns: config.maxTurns ?? DEFAULT_AGENT_MAX_TURNS, timeoutMinutes };
+}
 
 /** pi-agent-core synthesises an empty-content `assistant` message with
  * `stopReason: "error" | "aborted"` for a transport failure / in-flight abort.
