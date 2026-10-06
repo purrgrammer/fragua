@@ -11,8 +11,10 @@ export interface AgentToolConfig {
   maxCostUsd?: number;
   maxTurns?: number;
   timeoutMinutes?: number;
-  /** Concurrent workers per caller TURN (the semaphore is built per turn);
-   * across turns the caller is sequential, so this is also the run-wide bound. */
+  /** Concurrent workers per caller TURN (the semaphore is built per llm
+   * dispatch). A sequential caller therefore never exceeds it run-wide; the
+   * branches of a `parallel` node are separate dispatches and each get their
+   * own allowance. */
   concurrency?: number;
 }
 

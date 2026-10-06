@@ -466,3 +466,30 @@ describe("agent tool — a cap that trips on the emitting turn still completes",
     }
   });
 });
+
+describe("agent tool — a setup failure still opens and closes a worker step", () => {
+  test("an invalid outputs schema yields status error with a paired llm.start + agent.worker_end", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-setupfail-"));
+    try {
+      const { events } = await runCaller({
+        scratch,
+        attrs: CALLER_ATTRS,
+        responses: [
+          fauxAssistantMessage(
+            [fauxToolCall("agent", { task: "x", outputs: { done: { type: "nope" } } }, { id: "toolu_bad" })],
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage([fauxText("caller done")], { stopReason: "stop" }),
+        ],
+      });
+      const workerNodeId = agentSyntheticNodeId("n1", { n: 0 }, "toolu_bad");
+      const starts = events.filter((e) => e.type === "llm.start" && e.data["nodeId"] === workerNodeId);
+      const ends = events.filter((e) => e.type === "agent.worker_end" && e.data["nodeId"] === workerNodeId);
+      expect(starts).toHaveLength(1);
+      expect(ends).toHaveLength(1);
+      expect(ends[0]?.data["status"]).toBe("error");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+});

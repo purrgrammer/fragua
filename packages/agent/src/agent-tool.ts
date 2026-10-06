@@ -313,6 +313,10 @@ async function runWorker(
   const { cfg, toolCallId, args, signal } = params;
   const { input } = cfg;
   const iteration = input.iteration ?? { n: 0, max: 0 };
+  // The tool-call id is embedded verbatim: `agentWorkerCaller` reads the
+  // caller off the FIRST `#` after the prefix, and a step id cannot contain
+  // `#` or `/`, so any character in the id is safe (pinned in core's
+  // synthetic-node-id test).
   const workerNodeId = agentSyntheticNodeId(input.node.id, { n: iteration.n }, toolCallId);
   const errResult = (message: string): AgentWorkerResult => ({
     text: message,
@@ -380,7 +384,7 @@ async function runWorkerInSlot(
     try {
       input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() }, { nodeId: workerNodeId });
     } catch (err) {
-      return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
+      return setupFailed(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
