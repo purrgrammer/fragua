@@ -44,6 +44,22 @@ import {
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 import { deriveRunEnv } from "./transcript.ts";
+import {
+  type AgentToolConfig,
+  isWorktreeRelativePath,
+  resolveWorkerCaps,
+  type WorkerSlots,
+  WorkerSlotsAborted,
+} from "./worker-policy.ts";
+
+export {
+  type AgentToolConfig,
+  DEFAULT_AGENT_CONCURRENCY,
+  isWorktreeRelativePath,
+  resolveWorkerCaps,
+  WorkerSlots,
+  WorkerSlotsAborted,
+} from "./worker-policy.ts";
 
 /** What the tool needs from the backend that synthesises it. */
 export interface AgentToolDeps {
@@ -59,20 +75,6 @@ export interface AgentToolDeps {
   resolveThinkingLevel: (model: Model<string>, attrs: Record<string, unknown>) => ThinkingLevel;
   /** The backend's provider-SDK retry policy, so a worker retries like its caller. */
   sdkRetry: { maxRetries: number; maxRetryDelayMs: number };
-}
-
-/** Resolved caps for the `agent` tool. Every field optional; the tool applies
- * built-in defaults (max-turns 50, timeout-minutes 15, concurrency 4) when a
- * value is absent, and leaves `maxCostUsd` unbounded when unset. These are the
- * operator's CEILINGS: a per-call `max_cost_usd` / `timeout_minutes` argument
- * can only tighten them, never exceed them (`resolveWorkerCaps`). */
-export interface AgentToolConfig {
-  maxCostUsd?: number;
-  maxTurns?: number;
-  timeoutMinutes?: number;
-  /** Concurrent workers per caller TURN (the semaphore is built per turn);
-   * across turns the caller is sequential, so this is also the run-wide bound. */
-  concurrency?: number;
 }
 
 /** Synthesise the opt-in `agent` tool for one caller turn. Not force-included:
@@ -617,89 +619,10 @@ interface AgentToolBuildConfig {
   callerEffort: "low" | "medium" | "high" | undefined;
 }
 
-/** Config-cascade default turn cap for a worker that spends little but never
- * stops (`agent.max-turns`). */
-const DEFAULT_AGENT_MAX_TURNS = 50;
-/** Config-cascade default for concurrent workers per caller turn
- * (`agent.concurrency`). pi-agent-core executes one assistant message's tool
- * calls in parallel, so N `agent` calls in one message would otherwise be N
- * unbounded concurrent model loops over one worktree. */
-export const DEFAULT_AGENT_CONCURRENCY = 4;
-
-/** Counting semaphore for worker slots within one caller turn. `acquire`
- * resolves with a release fn once a slot is free, or rejects with
- * `WorkerSlotsAborted` if `signal` fires first — so a caller abort never
- * leaves a queued worker waiting on a slot that will not come. */
-export class WorkerSlots {
-  private inUse = 0;
-  private readonly waiters: Array<() => void> = [];
-  constructor(private readonly limit: number) {
-    if (!Number.isInteger(limit) || limit < 1)
-      throw new RangeError(`WorkerSlots: limit must be a positive integer, got ${limit}`);
-  }
-  acquire(signal?: AbortSignal): Promise<() => void> {
-    return new Promise((resolve, reject) => {
-      const grant = () => {
-        this.inUse += 1;
-        let released = false;
-        resolve(() => {
-          if (released) return;
-          released = true;
-          this.inUse -= 1;
-          this.waiters.shift()?.();
-        });
-      };
-      // Honour an already-fired abort BEFORE handing out a free slot: a worker
-      // queued after the caller's turn aborted must never start.
-      if (signal?.aborted) {
-        reject(new WorkerSlotsAborted());
-        return;
-      }
-      if (this.inUse < this.limit) {
-        grant();
-        return;
-      }
-      const onAbort = () => {
-        const i = this.waiters.indexOf(wake);
-        if (i >= 0) this.waiters.splice(i, 1);
-        reject(new WorkerSlotsAborted());
-      };
-      const wake = () => {
-        signal?.removeEventListener("abort", onAbort);
-        if (signal?.aborted) {
-          reject(new WorkerSlotsAborted());
-          return;
-        }
-        grant();
-      };
-      this.waiters.push(wake);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-}
-
-export class WorkerSlotsAborted extends Error {
-  constructor() {
-    super("worker aborted while waiting for a concurrency slot");
-    this.name = "WorkerSlotsAborted";
-  }
-}
-/** Config-cascade default wall-clock cap for a worker (`agent.timeout-minutes`). */
-const DEFAULT_AGENT_TIMEOUT_MINUTES = 15;
 /** The `llm.start` payload is a 4 KB observability event; the task preview
  * leaves room for the sibling fields. The full task is the worker's first user
  * row, persisted under its node id. */
 const WORKER_PROMPT_PREVIEW_CHARS = 3_000;
-
-/** A model-supplied `context_files` entry must be a plain relative path: no
- * leading `/` or drive, no `..` segment, no NUL. Symlinks that leave the tree
- * are the realpath jail's job. */
-export function isWorktreeRelativePath(path: string): boolean {
-  const p = path.trim();
-  if (p.length === 0 || p.includes("\0")) return false;
-  if (p.startsWith("/") || p.startsWith("\\") || /^[A-Za-z]:/.test(p)) return false;
-  return !p.split(/[\\/]+/).some((seg) => seg === "..");
-}
 
 /** The text the CALLER model reads for one worker: a status line with the
  * counters, the worker's final answer, and the validated `outputs` as JSON. */
@@ -709,30 +632,6 @@ export function renderWorkerResult(result: AgentWorkerResult): string {
   if (result.text.length > 0) parts.push(result.text);
   if (result.outputs !== undefined) parts.push(`outputs:\n${JSON.stringify(result.outputs, null, 2)}`);
   return parts.join("\n\n");
-}
-
-/** The caps one worker runs under, innermost first. The operator's config is a
- * CEILING the model can only tighten: a per-call `max_cost_usd` /
- * `timeout_minutes` above it (or absent, or non-positive) resolves to the
- * ceiling itself; `max-turns` is operator-only. Without an operator `max-cost`
- * the call's own cap is the only one. An operator `timeout-minutes` of 0 means
- * "no wall-clock ceiling": a call may still give ITSELF a finite cap (tightening
- * is always allowed), and absent a call cap the worker runs uncapped. */
-export function resolveWorkerCaps(
-  args: Pick<AgentToolArgs, "max_cost_usd" | "timeout_minutes">,
-  config: AgentToolConfig,
-): { maxCostUsd: number | undefined; maxTurns: number; timeoutMinutes: number } {
-  const costArg = typeof args.max_cost_usd === "number" && args.max_cost_usd > 0 ? args.max_cost_usd : undefined;
-  const costCeiling = config.maxCostUsd;
-  const maxCostUsd = costCeiling !== undefined ? Math.min(costArg ?? costCeiling, costCeiling) : costArg;
-
-  const timeoutArg =
-    typeof args.timeout_minutes === "number" && args.timeout_minutes > 0 ? args.timeout_minutes : undefined;
-  const timeoutCeiling = config.timeoutMinutes ?? DEFAULT_AGENT_TIMEOUT_MINUTES;
-  const timeoutMinutes =
-    timeoutCeiling > 0 ? Math.min(timeoutArg ?? timeoutCeiling, timeoutCeiling) : (timeoutArg ?? 0);
-
-  return { maxCostUsd, maxTurns: config.maxTurns ?? DEFAULT_AGENT_MAX_TURNS, timeoutMinutes };
 }
 
 /** pi-agent-core synthesises an empty-content `assistant` message with
