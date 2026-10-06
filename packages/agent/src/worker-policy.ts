@@ -68,7 +68,10 @@ export class WorkerSlots {
       const wake = () => {
         signal?.removeEventListener("abort", onAbort);
         if (signal?.aborted) {
+          // The slot released to us is still free: hand it to the next live
+          // waiter instead of letting it idle until another release.
           reject(new WorkerSlotsAborted());
+          this.waiters.shift()?.();
           return;
         }
         grant();

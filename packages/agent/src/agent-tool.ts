@@ -198,8 +198,13 @@ async function prepareWorkerSetup(
 
   // Outputs declaration (raw from the model) — parse + grammar-validate before
   // any model call (E033 / E034 analogue), then compile the forced emit_output.
+  // Size-bounded first: the grammar walk is linear, but the declaration is
+  // model-authored and nothing upstream caps it.
   let outputsDecl: OutputsDecl | undefined;
   if (args.outputs !== undefined) {
+    if (JSON.stringify(args.outputs).length > OUTPUTS_DECL_MAX_BYTES) {
+      return { error: `agent: outputs schema exceeds ${OUTPUTS_DECL_MAX_BYTES} bytes` };
+    }
     try {
       outputsDecl = parseOutputsDecl(args.outputs);
     } catch (err) {
@@ -417,7 +422,9 @@ async function runWorkerInSlot(
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   if (timeoutMinutes > 0) {
     timeoutTimer = setTimeout(() => {
-      if (acct.capStatus === undefined) {
+      // A cancel that is already in flight is reported as an abort, not a
+      // timeout, even if the timer fires before the worker has wound down.
+      if (acct.capStatus === undefined && !signal?.aborted) {
         acct.capStatus = "timeout";
         worker.abort();
       }
@@ -528,7 +535,20 @@ function workerSubscriber(args: {
       acct.costUsd += am.usage.cost.total;
       if (Array.isArray(am.content)) acct.toolCallCount += am.content.filter((b) => b.type === "toolCall").length;
     }
-    if (input.persistMessage) input.persistMessage(msg, { nodeId: workerNodeId });
+    // A failed row write must not escape the event dispatch (the worker loop
+    // would never settle); the row is lost, the warning says so.
+    if (input.persistMessage) {
+      try {
+        input.persistMessage(msg, { nodeId: workerNodeId });
+      } catch (err) {
+        if (input.emit) {
+          void input.emit("agent.warning", {
+            nodeId: workerNodeId,
+            message: `worker row not persisted: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+    }
     if (acct.capStatus === undefined && caps.maxCostUsd !== undefined && acct.costUsd >= caps.maxCostUsd) {
       acct.capStatus = "max_cost";
       worker.abort();
@@ -623,6 +643,8 @@ interface AgentToolBuildConfig {
   callerEffort: "low" | "medium" | "high" | undefined;
 }
 
+/** Ceiling on a model-authored `outputs` declaration, as serialised JSON. */
+const OUTPUTS_DECL_MAX_BYTES = 64_000;
 /** The `llm.start` payload is a 4 KB observability event; the task preview
  * leaves room for the sibling fields. The full task is the worker's first user
  * row, persisted under its node id. */

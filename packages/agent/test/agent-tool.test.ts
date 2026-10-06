@@ -493,3 +493,25 @@ describe("agent tool — a setup failure still opens and closes a worker step", 
     }
   });
 });
+
+describe("agent tool — a released slot cascades past an aborted waiter", () => {
+  test("a waiter whose signal aborted after a release went out hands the slot to the next live waiter", async () => {
+    const slots = new WorkerSlots(1);
+    const release = await slots.acquire();
+    const ac = new AbortController();
+    const aborted = slots.acquire(ac.signal);
+    let third: (() => void) | undefined;
+    const live = slots.acquire().then((r) => {
+      third = r;
+      return r;
+    });
+    // abort the first waiter and release in the same tick: `wake` sees the
+    // aborted signal and must pass the slot on
+    ac.abort();
+    release();
+    await expect(aborted).rejects.toBeInstanceOf(WorkerSlotsAborted);
+    await live;
+    expect(third).toBeDefined();
+    third?.();
+  });
+});
