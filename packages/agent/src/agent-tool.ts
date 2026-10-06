@@ -217,8 +217,18 @@ async function prepareWorkerSetup(
   // so it is read through `ExecutionEnvironment.readFile`'s realpath jail: an
   // absolute path, a `..` escape, or a symlink leaving the worktree is refused
   // and surfaces as a warning, never as prompt content.
-  const contextFiles = applyDefaultContextFiles(args.context_files ?? []);
-  const { text: contextBlock, warnings: ctxWarnings } = await loadContextFiles(cfg.effectiveEnv, contextFiles);
+  // The jail is the backstop; the obvious escapes are refused here, next to
+  // the surface that admits model-authored paths.
+  const admitted: string[] = [];
+  const ctxWarnings: string[] = [];
+  for (const raw of args.context_files ?? []) {
+    if (isWorktreeRelativePath(raw)) admitted.push(raw);
+    else ctxWarnings.push(`context_files: refused "${raw}" — must be a relative path inside the worktree`);
+  }
+  const contextFiles = applyDefaultContextFiles(admitted);
+  const loaded = await loadContextFiles(cfg.effectiveEnv, contextFiles);
+  const contextBlock = loaded.text;
+  ctxWarnings.push(...loaded.warnings);
   if (input.emit) for (const m of ctxWarnings) void input.emit("agent.warning", { nodeId: workerNodeId, message: m });
   const derivedRunEnv = deriveRunEnv(cfg.effectiveEnv);
   const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? deps.runEnv?.bootstrapCommand;
@@ -604,6 +614,16 @@ export class WorkerSlotsAborted extends Error {
 /** Config-cascade default wall-clock cap for a worker (`agent.timeout-minutes`). */
 const DEFAULT_AGENT_TIMEOUT_MINUTES = 15;
 
+/** A model-supplied `context_files` entry must be a plain relative path: no
+ * leading `/` or drive, no `..` segment, no NUL. Symlinks that leave the tree
+ * are the realpath jail's job. */
+export function isWorktreeRelativePath(path: string): boolean {
+  const p = path.trim();
+  if (p.length === 0 || p.includes("\0")) return false;
+  if (p.startsWith("/") || p.startsWith("\\") || /^[A-Za-z]:/.test(p)) return false;
+  return !p.split(/[\\/]+/).some((seg) => seg === "..");
+}
+
 /** The text the CALLER model reads for one worker: a status line with the
  * counters, the worker's final answer, and the validated `outputs` as JSON. */
 export function renderWorkerResult(result: AgentWorkerResult): string {
@@ -671,6 +691,14 @@ function classifyWorkerResult(args: {
   const baseText = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 8_000) : "";
   const base = { cost_usd: costUsd, turns, tool_calls: toolCallCount, worker_id: toolCallId };
 
+  // A cap that trips on the very message carrying a valid `emit_output` is a
+  // finished worker, not a stopped one: hand the struct back as completed.
+  if (capStatus !== undefined && outputsDecl !== undefined) {
+    const emitCall = findEmitOutputCall(messages);
+    if (emitCall != null && validateOutputsValue(outputsDecl, emitCall.value) === null) {
+      return { text: baseText, outputs: emitCall.value as OutputsValue, status: "completed", ...base };
+    }
+  }
   if (capStatus !== undefined) {
     const label =
       capStatus === "max_cost"

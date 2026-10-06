@@ -111,6 +111,17 @@ export interface PiLlmBackendOptions {
   agentConfig?: AgentToolConfig;
 }
 
+/** The config schema already pins `agent.concurrency` to a positive integer;
+ * this keeps the invariant local, so a programmatic caller can't hand
+ * `WorkerSlots` a limit it refuses. */
+function normaliseAgentConfig(cfg: AgentToolConfig | undefined): AgentToolConfig {
+  if (cfg === undefined) return {};
+  const { concurrency, ...rest } = cfg;
+  return typeof concurrency === "number" && Number.isInteger(concurrency) && concurrency >= 1
+    ? { ...rest, concurrency }
+    : rest;
+}
+
 export class PiLlmBackend implements LlmBackend {
   private readonly registry: ToolRegistry;
   private readonly env: ExecutionEnvironment | undefined;
@@ -165,7 +176,7 @@ export class PiLlmBackend implements LlmBackend {
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
     this.mcpConnector = opts.mcpConnector;
-    this.agentConfig = opts.agentConfig ?? {};
+    this.agentConfig = normaliseAgentConfig(opts.agentConfig);
   }
 
   /** True when we've already persisted `threadId` for `runId` during

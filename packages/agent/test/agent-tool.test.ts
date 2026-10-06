@@ -11,6 +11,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { agentSyntheticNodeId, type EventType, type NodeAttrs } from "@fragua/core";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@fragua/workspace";
+import { isWorktreeRelativePath } from "../src/agent-tool.ts";
 import { PiLlmBackend, resolveWorkerCaps, WorkerSlots, WorkerSlotsAborted } from "../src/backend.ts";
 import { advertisedTools } from "./context-tools.ts";
 
@@ -398,6 +399,68 @@ describe("agent tool — denied-tools wins over allowed-tools", () => {
       const callerTools = advertisedTools(contexts[0]!).map((t) => t.name);
       expect(callerTools).not.toContain("agent");
       expect(callerTools).toContain("read");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent tool — context_files admission", () => {
+  test("only plain relative paths are admitted", () => {
+    expect(isWorktreeRelativePath("docs/SPEC.md")).toBe(true);
+    expect(isWorktreeRelativePath("./a/b.md")).toBe(true);
+    expect(isWorktreeRelativePath("/etc/passwd")).toBe(false);
+    expect(isWorktreeRelativePath("../x")).toBe(false);
+    expect(isWorktreeRelativePath("a/../../x")).toBe(false);
+    expect(isWorktreeRelativePath("C:\\x")).toBe(false);
+    expect(isWorktreeRelativePath("")).toBe(false);
+  });
+});
+
+describe("agent tool — a cap that trips on the emitting turn still completes", () => {
+  test("emit_output on the max-turns turn returns completed with outputs", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-capemit-"));
+    try {
+      const faux = registerFauxProvider();
+      try {
+        const model = faux.getModel();
+        faux.setResponses([
+          fauxAssistantMessage(
+            [fauxToolCall("agent", { task: "produce", outputs: { done: { type: "boolean" } } }, { id: "toolu_w1" })],
+            { stopReason: "toolUse" },
+          ),
+          // worker's ONLY allowed turn emits the struct
+          fauxAssistantMessage([fauxToolCall("emit_output", { done: true }, { id: "toolu_e1" })], {
+            stopReason: "toolUse",
+          }),
+          fauxAssistantMessage([fauxText("caller done")], { stopReason: "stop" }),
+        ]);
+        const backend = new PiLlmBackend({
+          registry: coreRegistry(),
+          env: new LocalEnvironment({ cwd: scratch }),
+          resolveModel: () => model,
+          defaultModel: { provider: model.provider, model: model.id },
+          skills: [],
+          agentConfig: { maxTurns: 1 },
+        });
+        const events: RunResult["events"] = [];
+        await backend.run({
+          node: { id: "n1", type: "llm", attrs: CALLER_ATTRS },
+          prompt: "orchestrate",
+          thread_id: undefined,
+          signal: new AbortController().signal,
+          run_id: "test-agent-capemit",
+          workflow_sha: "sha",
+          iteration: { n: 0, max: 0 },
+          emit: async (type, data) => {
+            events.push({ type, data });
+          },
+        });
+        const end = events.find((e) => e.type === "agent.worker_end");
+        expect(end?.data["status"]).toBe("completed");
+      } finally {
+        faux.unregister();
+      }
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

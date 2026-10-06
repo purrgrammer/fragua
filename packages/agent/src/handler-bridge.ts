@@ -153,8 +153,11 @@ export function makeLlmHandler(opts: MakeLlmHandlerOpts): HandlerSpec {
         outputTokens += numAt(data, "output_tokens");
         cacheReadTokens += numAt(data, "cache_read_tokens");
         cacheWriteTokens += numAt(data, "cache_write_tokens");
+        // The node's model label is the CALLER's; a worker's `cost.recorded`
+        // (stamped with its synthetic node id) must not relabel the step.
         const model = strAt(data, "model");
-        if (model != null) modelName = model;
+        const costNode = strAt(data, "nodeId");
+        if (model != null && (costNode == null || costNode === ctx.nodeId)) modelName = model;
       }
     };
 
