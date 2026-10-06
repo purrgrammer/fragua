@@ -1,7 +1,8 @@
 // Synthetic node-id helpers shared by the summariser + the `agent` tool.
 
 import { describe, expect, test } from "bun:test";
-import { agentSyntheticNodeId, isSyntheticNodeId, summarySyntheticNodeId } from "../src/index.ts";
+import { agentSyntheticNodeId, agentWorkerCaller, isSyntheticNodeId, summarySyntheticNodeId } from "../src/index.ts";
+import { parseWorkflow } from "../src/parser/yaml.ts";
 
 describe("agentSyntheticNodeId", () => {
   test("formats __agent.<caller>#<n>/<toolCallId>", () => {
@@ -27,5 +28,22 @@ describe("isSyntheticNodeId", () => {
     expect(isSyntheticNodeId("start")).toBe(false);
     expect(isSyntheticNodeId(null)).toBe(false);
     expect(isSyntheticNodeId(undefined)).toBe(false);
+  });
+});
+
+describe("agentWorkerCaller", () => {
+  test("recovers the caller from a synthetic id, including ids with digits and underscores", () => {
+    for (const caller of ["implement", "step_2", "A9_b"]) {
+      expect(agentWorkerCaller(agentSyntheticNodeId(caller, { n: 3 }, "toolu_x/y#z"))).toBe(caller);
+    }
+    expect(agentWorkerCaller("implement")).toBeUndefined();
+    expect(agentWorkerCaller("__summary.title")).toBeUndefined();
+  });
+
+  test("the delimiters cannot appear in a caller id: the parser rejects them", () => {
+    for (const bad of ["step#1", "a/b", "x-y"]) {
+      const yaml = `name: t\nsteps:\n  "${bad}":\n    type: llm\n    prompt: p\n    next: exit\n`;
+      expect(() => parseWorkflow(yaml)).toThrow(/not a valid identifier/);
+    }
   });
 });

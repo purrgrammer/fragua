@@ -53,8 +53,9 @@ guarantee.
   `agent:` config block (`max-cost`, `max-turns`, `timeout-minutes`,
   `concurrency`); a per-call `max_cost_usd` / `timeout_minutes` can only tighten
   them, never exceed them. New validator diagnostics: W023
-  (`agent` allowed on a step that reaches no mutator tool) and E058 (a step id
-  starting with the reserved `__` prefix).
+  (`agent` allowed on a step that reaches no mutator tool), W024 (`agent`
+  allowed with no run `budget:`) and E058 (a step id starting with the reserved
+  `__` prefix).
   The run conversation renders each delegation as a card: worker status, the
   delegated task, typed outputs, cost and turn counts, and the worker's own
   transcript as a collapsed mini-conversation, live while it runs.

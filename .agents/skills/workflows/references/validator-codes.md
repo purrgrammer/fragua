@@ -76,6 +76,7 @@ Errors fail validation; warnings are strong hints. Source of truth: `packages/co
 | W021 | A `judge` carries more than 16 KiB of literal `state:` text — extra context degrades judgment; trim it or raise `state-max-bytes` deliberately. |
 | W022 | A `for-each` judge question writes `item.<field>` outside backticks — only a backticked path is re-aimed at the current item; the model sees the literal words. |
 | W023 | A step lists `agent` in `allowed-tools` but reaches no mutator tool (`bash` / `write` / `edit`) — its workers can only read. Legal (read-only researchers), but usually a read-only fan-out is cheaper as a `parallel` node; give it a write-class tool if the workers are meant to write. |
+| W024 | A step lists `agent` in `allowed-tools` but the workflow declares no `budget:` — worker fan-out has no run-level spend ceiling (the per-worker caps bound one worker at a time). Add `budget:` and `budget-policy:`. |
 
 ## Removed codes — these no longer fire
 

@@ -66,7 +66,7 @@ const Defaults = Type.Object(
  * stops; `concurrency` caps concurrent workers per turn. */
 const Agent = Type.Object(
   {
-    "max-cost": Type.Optional(Type.Number({ minimum: 0 })),
+    "max-cost": Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     "max-turns": Type.Optional(Type.Integer({ minimum: 1 })),
     "timeout-minutes": Type.Optional(Type.Number({ minimum: 0 })),
     concurrency: Type.Optional(Type.Integer({ minimum: 1 })),

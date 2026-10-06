@@ -732,6 +732,16 @@ function classifyWorkerResult(args: {
     if (emitCall == null) {
       return { text: "worker declared outputs but did not call emit_output", status: "error", ...base };
     }
+    // The llm step's exit-isolation rule applies to a worker too: the emit
+    // must be the turn's only tool call, or the struct may describe work a
+    // sibling call in the same turn was still doing.
+    if (!emitCall.isolated) {
+      return {
+        text: "worker called emit_output in a turn that also made other tool calls — emit it alone, after the work",
+        status: "error",
+        ...base,
+      };
+    }
     const valErr = validateOutputsValue(outputsDecl, emitCall.value);
     if (valErr !== null) {
       return { text: `worker emit_output failed validation: ${valErr}`, status: "error", ...base };

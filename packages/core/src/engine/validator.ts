@@ -364,6 +364,23 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
+  // W024: a workflow that lets a step fan out workers but declares no
+  // `budget:` has no run-level spend backstop — the per-worker caps only
+  // bound one worker at a time, and the operator may have set no
+  // `agent.max-cost`. A `budget:` is the one ceiling the author controls.
+  if (graph.attrs.budget_usd === undefined) {
+    const fanOut = nodes.find((n) => n.type === "llm" && (n.attrs.allowed_tools ?? []).includes("agent"));
+    if (fanOut !== undefined) {
+      diags.push({
+        severity: "warning",
+        code: "W024",
+        message: `node "${fanOut.id}" allows \`agent\` but the workflow declares no \`budget:\` — worker fan-out has no run-level spend ceiling; add \`budget:\` (and \`budget-policy:\`)`,
+        nodeId: fanOut.id,
+        ...(fanOut.loc !== undefined ? { loc: fanOut.loc } : {}),
+      });
+    }
+  }
+
   // E030: `${{ inputs.x }}` references an input not declared in the
   // workflow's `inputs:` block. Substitution would silently collapse the
   // placeholder to "" at runtime, so catch the typo / missing declaration
