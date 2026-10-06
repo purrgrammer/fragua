@@ -93,7 +93,7 @@ steps:
     type: llm
     thread: drift
     next: propose
-    allowed-tools: [read, grep, find]
+    allowed-tools: [read, grep]
     prompt: |
       Build a drift findings table from the collector snapshot(s) on disk: `.fragua/scratch/drift/structural.json` and/or `.fragua/scratch/drift/narrative.json` — read whichever exist (surface `${{ inputs.surface }}`). Surface every discrepancy you can back with evidence — no speculation. Read-only (you may re-read files to confirm). Honour the `focus` hint if the snapshot carries one.
 
