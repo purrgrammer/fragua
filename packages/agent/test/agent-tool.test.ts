@@ -2,7 +2,7 @@
 // persistence, cost routed through the caller's emit, and outputs enforcement.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -513,5 +513,36 @@ describe("agent tool — a released slot cascades past an aborted waiter", () =>
     await live;
     expect(third).toBeDefined();
     third?.();
+  });
+});
+
+describe("agent tool — the realpath jail backstops a symlink that leaves the worktree", () => {
+  test("a relative path through an escaping symlink is refused with a warning and never reaches the prompt", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "fragua-agent-outside-"));
+    try {
+      await writeFile(join(outside, "secret.txt"), "SECRET_MARKER_8731");
+      await symlink(join(outside, "secret.txt"), join(scratch, "link.txt"));
+      const { events, contexts } = await runCaller({
+        scratch,
+        attrs: CALLER_ATTRS,
+        responses: [
+          fauxAssistantMessage(
+            [fauxToolCall("agent", { task: "read", context_files: ["link.txt"] }, { id: "toolu_w1" })],
+            {
+              stopReason: "toolUse",
+            },
+          ),
+          fauxAssistantMessage([fauxText("worker done")], { stopReason: "stop" }),
+          fauxAssistantMessage([fauxText("caller done")], { stopReason: "stop" }),
+        ],
+      });
+      const warnings = events.filter((e) => e.type === "agent.warning").map((e) => String(e.data["message"]));
+      expect(warnings.some((w) => w.includes("link.txt"))).toBe(true);
+      expect(String(contexts[1]?.systemPrompt ?? "")).not.toContain("SECRET_MARKER_8731");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });
