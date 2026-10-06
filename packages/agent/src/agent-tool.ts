@@ -167,6 +167,9 @@ async function prepareWorkerSetup(
       model: Model<string>;
       outputsDecl: OutputsDecl | undefined;
       systemPrompt: string;
+      /** Context-file warnings, emitted by the caller AFTER the worker's
+       * `llm.start` so they sit inside the worker's step envelope. */
+      warnings: string[];
       workerTools: AgentTool[];
       thinkingLevel: ThinkingLevel;
       maxTokens: number | undefined;
@@ -231,7 +234,6 @@ async function prepareWorkerSetup(
   const loaded = await loadContextFiles(cfg.effectiveEnv, contextFiles);
   const contextBlock = loaded.text;
   ctxWarnings.push(...loaded.warnings);
-  if (input.emit) for (const m of ctxWarnings) void input.emit("agent.warning", { nodeId: workerNodeId, message: m });
   const derivedRunEnv = deriveRunEnv(cfg.effectiveEnv);
   const mergedBootstrap = derivedRunEnv.bootstrapCommand ?? deps.runEnv?.bootstrapCommand;
   const workerRunEnv: RunEnvironment = mergedBootstrap !== undefined ? { bootstrapCommand: mergedBootstrap } : {};
@@ -287,7 +289,7 @@ async function prepareWorkerSetup(
   // response cannot overshoot the per-worker cost cap by more than the model
   // can emit in a single message.
   const maxTokens = typeof args.max_tokens === "number" ? Math.min(args.max_tokens, model.maxTokens) : undefined;
-  return { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens };
+  return { model, outputsDecl, systemPrompt, warnings: ctxWarnings, workerTools, thinkingLevel, maxTokens };
 }
 
 /** Run one `agent`-tool worker: a second pi-agent-core `Agent` in the caller's
@@ -353,19 +355,21 @@ async function runWorkerInSlot(
   // Setup is the one window outside the worker loop's own try/catch; a throw
   // here (a store write, a model resolve) is still a worker-level error the
   // caller reads, never a caller-turn failure.
+  const setupFailed = (message: string): AgentWorkerResult =>
+    emitFailedWorkerStep({ cfg, args, toolCallId, workerNodeId }, errResult(message));
   let setup: Awaited<ReturnType<typeof prepareWorkerSetup>>;
   try {
     setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
   } catch (err) {
-    return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return setupFailed(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if ("error" in setup) return errResult(setup.error);
+  if ("error" in setup) return setupFailed(setup.error);
   // Setup awaited real I/O (context files); an abort that landed meanwhile
   // would never fire the listener registered below, so re-check before any
   // row is written, any model call or write-class tool can run against a
   // cancelled turn.
   if (signal?.aborted) return { ...errResult("worker aborted before it started"), status: "aborted" };
-  const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
+  const { model, outputsDecl, systemPrompt, warnings, workerTools, thinkingLevel, maxTokens } = setup;
   // The worker's exact prompt persists under its node id, as the caller's does
   // (`llm.start` is capped at 4 KB, so the row is the forensic record). It is
   // the first worker row and `llm.start` follows at once, so no transcript
@@ -380,10 +384,7 @@ async function runWorkerInSlot(
 
   const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
 
-  let costUsd = 0;
-  let turns = 0;
-  let toolCallCount = 0;
-  let capStatus: AgentWorkerStatus | undefined;
+  const acct: WorkerAccounting = { costUsd: 0, turns: 0, toolCallCount: 0, capStatus: undefined };
 
   const worker = new Agent({
     initialState: { systemPrompt, model, tools: workerTools, thinkingLevel },
@@ -397,35 +398,9 @@ async function runWorkerInSlot(
     ...(deps.getApiKey !== undefined ? { getApiKey: deps.getApiKey } : {}),
   });
 
-  const unsubscribe = worker.subscribe((event: AgentEvent) => {
-    if (event.type !== "message_end") return;
-    const msg = event.message;
-    // The empty error/abort envelope pi-agent-core synthesises is not a turn:
-    // it carries no content and no spend, so it neither counts nor persists.
-    if (isEmptyFailureEnvelope(msg)) return;
-    if (msg.role === "assistant") {
-      turns += 1;
-      const am = msg as AssistantMessage;
-      // Stamped with the WORKER's node id: the daemon spreads the payload over
-      // its own `{ nodeId, iteration }` so this wins, and the step aggregates
-      // attribute the spend to the worker's own `llm.start` window (nested
-      // under the caller in the Cost breakdown). Enforcement is unaffected:
-      // `onCostRecorded` reads the payload and the caller's bucket, never
-      // the event's node id.
-      if (input.emit) void input.emit("cost.recorded", { ...costPayload(am), nodeId: workerNodeId });
-      costUsd += am.usage.cost.total;
-      if (Array.isArray(am.content)) toolCallCount += am.content.filter((b) => b.type === "toolCall").length;
-    }
-    // Persist every worker row under the synthetic node id.
-    if (input.persistMessage) input.persistMessage(msg, { nodeId: workerNodeId });
-    if (capStatus === undefined && maxCostUsd !== undefined && costUsd >= maxCostUsd) {
-      capStatus = "max_cost";
-      worker.abort();
-    } else if (capStatus === undefined && turns >= maxTurns) {
-      capStatus = "max_turns";
-      worker.abort();
-    }
-  });
+  const unsubscribe = worker.subscribe(
+    workerSubscriber({ input, worker, workerNodeId, acct, caps: { maxCostUsd, maxTurns } }),
+  );
 
   // Deliberately NOT registered in the steering registry: an operator steer
   // is addressed to the caller's context (it aborts the caller's turn, and
@@ -436,8 +411,8 @@ async function runWorkerInSlot(
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   if (timeoutMinutes > 0) {
     timeoutTimer = setTimeout(() => {
-      if (capStatus === undefined) {
-        capStatus = "timeout";
+      if (acct.capStatus === undefined) {
+        acct.capStatus = "timeout";
         worker.abort();
       }
     }, timeoutMinutes * 60_000);
@@ -453,10 +428,11 @@ async function runWorkerInSlot(
       worker_id: toolCallId,
       provider: model.provider,
       model: model.id,
-      prompt: args.task,
+      prompt: args.task.slice(0, WORKER_PROMPT_PREVIEW_CHARS),
       thinking_level: thinkingLevel,
       allowed_tools: workerTools.map((t) => t.name),
     });
+    for (const m of warnings) void input.emit("agent.warning", { nodeId: workerNodeId, message: m });
   }
 
   try {
@@ -468,7 +444,7 @@ async function runWorkerInSlot(
         outputsDecl,
         messages: worker.state.messages,
         signalAborted: signal?.aborted ?? false,
-        capped: capStatus !== undefined,
+        capped: acct.capStatus !== undefined,
       })
     ) {
       await worker.prompt(EMIT_OUTPUT_REMINDER);
@@ -485,11 +461,11 @@ async function runWorkerInSlot(
   const result = classifyWorkerResult({
     worker,
     outputsDecl,
-    capStatus,
+    capStatus: acct.capStatus,
     signalAborted: signal?.aborted ?? false,
-    costUsd,
-    turns,
-    toolCallCount,
+    costUsd: acct.costUsd,
+    turns: acct.turns,
+    toolCallCount: acct.toolCallCount,
     toolCallId,
   });
   // Closes the worker's step: the read plane stamps the step's duration at
@@ -505,6 +481,86 @@ async function runWorkerInSlot(
       tool_calls: result.tool_calls,
     });
   }
+  return result;
+}
+
+/** Running totals for one worker, shared by the subscriber, the timeout
+ * timer and the final classification. */
+interface WorkerAccounting {
+  costUsd: number;
+  turns: number;
+  toolCallCount: number;
+  capStatus: AgentWorkerStatus | undefined;
+}
+
+/** The worker's `message_end` subscriber: per-message cost emit (under the
+ * worker's node id), row persistence, and the cost / turn caps. The empty
+ * error/abort envelope pi-agent-core synthesises is not a turn: it carries no
+ * content and no spend, so it neither counts nor persists. */
+function workerSubscriber(args: {
+  input: LlmInput;
+  worker: Agent;
+  workerNodeId: string;
+  acct: WorkerAccounting;
+  caps: { maxCostUsd: number | undefined; maxTurns: number };
+}): (event: AgentEvent) => void {
+  const { input, worker, workerNodeId, acct, caps } = args;
+  return (event) => {
+    if (event.type !== "message_end") return;
+    const msg = event.message;
+    if (isEmptyFailureEnvelope(msg)) return;
+    if (msg.role === "assistant") {
+      acct.turns += 1;
+      const am = msg as AssistantMessage;
+      // Stamped with the WORKER's node id: the daemon spreads the payload over
+      // its own `{ nodeId, iteration }` so this wins, and the step aggregates
+      // attribute the spend to the worker's own `llm.start` window (nested
+      // under the caller in the Cost breakdown). Enforcement is unaffected:
+      // `onCostRecorded` reads the payload and the caller's bucket, never
+      // the event's node id.
+      if (input.emit) void input.emit("cost.recorded", { ...costPayload(am), nodeId: workerNodeId });
+      acct.costUsd += am.usage.cost.total;
+      if (Array.isArray(am.content)) acct.toolCallCount += am.content.filter((b) => b.type === "toolCall").length;
+    }
+    if (input.persistMessage) input.persistMessage(msg, { nodeId: workerNodeId });
+    if (acct.capStatus === undefined && caps.maxCostUsd !== undefined && acct.costUsd >= caps.maxCostUsd) {
+      acct.capStatus = "max_cost";
+      worker.abort();
+    } else if (acct.capStatus === undefined && acct.turns >= caps.maxTurns) {
+      acct.capStatus = "max_turns";
+      worker.abort();
+    }
+  };
+}
+
+/** A setup failure still opens and closes a worker step (the requested model,
+ * zero spend, `status: "error"`) so the Cost breakdown shows the worker that
+ * never ran instead of nothing. */
+function emitFailedWorkerStep(
+  ctx: { cfg: AgentToolBuildConfig; args: AgentToolArgs; toolCallId: string; workerNodeId: string },
+  result: AgentWorkerResult,
+): AgentWorkerResult {
+  const { cfg, args, toolCallId, workerNodeId } = ctx;
+  const { input } = cfg;
+  if (!input.emit) return result;
+  void input.emit("llm.start", {
+    nodeId: workerNodeId,
+    worker_of: input.node.id,
+    worker_id: toolCallId,
+    provider: args.provider ?? cfg.callerModel.provider,
+    model: args.model ?? cfg.callerModel.modelId,
+    prompt: args.task.slice(0, WORKER_PROMPT_PREVIEW_CHARS),
+    allowed_tools: [],
+  });
+  void input.emit("agent.worker_end", {
+    nodeId: workerNodeId,
+    worker_of: input.node.id,
+    worker_id: toolCallId,
+    status: result.status,
+    cost_usd: 0,
+    turns: 0,
+    tool_calls: 0,
+  });
   return result;
 }
 
@@ -630,6 +686,10 @@ export class WorkerSlotsAborted extends Error {
 }
 /** Config-cascade default wall-clock cap for a worker (`agent.timeout-minutes`). */
 const DEFAULT_AGENT_TIMEOUT_MINUTES = 15;
+/** The `llm.start` payload is a 4 KB observability event; the task preview
+ * leaves room for the sibling fields. The full task is the worker's first user
+ * row, persisted under its node id. */
+const WORKER_PROMPT_PREVIEW_CHARS = 3_000;
 
 /** A model-supplied `context_files` entry must be a plain relative path: no
  * leading `/` or drive, no `..` segment, no NUL. Symlinks that leave the tree
@@ -655,9 +715,9 @@ export function renderWorkerResult(result: AgentWorkerResult): string {
  * CEILING the model can only tighten: a per-call `max_cost_usd` /
  * `timeout_minutes` above it (or absent, or non-positive) resolves to the
  * ceiling itself; `max-turns` is operator-only. Without an operator `max-cost`
- * the call's own cap is the only one; a `timeout-minutes` of 0 is the
- * operator's explicit "no wall-clock cap", which a call cannot re-enable past
- * what the operator chose but can still shorten for itself. */
+ * the call's own cap is the only one. An operator `timeout-minutes` of 0 means
+ * "no wall-clock ceiling": a call may still give ITSELF a finite cap (tightening
+ * is always allowed), and absent a call cap the worker runs uncapped. */
 export function resolveWorkerCaps(
   args: Pick<AgentToolArgs, "max_cost_usd" | "timeout_minutes">,
   config: AgentToolConfig,

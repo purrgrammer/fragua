@@ -109,7 +109,9 @@ export const AGENT_SYNTHETIC_NODE_PREFIX = "__agent";
 
 /** Synthetic node id for one `agent`-tool worker: `__agent.<caller>#<n>/<toolCallId>`.
  * `iteration` and `toolCallId` make it unique per caller per call, so N
- * concurrent workers under one turn never collide. */
+ * concurrent workers under one turn never collide. `#` and `/` are
+ * unambiguous separators because an authored step id cannot contain them, and
+ * a node id is never a URL path segment (it travels in JSON and query strings). */
 export function agentSyntheticNodeId(callerNodeId: string, iteration: { n: number }, toolCallId: string): string {
   return `${AGENT_SYNTHETIC_NODE_PREFIX}.${callerNodeId}#${iteration.n}/${toolCallId}`;
 }
