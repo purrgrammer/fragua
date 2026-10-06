@@ -238,6 +238,25 @@ export function buildEmitOutputTool(decl: OutputsDecl): AgentTool {
  *    isolation rule the `route` exit enforces (see `findRouteToolCall`).
  * Last call wins (like `findRouteToolCall`) to handle thread rehydration.
  */
+/** Whether a finished turn that owed an `emit_output` exit skipped it and
+ * earns the ONE corrective re-prompt (`EMIT_OUTPUT_REMINDER`). Shared by the
+ * llm step and the `agent`-tool worker so the guard cannot drift: no outputs
+ * owed, an aborted / capped turn, a routing turn, a dead provider turn (no
+ * assistant message), a deliberate `abort`, or an `emit_output` already
+ * present all mean no reminder. `messages` is the un-hydrated tail of the turn. */
+export function needsEmitOutputReminder(args: {
+  outputsDecl: OutputsDecl | undefined;
+  messages: readonly AgentMessage[];
+  signalAborted: boolean;
+  hasRoutes?: boolean;
+  capped?: boolean;
+}): boolean {
+  if (args.outputsDecl === undefined || args.hasRoutes === true || args.capped === true || args.signalAborted)
+    return false;
+  if (lastAssistantMessage(args.messages) === undefined) return false;
+  return findEmitOutputCall(args.messages) == null && findAbortToolCall(args.messages) == null;
+}
+
 export function findEmitOutputCall(
   messages: ReadonlyArray<{ role: string; content?: unknown }>,
 ): { value: unknown; isolated: boolean } | null {

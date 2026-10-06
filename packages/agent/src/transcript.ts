@@ -10,7 +10,7 @@ import type { EventType, LlmInput, OutputsDecl, SummariserBackend } from "@fragu
 import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import { sanitiseUnpairedToolCalls, toCatalogRecord } from "@fragua/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import { EMIT_OUTPUT_REMINDER, findAbortToolCall, findEmitOutputCall, lastAssistantMessage } from "./exit-tools.ts";
+import { EMIT_OUTPUT_REMINDER, needsEmitOutputReminder } from "./exit-tools.ts";
 import type { MessageStore } from "./message-store.ts";
 import type { SteeringRegistry } from "./steering-registry.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
@@ -354,12 +354,12 @@ export async function executePromptLoop(
     // non-retryable failure below. Routing nodes + deliberate aborts + dead
     // provider turns are excluded.
     if (
-      outputsDecl !== undefined &&
-      !hasRoutes &&
-      !input.signal?.aborted &&
-      lastAssistantMessage(agent.state.messages) !== undefined &&
-      findEmitOutputCall(agent.state.messages.slice(hydratedCount)) == null &&
-      findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
+      needsEmitOutputReminder({
+        outputsDecl,
+        messages: agent.state.messages.slice(hydratedCount),
+        signalAborted: input.signal?.aborted ?? false,
+        hasRoutes,
+      })
     ) {
       await agent.prompt(EMIT_OUTPUT_REMINDER);
       await agent.waitForIdle();

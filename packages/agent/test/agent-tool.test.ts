@@ -385,3 +385,21 @@ describe("agent tool — model-supplied context_files stay inside the worktree",
     }
   });
 });
+
+describe("agent tool — denied-tools wins over allowed-tools", () => {
+  test("a node that both allows and denies `agent` does not advertise it", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-agent-deny-"));
+    try {
+      const { contexts } = await runCaller({
+        scratch,
+        attrs: { allowed_tools: ["read", "bash", "agent"], denied_tools: ["agent"] },
+        responses: [fauxAssistantMessage([fauxText("no delegation available")], { stopReason: "stop" })],
+      });
+      const callerTools = advertisedTools(contexts[0]!).map((t) => t.name);
+      expect(callerTools).not.toContain("agent");
+      expect(callerTools).toContain("read");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+});

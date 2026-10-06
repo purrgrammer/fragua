@@ -278,6 +278,7 @@ export class PiLlmBackend implements LlmBackend {
     const agentTool = this.maybeBuildAgentTool({
       input,
       allow,
+      deny,
       finalTools,
       effectiveEnv,
       effectiveSkills,
@@ -419,14 +420,15 @@ export class PiLlmBackend implements LlmBackend {
   private maybeBuildAgentTool(args: {
     input: LlmInput;
     allow: string[] | undefined;
+    deny: string[] | undefined;
     finalTools: AnyTool[];
     effectiveEnv: ExecutionEnvironment;
     effectiveSkills: readonly Skill[];
     provider: string;
     modelId: string;
   }): AgentTool | undefined {
-    const { input, allow, finalTools, effectiveEnv, effectiveSkills, provider, modelId } = args;
-    if (!allow?.includes("agent")) return undefined;
+    const { input, allow, deny, finalTools, effectiveEnv, effectiveSkills, provider, modelId } = args;
+    if (!allow?.includes("agent") || deny?.includes("agent")) return undefined;
     const effort = (input.node.attrs as Record<string, unknown>)["reasoning_effort"];
     return buildAgentTool(
       {

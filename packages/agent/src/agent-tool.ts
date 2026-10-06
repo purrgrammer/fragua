@@ -39,6 +39,7 @@ import {
   findEmitOutputCall,
   fullAssistantText,
   lastAssistantMessage,
+  needsEmitOutputReminder,
 } from "./exit-tools.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
@@ -116,7 +117,8 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
     description:
       "Delegate a self-contained sub-task to a worker agent that runs in the same worktree with a fresh context, " +
       "a tool subset of yours, and its own cost cap. Returns { text, outputs?, cost_usd, turns, tool_calls, worker_id, status }. " +
-      "Partition work so concurrent workers touch disjoint files. Depth 1: a worker cannot call `agent`.",
+      "Partition work so concurrent workers touch disjoint files. Depth 1: a worker cannot call `agent`. " +
+      "`max_cost_usd` is checked after each worker message, so one long message can overshoot it slightly.",
     parameters,
     async execute(toolCallId, callParams, signal) {
       // pi-agent-core hands every tool call the turn's abort signal; the
@@ -329,14 +331,25 @@ async function runWorkerInSlot(
   // The slot was granted on a live signal; an abort that landed in between
   // must not open a worker step (no `llm.start`, no model call).
   if (signal?.aborted) return { ...errResult("worker aborted before it started"), status: "aborted" };
-  const setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
-  if ("error" in setup) return errResult(setup.error);
-  const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
-  // The worker's exact prompt persists under its node id, as the caller's does
-  // (`llm.start` is capped at 4 KB, so the row is the forensic record).
-  if (input.persistMessage && systemPrompt.length > 0) {
-    input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() }, { nodeId: workerNodeId });
+  // Setup is the one window outside the worker loop's own try/catch; a throw
+  // here (a store write, a model resolve) is still a worker-level error the
+  // caller reads, never a caller-turn failure.
+  let setup: Awaited<ReturnType<typeof prepareWorkerSetup>>;
+  try {
+    setup = await prepareWorkerSetup(deps, { cfg, args, signal, workerNodeId });
+    if ("error" in setup) return errResult(setup.error);
+    // The worker's exact prompt persists under its node id, as the caller's
+    // does (`llm.start` is capped at 4 KB, so the row is the forensic record).
+    if (input.persistMessage && setup.systemPrompt.length > 0) {
+      input.persistMessage(
+        { role: "system", content: setup.systemPrompt, timestamp: Date.now() },
+        { nodeId: workerNodeId },
+      );
+    }
+  } catch (err) {
+    return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
 
   const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
 
@@ -422,14 +435,14 @@ async function runWorkerInSlot(
   try {
     await worker.prompt(args.task);
     await worker.waitForIdle();
-    // One corrective re-prompt on a skipped emit_output, mirroring the llm step.
+    // One corrective re-prompt on a skipped emit_output, the llm step's guard.
     if (
-      outputsDecl !== undefined &&
-      capStatus === undefined &&
-      !signal?.aborted &&
-      lastAssistantMessage(worker.state.messages) !== undefined &&
-      findEmitOutputCall(worker.state.messages) == null &&
-      findAbortToolCall(worker.state.messages) == null
+      needsEmitOutputReminder({
+        outputsDecl,
+        messages: worker.state.messages,
+        signalAborted: signal?.aborted ?? false,
+        capped: capStatus !== undefined,
+      })
     ) {
       await worker.prompt(EMIT_OUTPUT_REMINDER);
       await worker.waitForIdle();
