@@ -101,7 +101,9 @@ export function buildAgentTool(deps: AgentToolDeps, cfg: AgentToolBuildConfig): 
           description: "Spend cap for this worker in USD. Clamped to the operator's `agent.max-cost` ceiling.",
         }),
       ),
-      max_tokens: Type.Optional(Type.Integer({ minimum: 1 })),
+      max_tokens: Type.Optional(
+        Type.Integer({ minimum: 1, description: "Per-response output cap. Clamped to the model's own maximum." }),
+      ),
       timeout_minutes: Type.Optional(
         Type.Number({
           exclusiveMinimum: 0,
@@ -267,7 +269,10 @@ async function prepareWorkerSetup(
   workerTools.sort(byName);
 
   const thinkingLevel = deps.resolveThinkingLevel(model, { reasoning_effort: args.effort ?? cfg.callerEffort });
-  const maxTokens = typeof args.max_tokens === "number" ? args.max_tokens : undefined;
+  // The model's own output ceiling bounds a per-call `max_tokens`, so one
+  // response cannot overshoot the per-worker cost cap by more than the model
+  // can emit in a single message.
+  const maxTokens = typeof args.max_tokens === "number" ? Math.min(args.max_tokens, model.maxTokens) : undefined;
   return { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens };
 }
 
@@ -349,6 +354,10 @@ async function runWorkerInSlot(
   } catch (err) {
     return errResult(`agent: worker setup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Setup awaited real I/O (context files); an abort that landed meanwhile
+  // would never fire the listener registered below, so re-check before any
+  // model call or write-class tool can run against a cancelled turn.
+  if (signal?.aborted) return { ...errResult("worker aborted before it started"), status: "aborted" };
   const { model, outputsDecl, systemPrompt, workerTools, thinkingLevel, maxTokens } = setup;
 
   const { maxCostUsd, maxTurns, timeoutMinutes } = resolveWorkerCaps(args, deps.agentConfig);
