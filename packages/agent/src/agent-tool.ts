@@ -400,6 +400,9 @@ async function runWorkerInSlot(
   const unsubscribe = worker.subscribe((event: AgentEvent) => {
     if (event.type !== "message_end") return;
     const msg = event.message;
+    // The empty error/abort envelope pi-agent-core synthesises is not a turn:
+    // it carries no content and no spend, so it neither counts nor persists.
+    if (isEmptyFailureEnvelope(msg)) return;
     if (msg.role === "assistant") {
       turns += 1;
       const am = msg as AssistantMessage;
@@ -413,11 +416,8 @@ async function runWorkerInSlot(
       costUsd += am.usage.cost.total;
       if (Array.isArray(am.content)) toolCallCount += am.content.filter((b) => b.type === "toolCall").length;
     }
-    // Persist every worker row under the synthetic node id (skipping the empty
-    // error/abort envelopes, as the caller subscriber does).
-    if (input.persistMessage && !isEmptyFailureEnvelope(msg)) {
-      input.persistMessage(msg, { nodeId: workerNodeId });
-    }
+    // Persist every worker row under the synthetic node id.
+    if (input.persistMessage) input.persistMessage(msg, { nodeId: workerNodeId });
     if (capStatus === undefined && maxCostUsd !== undefined && costUsd >= maxCostUsd) {
       capStatus = "max_cost";
       worker.abort();
@@ -610,6 +610,10 @@ export class WorkerSlots {
       };
       const wake = () => {
         signal?.removeEventListener("abort", onAbort);
+        if (signal?.aborted) {
+          reject(new WorkerSlotsAborted());
+          return;
+        }
         grant();
       };
       this.waiters.push(wake);
@@ -708,7 +712,7 @@ function classifyWorkerResult(args: {
   // finished worker, not a stopped one: hand the struct back as completed.
   if (capStatus !== undefined && outputsDecl !== undefined) {
     const emitCall = findEmitOutputCall(messages);
-    if (emitCall != null && validateOutputsValue(outputsDecl, emitCall.value) === null) {
+    if (emitCall?.isolated === true && validateOutputsValue(outputsDecl, emitCall.value) === null) {
       return { text: baseText, outputs: emitCall.value as OutputsValue, status: "completed", ...base };
     }
   }
