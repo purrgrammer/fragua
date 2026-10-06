@@ -70,6 +70,8 @@ export interface AgentToolConfig {
   maxCostUsd?: number;
   maxTurns?: number;
   timeoutMinutes?: number;
+  /** Concurrent workers per caller TURN (the semaphore is built per turn);
+   * across turns the caller is sequential, so this is also the run-wide bound. */
   concurrency?: number;
 }
 
@@ -270,7 +272,7 @@ async function prepareWorkerSetup(
     // daemon would otherwise spread the caller's node id over it.
     emit: input.emit
       ? (type, payload) => {
-          void input.emit?.(type as EventType, { nodeId: workerNodeId, ...payload });
+          void input.emit?.(type as EventType, { ...payload, nodeId: workerNodeId });
         }
       : () => {},
     ...(input.judge !== undefined ? { judge: input.judge } : {}),
@@ -547,6 +549,11 @@ interface AgentToolBuildConfig {
    * caller turn; further calls wait for a slot (or return `aborted` if the
    * caller's signal fires while they wait). */
   slots: WorkerSlots;
+  /** The caller's effective tool objects, shared by reference with every
+   * concurrent worker. Safe: a fragua tool is a stateless `execute` over the
+   * environment it is handed, and an MCP tool multiplexes calls by JSON-RPC
+   * request id — pi-agent-core already runs one message's tool calls
+   * concurrently over these same objects. */
   callerFinalTools: AnyTool[];
   effectiveEnv: ExecutionEnvironment;
   callerEffectiveSkills: readonly Skill[];
