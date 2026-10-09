@@ -18,7 +18,8 @@
 
 import { parseWorkflow } from "@fragua/core";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { ZoomIn, ZoomOut } from "lucide-react";
+import { type CSSProperties, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   CodeBlock,
@@ -30,6 +31,7 @@ import {
 } from "../components/ai-elements/code-block.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
+import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
@@ -68,6 +70,18 @@ export function WorkflowDetail(): JSX.Element {
   // default precedence (global → projects in recency order).
   const cwdParam = searchParams.get("cwd");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [sourceFontPx, setSourceFontPx] = useState<number>(readSourceFontPx);
+  const stepSourceFont = (dir: 1 | -1): void => {
+    const i = SOURCE_FONT_STEPS.indexOf(sourceFontPx);
+    const next = SOURCE_FONT_STEPS[Math.min(SOURCE_FONT_STEPS.length - 1, Math.max(0, (i === -1 ? 1 : i) + dir))];
+    if (next === undefined) return;
+    setSourceFontPx(next);
+    try {
+      localStorage.setItem(SOURCE_FONT_KEY, String(next));
+    } catch {
+      // per-viewer convenience only; a blocked store just means no memory
+    }
+  };
 
   const {
     data: detail,
@@ -246,12 +260,44 @@ export function WorkflowDetail(): JSX.Element {
               description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
             />
           )}
-          <CodeBlock code={detail.source} language="yaml" data-testid="workflow-detail-source" className="min-w-0">
+          <CodeBlock
+            code={detail.source}
+            language="yaml"
+            data-testid="workflow-detail-source"
+            className="min-w-0"
+            // The body reads its size from the `--sw-text-sm` token; overriding
+            // it on the block scopes the zoom to the source, so the header and
+            // the rest of the page keep the scale.
+            style={{ "--sw-text-sm": `${sourceFontPx}px` } as CSSProperties}
+          >
             <CodeBlockHeader>
               <CodeBlockTitle>
                 <CodeBlockFilename>{detail.path}</CodeBlockFilename>
               </CodeBlockTitle>
               <CodeBlockActions>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Smaller text"
+                  data-testid="workflow-source-zoom-out"
+                  disabled={sourceFontPx <= (SOURCE_FONT_STEPS[0] ?? 0)}
+                  onClick={() => stepSourceFont(-1)}
+                >
+                  <ZoomOut aria-hidden />
+                </Button>
+                <span className="font-mono text-sw-xs text-sw-muted tabular-nums" data-testid="workflow-source-zoom">
+                  {sourceFontPx}px
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Larger text"
+                  data-testid="workflow-source-zoom-in"
+                  disabled={sourceFontPx >= (SOURCE_FONT_STEPS[SOURCE_FONT_STEPS.length - 1] ?? 0)}
+                  onClick={() => stepSourceFont(1)}
+                >
+                  <ZoomIn aria-hidden />
+                </Button>
                 <CodeBlockCopyButton />
               </CodeBlockActions>
             </CodeBlockHeader>
@@ -263,6 +309,21 @@ export function WorkflowDetail(): JSX.Element {
 }
 
 type WorkflowView = "graph" | "source";
+
+/** Font sizes the source zoom steps through; the second is the token's
+ * own default so a fresh page matches the rest of the UI. */
+const SOURCE_FONT_STEPS: readonly number[] = [12, 15, 18, 21, 24, 28, 32];
+const SOURCE_FONT_KEY = "fragua.workflow-source-font-px";
+
+function readSourceFontPx(): number {
+  try {
+    const raw = Number(localStorage.getItem(SOURCE_FONT_KEY));
+    if (SOURCE_FONT_STEPS.includes(raw)) return raw;
+  } catch {
+    // no storage (private window, blocked site data): use the default
+  }
+  return SOURCE_FONT_STEPS[1] ?? 15;
+}
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;

@@ -147,6 +147,16 @@ describe("WorkflowDetail route", () => {
     const source = await waitFor(() => q2.getByTestId("workflow-detail-source"));
     expect(source.textContent).toContain("workflows/demo.yaml");
     expect(source.textContent).toContain("steps:");
+
+    // Zoom steps the block's own text-size token, not the page's.
+    expect(source.style.getPropertyValue("--sw-text-sm")).toBe("15px");
+    fireEvent.click(q2.getByTestId("workflow-source-zoom-in"));
+    expect(source.style.getPropertyValue("--sw-text-sm")).toBe("18px");
+    expect(q2.getByTestId("workflow-source-zoom").textContent).toBe("18px");
+    fireEvent.click(q2.getByTestId("workflow-source-zoom-out"));
+    fireEvent.click(q2.getByTestId("workflow-source-zoom-out"));
+    expect(source.style.getPropertyValue("--sw-text-sm")).toBe("12px");
+    expect((q2.getByTestId("workflow-source-zoom-out") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("renders a dedicated not-found state when the server 404s", async () => {
