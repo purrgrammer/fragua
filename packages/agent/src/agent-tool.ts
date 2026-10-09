@@ -492,6 +492,7 @@ async function runWorkerInSlot(
       cost_usd: result.cost_usd,
       turns: result.turns,
       tool_calls: result.tool_calls,
+      ...(result.status === "error" ? { error: result.text.slice(0, WORKER_ERROR_DETAIL_CHARS) } : {}),
     });
   }
   return result;
@@ -586,6 +587,9 @@ function emitFailedWorkerStep(
     cost_usd: 0,
     turns: 0,
     tool_calls: 0,
+    // The reason a worker never ran is otherwise only in the tool result the
+    // caller saw; the event log is what an operator reads afterwards.
+    ...(result.status === "error" ? { error: result.text.slice(0, WORKER_ERROR_DETAIL_CHARS) } : {}),
   });
   return result;
 }
@@ -649,6 +653,8 @@ const OUTPUTS_DECL_MAX_BYTES = 64_000;
  * leaves room for the sibling fields. The full task is the worker's first user
  * row, persisted under its node id. */
 const WORKER_PROMPT_PREVIEW_CHARS = 3_000;
+/** Cap on the error detail an `agent.worker_end` carries (events stay ≤4KB). */
+const WORKER_ERROR_DETAIL_CHARS = 400;
 
 /** The text the CALLER model reads for one worker: a status line with the
  * counters, the worker's final answer, and the validated `outputs` as JSON. */

@@ -488,6 +488,8 @@ describe("agent tool — a setup failure still opens and closes a worker step", 
       expect(starts).toHaveLength(1);
       expect(ends).toHaveLength(1);
       expect(ends[0]?.data["status"]).toBe("error");
+      expect(typeof ends[0]?.data["error"]).toBe("string");
+      expect((ends[0]?.data["error"] as string).length).toBeGreaterThan(0);
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
