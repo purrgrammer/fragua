@@ -55,8 +55,16 @@ export interface SubstitutionOptions {
  * same value renders identically on replay. The `fragua_output_` prefix is what
  * the agent's standing system-prompt rule marks as data. */
 export function wrapOutputValue(value: string): string {
-  const id = sha256Hex(value);
+  const id = outputValueId(value);
   return `<fragua_output_${id}>${value}</fragua_output_${id}>`;
+}
+
+/** The boundary-tag id for a rendered value: what `wrapOutputValue` puts in
+ * the element name. Exposed so a reader of a substituted prompt (the web
+ * conversation view) can recognise which producer's value a block carries by
+ * hashing the candidates the same way. */
+export function outputValueId(rendered: string): string {
+  return sha256Hex(rendered);
 }
 
 /** SHA-256 of the UTF-8 bytes of `s`, hex-encoded (64 chars). Pure-JS

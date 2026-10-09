@@ -26,7 +26,7 @@
 //   - `conversation-messages-error-inline` — fetch failed but stale rows render
 
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@fragua/types";
-import { Fragment, type ReactNode, useMemo, useState } from "react";
+import { createContext, Fragment, type ReactNode, useContext, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -50,6 +50,7 @@ import { HitlDecisionBanner } from "@/components/run-conversation/HitlDecisionBa
 import { HitlStepCard } from "@/components/run-conversation/HitlStepCard";
 import { JudgeNodeRow } from "@/components/run-conversation/JudgeNodeRow";
 import { type JudgeToolParams, JudgeToolResult } from "@/components/run-conversation/JudgeToolResult";
+import { OutputValueBlock } from "@/components/run-conversation/OutputValueBlock";
 import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
@@ -58,8 +59,14 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { EmptyState } from "@/components/ui/empty-state";
 import type { NodeState, RunDetail, RunMessageRow } from "@/lib/api";
 import { type FanoutTopology, fanoutTopology } from "@/lib/fanout-topology";
+import { buildOutputIndex, type OutputProducer, splitOutputTags } from "@/lib/output-tags";
 import { type StreamingBlock, type StreamingMessage, type ToolStream, UNSCOPED_NODE } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
+
+/** Boundary-tag id → the step and field that emitted the value, so a prompt
+ * can label the values substituted into it. Provided at the conversation root;
+ * both the plain and the fan-out section paths read it. */
+const OutputIndexContext = createContext<Map<string, OutputProducer>>(new Map());
 
 export interface RunConversationProps {
   messages: RunMessageRow[];
@@ -361,167 +368,171 @@ export function RunConversation({
   // would leave the pane blank exactly when it must explain itself.
   const empty = noContent && (messagesError || !isLoading);
 
+  const outputIndex = useMemo(() => buildOutputIndex(messages), [messages]);
+
   return (
-    <div className={cn("flex h-full min-h-0 flex-col", className)}>
-      <Conversation className="flex-1">
-        {empty ? (
-          <ConversationContent>
-            {messagesError ? (
-              <EmptyState
-                data-testid="conversation-messages-error"
-                title="Couldn't load the conversation"
-                description="The messages request failed. It retries automatically as new events arrive — or reload the page."
-              />
-            ) : (
-              <ConversationEmptyState
-                data-testid="conversation-empty"
-                title="No conversation yet"
-                description="The agent hasn't produced any messages for this run."
-              />
-            )}
-          </ConversationContent>
-        ) : (
-          <ConversationContent>
-            {messagesError && (
-              // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" is the established live-region pattern (same rationale as EmptyState).
-              <div
-                data-testid="conversation-messages-error-inline"
-                role="status"
-                className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-xs text-sw-muted"
-              >
-                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sw-accent-warn" />
-                <span>Couldn't refresh the conversation — showing the last loaded messages.</span>
-              </div>
-            )}
-            {userInput && <UserPromptMessage text={userInput} />}
-            {decisionBuckets.before.map((d) => (
-              <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-            ))}
-            {renderItems.map((item) => {
-              if (item.kind === "parallel") {
+    <OutputIndexContext.Provider value={outputIndex}>
+      <div className={cn("flex h-full min-h-0 flex-col", className)}>
+        <Conversation className="flex-1">
+          {empty ? (
+            <ConversationContent>
+              {messagesError ? (
+                <EmptyState
+                  data-testid="conversation-messages-error"
+                  title="Couldn't load the conversation"
+                  description="The messages request failed. It retries automatically as new events arrive — or reload the page."
+                />
+              ) : (
+                <ConversationEmptyState
+                  data-testid="conversation-empty"
+                  title="No conversation yet"
+                  description="The agent hasn't produced any messages for this run."
+                />
+              )}
+            </ConversationContent>
+          ) : (
+            <ConversationContent>
+              {messagesError && (
+                // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" is the established live-region pattern (same rationale as EmptyState).
+                <div
+                  data-testid="conversation-messages-error-inline"
+                  role="status"
+                  className="flex items-center gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-xs text-sw-muted"
+                >
+                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sw-accent-warn" />
+                  <span>Couldn't refresh the conversation — showing the last loaded messages.</span>
+                </div>
+              )}
+              {userInput && <UserPromptMessage text={userInput} />}
+              {decisionBuckets.before.map((d) => (
+                <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+              ))}
+              {renderItems.map((item) => {
+                if (item.kind === "parallel") {
+                  return (
+                    <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
+                      <ParallelGroupSection
+                        parentId={item.parentId}
+                        branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
+                        toolResultsById={toolResultsById}
+                        streamingByNode={streamingByNode}
+                        stateByNodeId={stateByNodeId}
+                        isLive={isLive}
+                        isPaused={isPaused}
+                      />
+                      {item.indices.flatMap((i) =>
+                        (decisionBuckets.after.get(i) ?? []).map((d) => (
+                          <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                        )),
+                      )}
+                    </Fragment>
+                  );
+                }
+                const { section, index: i } = item;
+                const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
+                const nodeStream = streamingByNode.get(section.nodeId ?? UNSCOPED_NODE);
+                const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
+                // The open gate's card takes precedence over its own past
+                // decision (loop re-entry); suppress the banner there.
+                const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
                 return (
-                  <Fragment key={`parallel-${item.parentId}-${item.indices[0]}`}>
-                    <ParallelGroupSection
-                      parentId={item.parentId}
-                      branches={parallelBranches.get(`${item.parentId}-${item.indices[0]}`) ?? []}
-                      toolResultsById={toolResultsById}
-                      streamingByNode={streamingByNode}
-                      stateByNodeId={stateByNodeId}
-                      isLive={isLive}
-                      isPaused={isPaused}
-                    />
-                    {item.indices.flatMap((i) =>
-                      (decisionBuckets.after.get(i) ?? []).map((d) => (
-                        <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-                      )),
-                    )}
+                  <Fragment key={section.key}>
+                    <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
+                      {section.rows.map((row) => (
+                        <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
+                      ))}
+                      {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
+                      {showHitlHere && (
+                        <HitlStepCard
+                          runId={hitl.runId}
+                          label={hitl.label}
+                          options={hitl.options}
+                          optionLabels={hitl.optionLabels}
+                        />
+                      )}
+                      {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
+                    </NodeSection>
+                    {decisionBuckets.after.get(i)?.map((d) => (
+                      <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
+                    ))}
                   </Fragment>
                 );
-              }
-              const { section, index: i } = item;
-              const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
-              const nodeStream = streamingByNode.get(section.nodeId ?? UNSCOPED_NODE);
-              const showHitlHere = hitl != null && section.nodeId === hitl.nodeId;
-              // The open gate's card takes precedence over its own past
-              // decision (loop re-entry); suppress the banner there.
-              const decision = !showHitlHere && section.nodeId != null ? hitlDecisions?.[section.nodeId] : undefined;
-              return (
-                <Fragment key={section.key}>
-                  <NodeSection nodeId={section.nodeId} state={nodeState} isLive={isLive} isPaused={isPaused}>
-                    {section.rows.map((row) => (
-                      <MessageRow key={messageKey(row)} row={row} toolResultsById={toolResultsById} />
-                    ))}
-                    {nodeStream && <StreamingMessageRow streaming={nodeStream} />}
-                    {showHitlHere && (
-                      <HitlStepCard
-                        runId={hitl.runId}
-                        label={hitl.label}
-                        options={hitl.options}
-                        optionLabels={hitl.optionLabels}
-                      />
-                    )}
-                    {decision && <HitlDecisionBanner route={decision.route} note={decision.note} />}
-                  </NodeSection>
-                  {decisionBuckets.after.get(i)?.map((d) => (
-                    <DecisionSection key={`decision-${d.nodeId}`} entry={d} {...sectionChrome} />
-                  ))}
-                </Fragment>
-              );
-            })}
-            {/* Streaming buffers for nodes with no section yet: a fresh fan-out
+              })}
+              {/* Streaming buffers for nodes with no section yet: a fresh fan-out
                 whose branches are mid-first-token (grouped under the parent), or
                 a lone non-branch node streaming before its first persisted row. */}
-            {streamingOnlyParents.map((parentId) => (
-              <ParallelGroupSection
-                key={`parallel-live-${parentId}`}
-                parentId={parentId}
-                branches={liveOnlyBranches.get(parentId) ?? []}
-                toolResultsById={toolResultsById}
-                streamingByNode={streamingByNode}
-                stateByNodeId={stateByNodeId}
-                isLive={isLive}
-                isPaused={isPaused}
-              />
-            ))}
-            {[...streamingByNode.values()]
-              .filter((buf) => {
-                const nid = buf.nodeId;
-                if (nid == null) return !hasSectionFor.has(null);
-                return !hasSectionFor.has(nid) && !fanout.parentOf.has(nid);
-              })
-              .map((buf) => (
+              {streamingOnlyParents.map((parentId) => (
+                <ParallelGroupSection
+                  key={`parallel-live-${parentId}`}
+                  parentId={parentId}
+                  branches={liveOnlyBranches.get(parentId) ?? []}
+                  toolResultsById={toolResultsById}
+                  streamingByNode={streamingByNode}
+                  stateByNodeId={stateByNodeId}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                />
+              ))}
+              {[...streamingByNode.values()]
+                .filter((buf) => {
+                  const nid = buf.nodeId;
+                  if (nid == null) return !hasSectionFor.has(null);
+                  return !hasSectionFor.has(nid) && !fanout.parentOf.has(nid);
+                })
+                .map((buf) => (
+                  <NodeSection
+                    key={`orphan-stream-${buf.nodeId ?? "unscoped"}`}
+                    nodeId={buf.nodeId}
+                    state={buf.nodeId ? stateByNodeId.get(buf.nodeId) : undefined}
+                    isLive={isLive}
+                    isPaused={isPaused}
+                  >
+                    <StreamingMessageRow streaming={buf} />
+                  </NodeSection>
+                ))}
+              {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
                 <NodeSection
-                  key={`orphan-stream-${buf.nodeId ?? "unscoped"}`}
-                  nodeId={buf.nodeId}
-                  state={buf.nodeId ? stateByNodeId.get(buf.nodeId) : undefined}
+                  nodeId={hitl.nodeId}
+                  state={stateByNodeId.get(hitl.nodeId)}
                   isLive={isLive}
                   isPaused={isPaused}
                 >
-                  <StreamingMessageRow streaming={buf} />
+                  <HitlStepCard
+                    runId={hitl.runId}
+                    label={hitl.label}
+                    options={hitl.options}
+                    optionLabels={hitl.optionLabels}
+                  />
+                </NodeSection>
+              )}
+              {liveToolNodes.map(({ nodeId, stream }) => (
+                <NodeSection
+                  key={`tool-stream-${nodeId}`}
+                  nodeId={nodeId}
+                  state={stateByNodeId.get(nodeId)}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
+                  <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
                 </NodeSection>
               ))}
-            {hitl != null && !visibleSections.some((s) => s.nodeId === hitl.nodeId) && (
-              <NodeSection
-                nodeId={hitl.nodeId}
-                state={stateByNodeId.get(hitl.nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <HitlStepCard
-                  runId={hitl.runId}
-                  label={hitl.label}
-                  options={hitl.options}
-                  optionLabels={hitl.optionLabels}
-                />
-              </NodeSection>
-            )}
-            {liveToolNodes.map(({ nodeId, stream }) => (
-              <NodeSection
-                key={`tool-stream-${nodeId}`}
-                nodeId={nodeId}
-                state={stateByNodeId.get(nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
-              </NodeSection>
-            ))}
-            {placeholderToolNodes.map((nodeId) => (
-              <NodeSection
-                key={`tool-pending-${nodeId}`}
-                nodeId={nodeId}
-                state={stateByNodeId.get(nodeId)}
-                isLive={isLive}
-                isPaused={isPaused}
-              >
-                <ToolNodePendingRow testid={`tool-pending-${nodeId}`} />
-              </NodeSection>
-            ))}
-          </ConversationContent>
-        )}
-        <ConversationScrollButton />
-      </Conversation>
-    </div>
+              {placeholderToolNodes.map((nodeId) => (
+                <NodeSection
+                  key={`tool-pending-${nodeId}`}
+                  nodeId={nodeId}
+                  state={stateByNodeId.get(nodeId)}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
+                  <ToolNodePendingRow testid={`tool-pending-${nodeId}`} />
+                </NodeSection>
+              ))}
+            </ConversationContent>
+          )}
+          <ConversationScrollButton />
+        </Conversation>
+      </div>
+    </OutputIndexContext.Provider>
   );
 }
 
@@ -1148,11 +1159,26 @@ function UserMessageRow({
   testid: string;
 }): JSX.Element | null {
   const text = flattenText(message.content);
+  const outputIndex = useContext(OutputIndexContext);
   if (text.length === 0) return null;
+  const segments = splitOutputTags(text);
   return (
     <AIMessage from="user" data-testid={testid}>
       <MessageContent>
-        <MessageResponse>{text}</MessageResponse>
+        {segments.map((seg) =>
+          seg.kind === "text" ? (
+            seg.text.trim().length > 0 ? (
+              <MessageResponse key={`${testid}-t${seg.start}`}>{seg.text}</MessageResponse>
+            ) : null
+          ) : (
+            <OutputValueBlock
+              key={`${testid}-o${seg.start}`}
+              value={seg.value}
+              producer={outputIndex.get(seg.id)}
+              testid={`${testid}-output-${seg.start}`}
+            />
+          ),
+        )}
       </MessageContent>
     </AIMessage>
   );

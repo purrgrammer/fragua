@@ -165,6 +165,13 @@ export function resolveSegments(val: OutputStructValue, segments: string[]): Out
   return cur;
 }
 
+/** The prompt-side rendering of an output value: a scalar verbatim, a record
+ * or array as canonical JSON. These are the exact bytes `wrapOutputValue`
+ * hashes, so a reader can reproduce the boundary-tag id from the struct. */
+export function renderOutputValue(val: OutputStructValue): string {
+  return renderValue(val, false);
+}
+
 function renderValue(val: OutputStructValue, escapeForShell: boolean): string {
   if (typeof val === "string") {
     return escapeForShell ? shellQuote(val) : val;
