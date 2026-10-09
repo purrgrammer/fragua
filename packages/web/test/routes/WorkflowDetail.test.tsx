@@ -124,6 +124,31 @@ describe("WorkflowDetail route", () => {
     });
   });
 
+  it("hides the source by default and shows it on ?view=source, with the path and the YAML", async () => {
+    const detail: WorkflowDetailT = {
+      name: "demo",
+      label: "Demo workflow",
+      path: "workflows/demo.yaml",
+      sha: "abcdef1234567890",
+      source: WORKFLOW_SOURCE,
+    };
+    const client = createTestQueryClient();
+    seedDetail(client, "demo", detail);
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => expect(q.getByTestId("workflow-tab-source")).toBeTruthy());
+    expect(q.queryByTestId("workflow-detail-source")).toBeNull();
+    cleanup();
+
+    const client2 = createTestQueryClient();
+    seedDetail(client2, "demo", detail);
+    const deep = mount(client2, "/workflows/demo?view=source");
+    const q2 = within(deep.container);
+    const source = await waitFor(() => q2.getByTestId("workflow-detail-source"));
+    expect(source.textContent).toContain("workflows/demo.yaml");
+    expect(source.textContent).toContain("steps:");
+  });
+
   it("renders a dedicated not-found state when the server 404s", async () => {
     const origWarn = console.warn;
     console.warn = () => {};

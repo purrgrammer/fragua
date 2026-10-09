@@ -1,12 +1,12 @@
 // /workflows/:name — static workflow detail page.
 //
-// The parsed graph spans the full width; clicking a node opens a
-// right-side `Sheet` drawer with `NodeInspector` so the topology stays
-// uncropped while the operator inspects details.
-// No live run is involved — this is the "what does this workflow do?"
-// answer before you press launch. Topology is parsed client-side via
-// `@fragua/core`'s `parseWorkflow`; on parse failure the server's raw
-// YAML source is still rendered so operators can debug it.
+// Two views, bound to `?view=`: the parsed graph (default) and the YAML
+// source. On the graph, clicking a node opens a right-side `Sheet` drawer
+// with `NodeInspector` so the topology stays uncropped while the operator
+// inspects details. No live run is involved — this is the "what does this
+// workflow do?" answer before you press launch. Topology is parsed
+// client-side via `@fragua/core`'s `parseWorkflow`; on parse failure the
+// page falls to the source view so operators can debug it.
 //
 // Route params / data:
 //   - `:name` → `queries.workflows.detail(name)` → `{ name, label, path,
@@ -20,10 +20,19 @@ import { parseWorkflow } from "@fragua/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockCopyButton,
+  CodeBlockFilename,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "../components/ai-elements/code-block.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { queries } from "../lib/queries.ts";
@@ -41,7 +50,19 @@ const DRAWER_MOTION = cn(
 
 export function WorkflowDetail(): JSX.Element {
   const { name = "" } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedView: WorkflowView = searchParams.get("view") === "source" ? "source" : "graph";
+  const setView = (next: string): void => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === "source") p.set("view", "source");
+        else p.delete("view");
+        return p;
+      },
+      { replace: true },
+    );
+  };
   // `?cwd=` pins lookup to a specific source. Empty string is meaningful
   // (explicit global pin); `null` (param absent) lets the server use the
   // default precedence (global → projects in recency order).
@@ -168,51 +189,80 @@ export function WorkflowDetail(): JSX.Element {
         </p>
       </header>
 
-      {graph ? (
-        <>
-          <div className="min-h-[480px] min-w-0 flex-1">
-            <GraphView graph={graph} orientation="TB" selectedNodeId={selectedNodeId} onNodeClick={setSelectedNodeId} />
-          </div>
-          <Sheet
-            open={selected !== null}
-            onOpenChange={(open) => {
-              if (!open) setSelectedNodeId(null);
-            }}
-          >
-            <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}>
-              {selected ? (
-                <>
-                  <SheetHeader className="border-b border-sw-border px-4 py-3">
-                    <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
-                      {selected.attrs.label ?? selected.id}
-                    </SheetTitle>
-                    <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
-                  </SheetHeader>
-                  <NodeInspector node={selected} className="min-h-0 flex-1 rounded-none border-0 bg-transparent" />
-                </>
-              ) : null}
-            </SheetContent>
-          </Sheet>
-        </>
-      ) : (
-        <EmptyState
-          data-testid="workflow-detail-parse-error"
-          title="Couldn't parse workflow"
-          description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
-        />
-      )}
+      <Tabs
+        value={graph ? requestedView : "source"}
+        onValueChange={setView}
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-3"
+      >
+        <TabsList variant="line" className="self-start">
+          <TabsTrigger value="graph" data-testid="workflow-tab-graph" disabled={!graph}>
+            Graph
+          </TabsTrigger>
+          <TabsTrigger value="source" data-testid="workflow-tab-source">
+            Source
+          </TabsTrigger>
+        </TabsList>
 
-      {!graph && (
-        <pre
-          data-testid="workflow-detail-source"
-          className="max-h-[60vh] overflow-auto rounded-sw-card border border-sw-border bg-sw-surface p-3 text-sw-xs text-sw-text"
-        >
-          {detail.source}
-        </pre>
-      )}
+        <TabsContent value="graph" className="min-h-[480px] min-w-0 flex-1">
+          {graph ? (
+            <>
+              <div className="h-full min-h-[480px] min-w-0">
+                <GraphView
+                  graph={graph}
+                  orientation="TB"
+                  selectedNodeId={selectedNodeId}
+                  onNodeClick={setSelectedNodeId}
+                />
+              </div>
+              <Sheet
+                open={selected !== null}
+                onOpenChange={(open) => {
+                  if (!open) setSelectedNodeId(null);
+                }}
+              >
+                <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}>
+                  {selected ? (
+                    <>
+                      <SheetHeader className="border-b border-sw-border px-4 py-3">
+                        <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
+                          {selected.attrs.label ?? selected.id}
+                        </SheetTitle>
+                        <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
+                      </SheetHeader>
+                      <NodeInspector node={selected} className="min-h-0 flex-1 rounded-none border-0 bg-transparent" />
+                    </>
+                  ) : null}
+                </SheetContent>
+              </Sheet>
+            </>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="source" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-auto">
+          {!graph && (
+            <EmptyState
+              data-testid="workflow-detail-parse-error"
+              title="Couldn't parse workflow"
+              description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
+            />
+          )}
+          <CodeBlock code={detail.source} language="yaml" data-testid="workflow-detail-source" className="min-w-0">
+            <CodeBlockHeader>
+              <CodeBlockTitle>
+                <CodeBlockFilename>{detail.path}</CodeBlockFilename>
+              </CodeBlockTitle>
+              <CodeBlockActions>
+                <CodeBlockCopyButton />
+              </CodeBlockActions>
+            </CodeBlockHeader>
+          </CodeBlock>
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }
+
+type WorkflowView = "graph" | "source";
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
