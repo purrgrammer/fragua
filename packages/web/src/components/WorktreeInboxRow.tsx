@@ -1,8 +1,8 @@
 // WorktreeInboxRow — one row in the "Ready to land" inbox section.
 //
 // Matches the InboxRow visual style (single row, border-l-2 accent,
-// no status badge) with an additional change-stat badge and RunActions
-// dropdown for accept/discard.
+// no status badge), then how long the run has waited and its change stat
+// at the same small size, then the RunActions dropdown for accept/discard.
 
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
@@ -31,19 +31,19 @@ export function WorktreeInboxRow({ row }: { row: RunSummary }): JSX.Element {
         {displayTitle(row)}
       </Link>
 
+      <span
+        data-testid={`worktree-inbox-waiting-${row.runId}`}
+        className="shrink-0 text-sw-xs text-sw-muted"
+        title={toIsoTitle(waitingSince)}
+      >
+        {formatRelative(waitingSince)}
+      </span>
+
       {stat && (
         <Badge variant="muted" className="shrink-0" data-testid={`worktree-inbox-stat-${row.runId}`}>
           <ChangeStat stat={stat} />
         </Badge>
       )}
-
-      <span
-        data-testid={`worktree-inbox-waiting-${row.runId}`}
-        className="shrink-0 text-sw-muted"
-        title={toIsoTitle(waitingSince)}
-      >
-        {formatRelative(waitingSince)}
-      </span>
 
       <RunActions row={row} />
     </li>

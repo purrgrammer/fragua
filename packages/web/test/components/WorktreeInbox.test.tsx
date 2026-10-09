@@ -129,6 +129,24 @@ describe("WorktreeInbox", () => {
       }
     });
 
+    test("waiting time precedes the change stat and shares its text size", async () => {
+      const { container, restore } = renderInbox({
+        [INBOX_URL]: () => json([PENDING_ROW_1]),
+      });
+      try {
+        const [waiting, badge] = await waitFor(() => {
+          const w = container.querySelector(`[data-testid="worktree-inbox-waiting-run-aaa"]`);
+          const b = container.querySelector(`[data-testid="worktree-inbox-stat-run-aaa"]`);
+          if (!w || !b) throw new Error("row parts not found");
+          return [w, b] as const;
+        });
+        expect(waiting.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(waiting.className).toContain("text-sw-xs");
+      } finally {
+        restore();
+      }
+    });
+
     test("falls back to uncommitted stat when committed is null (run-bbb)", async () => {
       const { container, restore } = renderInbox({
         [INBOX_URL]: () => json([PENDING_ROW_2]),
