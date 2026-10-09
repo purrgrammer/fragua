@@ -278,6 +278,34 @@ describe("makeToolHandler — failure modes", () => {
   });
 });
 
+describe("makeToolHandler — an aborted turn is an abort, not a fail", () => {
+  test("signal aborted + runner reports the kill as exit 130 → throws AbortError", async () => {
+    const ctrl = new AbortController();
+    const ctx = stubCtx({ signal: ctrl.signal });
+    const spec = makeToolHandler({
+      toolCommand: "bun run ci",
+      spawner: async () => {
+        ctrl.abort();
+        return { exitCode: 130, stdout: "", stderr: "[fragua: exec aborted]", durationMs: 5 };
+      },
+    });
+    await expect(spec.handler(ctx)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("signal aborted + spawner throws AbortError → rethrows for the executor's abort arm", async () => {
+    const ctrl = new AbortController();
+    const ctx = stubCtx({ signal: ctrl.signal });
+    const spec = makeToolHandler({
+      toolCommand: "sleep 60",
+      spawner: async () => {
+        ctrl.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      },
+    });
+    await expect(spec.handler(ctx)).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
 describe("makeToolHandler — property: exit-code → outcome mapping is deterministic", () => {
   test("∀ exit code: 0 → success; non-zero → fail", () => {
     fc.assert(

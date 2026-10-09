@@ -193,6 +193,12 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
           () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs, onData, scratch?.path),
         );
       } catch (err) {
+        // The executor asked this turn to stop (pause, steer, cancel, daemon
+        // shutdown): hand the abort back so its abort arm records
+        // `node_aborted` and the node re-runs later, exactly as an llm step
+        // does. Only a spawner that aborted on its own, with no signal, is a
+        // halt.
+        if (ctx.signal.aborted) throw abortError();
         if (isAbortError(err)) {
           return {
             kind: "halt",
@@ -206,6 +212,10 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
           detail: `tool spawn failed: ${errorMessage(err)}`,
         } satisfies HandlerResult;
       }
+      // A runner that honours the signal by killing the process reports a
+      // non-zero exit (130) with the output so far. That is not the command
+      // failing, so it must not take the `fail` edge or halt the run.
+      if (ctx.signal.aborted) throw abortError();
 
       // Persist stdout/stderr as artifacts for debugging / replay. Shell
       // output is non-deterministic by nature (timestamps, pids, paths),
@@ -397,6 +407,10 @@ async function runCommand(
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
   }
   throw new Error("tool handler: unreachable — env-less dispatch without spawner should have halted earlier");
+}
+
+function abortError(): Error {
+  return Object.assign(new Error("tool exec aborted"), { name: "AbortError" });
 }
 
 function isAbortError(err: unknown): boolean {

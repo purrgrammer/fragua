@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { writeFile as fsWriteFile, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, writeFile as fsWriteFile, mkdtemp, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalEnvironment, PathEscapeError } from "../src/local-env.ts";
@@ -20,6 +20,15 @@ describe("LocalEnvironment", () => {
   test("writeFile then readFile round-trips content", async () => {
     await env.writeFile("hello.txt", "hi there");
     expect(await env.readFile("hello.txt")).toBe("hi there");
+  });
+
+  test("writeFile keeps the mode of an existing file (an executable stays executable)", async () => {
+    await env.writeFile("run.sh", "#!/bin/sh\necho one\n");
+    await chmod(join(scratch, "run.sh"), 0o755);
+    await env.writeFile("run.sh", "#!/bin/sh\necho two\n");
+    const mode = (await stat(join(scratch, "run.sh"))).mode & 0o777;
+    expect(mode).toBe(0o755);
+    expect(await env.readFile("run.sh")).toBe("#!/bin/sh\necho two\n");
   });
 
   test("writeFile creates parent directories", async () => {

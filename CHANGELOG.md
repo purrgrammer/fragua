@@ -14,6 +14,9 @@ guarantee.
 
 ### Fixed
 
+- **A `tool` step interrupted by a pause, steer, cancel or daemon shutdown is an abort, not a failure.** The killed command's non-zero exit used to take the step's `fail` edge (or halt the run with no fail route), so a restart mid-CI sent the run into its fixer. The step now re-runs when the run resumes, as an `llm` step already did.
+- **The `write` tool keeps an existing file's mode.** Rewriting an executable script no longer drops its executable bit.
+
 - **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
   When a live secret sits verbatim in an unscrubbed binary artifact, nothing is
   written to the export path (and a stale bundle there is removed), so an

@@ -3,7 +3,18 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, constants as fsConstants, realpathSync } from "node:fs";
-import { type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  type FileHandle,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isBlockedCommand } from "./blocklist.ts";
@@ -214,8 +225,16 @@ export class LocalEnvironment implements ExecutionEnvironment {
   async writeFile(path: string, contents: string): Promise<void> {
     const absolute = this.resolvePath(path);
     await mkdir(dirname(absolute), { recursive: true });
+    // The temp-and-rename replaces the inode, which would reset the mode
+    // of an existing file: an executable script rewritten by the `write`
+    // tool must stay executable.
+    const existingMode = await stat(absolute).then(
+      (st) => st.mode & 0o7777,
+      () => undefined,
+    );
     const tmp = `${absolute}.fragua-tmp-${process.pid}-${Date.now()}`;
-    await writeFile(tmp, contents, "utf8");
+    await writeFile(tmp, contents, existingMode === undefined ? "utf8" : { encoding: "utf8", mode: existingMode });
+    if (existingMode !== undefined) await chmod(tmp, existingMode);
     await rename(tmp, absolute);
   }
 
