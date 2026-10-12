@@ -28,7 +28,7 @@ describe("metaForEvent", () => {
   test("static verbs pass through unchanged", () => {
     expect(meta("fact.run_started").verb).toBe("started");
     expect(meta("fact.run_terminated", { status: "completed" }).verb).toBe("completed");
-    expect(meta("fact.run_paused", { reason: "human" }).verb).toBe("needs input");
+    expect(meta("fact.run_paused", { reason: "human" }).verb).toBe("awaiting");
   });
 
   test("unknown event types return null so FeedRow skips render", () => {
@@ -72,7 +72,7 @@ describe("metaForEvent", () => {
 
   test("fact.run_requeued_after_crash → distinct crash verb with attention strip", () => {
     const m = meta("fact.run_requeued_after_crash", { prevNode: "work", lastAliveAt: 1_000 });
-    expect(m.verb).toBe("requeued after crash");
+    expect(m.verb).toBe("requeued");
     expect(m.attention).toBe(true);
     expect(m.borderVar).toBe("var(--sw-accent-pause)");
   });
@@ -89,7 +89,7 @@ describe("metaForEvent", () => {
     });
     expect(providerRetry.iconClass).toBe("text-sw-accent-pause-auto");
     expect(providerRetry.borderVar).toBe("var(--sw-accent-pause-auto)");
-    expect(providerRetry.verb).toBe("auto-retry");
+    expect(providerRetry.verb).toBe("delayed");
 
     const handlerRetry = meta("fact.run_paused", {
       reason: "handler_retry",

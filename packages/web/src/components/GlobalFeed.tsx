@@ -118,7 +118,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   // resumed) reads as one visually-coherent timeline.
   "fact.provider_retry_attempted": {
     Icon: Clock,
-    verb: "retry queued",
+    verb: "retrying",
     iconClass: "text-sw-accent-pause-auto",
   },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
@@ -135,7 +135,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   // restarted on its own, not by their hand.
   "fact.run_requeued_after_crash": {
     Icon: RotateCcw,
-    verb: "requeued after crash",
+    verb: "requeued",
     iconClass: "text-sw-accent-pause",
     borderVar: "var(--sw-accent-pause)",
     attention: true,
@@ -184,7 +184,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta | null {
       return {
         ...base,
         Icon: Pause,
-        verb: "needs input",
+        verb: "awaiting",
         iconClass: "text-sw-accent-pause-hitl",
         borderVar: "var(--sw-accent-pause-hitl)",
         attention: true,
@@ -193,7 +193,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta | null {
     if (typeof reason === "string" && AUTO_WAKE_PAUSE_REASONS.has(reason as PauseReason)) {
       return {
         ...base,
-        verb: "auto-retry",
+        verb: "delayed",
         iconClass: "text-sw-accent-pause-auto",
         borderVar: "var(--sw-accent-pause-auto)",
       };
