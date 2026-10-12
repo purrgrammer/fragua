@@ -21,6 +21,16 @@ export function workflowParseFailedDetail(errorMessage: string | undefined): str
   return `workflow_parse_failed: ${bounded}`;
 }
 
+/** The one `fact.run_paused{max_loops}` shape, for every site that parks a run
+ * on its dispatch ceiling — the linear pre-dispatch arm, the fan-out pool, and
+ * the halt translation — so the payload cannot drift between them. */
+export function maxLoopsPause(input: { currentLimit: number; dispatches: number }): FactEvent {
+  return {
+    type: "fact.run_paused",
+    payload: { reason: "max_loops", currentLimit: input.currentLimit, dispatches: input.dispatches },
+  };
+}
+
 export interface PreDispatchInput {
   /** Pre-dispatch run projection — the contract-version pin lives here. */
   state: RunState;
@@ -103,12 +113,7 @@ export function planPreDispatch(input: PreDispatchInput): PreDispatchPlan {
   if (input.dispatches >= input.effectiveMaxLoops) {
     return {
       terminal: true,
-      facts: [
-        {
-          type: "fact.run_paused",
-          payload: { reason: "max_loops", currentLimit: input.effectiveMaxLoops, dispatches: input.dispatches },
-        },
-      ],
+      facts: [maxLoopsPause({ currentLimit: input.effectiveMaxLoops, dispatches: input.dispatches })],
     };
   }
 

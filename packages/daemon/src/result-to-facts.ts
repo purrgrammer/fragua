@@ -7,6 +7,7 @@ import { getRetry, isTerminalNextNode, readGoalGateRetries } from "@fragua/core"
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import { passField, type UsageTotals } from "./executor-helpers.ts";
+import { maxLoopsPause } from "./predispatch-planner.ts";
 
 type HandlerResult = handler.HandlerResult;
 
@@ -234,10 +235,7 @@ function haltToFacts(result: Extract<HandlerResult, { kind: "halt" }>, ctx: Resu
     return facts;
   }
   if (reason === "max_loops") {
-    facts.push({
-      type: "fact.run_paused",
-      payload: { reason: "max_loops", currentLimit: ctxCurrentLimit, dispatches: ctxAttempts },
-    });
+    facts.push(maxLoopsPause({ currentLimit: ctxCurrentLimit, dispatches: ctxAttempts }));
     return facts;
   }
   const payload: Extract<Extract<FactEvent, { type: "fact.run_terminated" }>["payload"], { status: "errored" }> = {

@@ -4,7 +4,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FactEvent, RunState } from "@fragua/store";
-import { planLeakHalt, planPreDispatch, workflowParseFailedDetail } from "../src/predispatch-planner.ts";
+import { maxLoopsPause, planLeakHalt, planPreDispatch, workflowParseFailedDetail } from "../src/predispatch-planner.ts";
+import { resultToFacts } from "../src/result-to-facts.ts";
 
 const WINDOW = { min: 1, max: 6 };
 
@@ -86,6 +87,22 @@ describe("planPreDispatch", () => {
     expect(plan.facts).toEqual([
       { type: "fact.run_paused", payload: { reason: "max_loops", currentLimit: 1000, dispatches: 1000 } },
     ]);
+  });
+
+  test("the pre-dispatch arm and the halt translation park on the same max_loops payload", () => {
+    const expected = maxLoopsPause({ currentLimit: 1000, dispatches: 1000 });
+    const planned = planPreDispatch({
+      state: mkState(),
+      contractWindow: WINDOW,
+      dispatches: 1000,
+      effectiveMaxLoops: 1000,
+    }).facts;
+    const translated = resultToFacts(
+      { kind: "halt", reason: "max_loops", pauseContext: { currentLimit: 1000, attempts: 1000 } },
+      { state: mkState(), appliedIntentSeqs: [] },
+    );
+    expect(planned).toEqual([expected]);
+    expect(translated).toEqual([expected]);
   });
 
   test("a healthy pre-dispatch input plans no facts", () => {

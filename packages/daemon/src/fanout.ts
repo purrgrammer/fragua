@@ -55,7 +55,7 @@ import {
 } from "./fanout-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
-import { planLeakHalt } from "./predispatch-planner.ts";
+import { maxLoopsPause, planLeakHalt } from "./predispatch-planner.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
@@ -396,10 +396,10 @@ function captureDisposition(ctx: FanoutCtx): void {
  * loop budget). */
 function poolDispatch(ctx: FanoutCtx, nodeId: string): void {
   if (ctx.ts.dispatches >= ctx.effectiveMaxLoops) {
-    ctx.disposition = noteDisposition(ctx.disposition, {
-      type: "fact.run_paused",
-      payload: { reason: "max_loops", currentLimit: ctx.effectiveMaxLoops, dispatches: ctx.ts.dispatches },
-    });
+    ctx.disposition = noteDisposition(
+      ctx.disposition,
+      maxLoopsPause({ currentLimit: ctx.effectiveMaxLoops, dispatches: ctx.ts.dispatches }),
+    );
     return;
   }
   countDispatch(ctx.ts);
