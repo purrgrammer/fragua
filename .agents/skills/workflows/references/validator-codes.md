@@ -1,6 +1,6 @@
 # Validator codes
 
-Errors fail validation; warnings are strong hints. Source of truth: `packages/core/src/engine/validator.ts`. An *unknown step `type:`* or malformed YAML is a **parse error** (thrown by `packages/core/src/parser/yaml.ts`), not a validator code.
+Errors fail validation; warnings are strong hints. Source of truth: `packages/core/src/engine/validator.ts`, except E055 / E056, which need the judge-provider records and are emitted by `packages/agent/src/workflow-model-validator.ts`. An *unknown step `type:`* or malformed YAML is a **parse error** (thrown by `packages/core/src/parser/yaml.ts`), not a validator code.
 
 ## Errors
 

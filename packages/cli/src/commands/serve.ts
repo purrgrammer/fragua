@@ -127,7 +127,7 @@ export interface ServerHandle {
   /** Scheme+host+port users open in a browser. Always bare (no `/api`). */
   origin: string;
   /** Canonical URL for API clients — equals `origin` + `/api` in web mode,
-   * or `origin` in API-only mode. Mirrors the discovery file's `url`. */
+   * or `origin` in API-only mode. What `server_endpoint.url` publishes. */
   url: string;
   port: number;
   /** Address the listener is bound to (loopback unless overridden). */

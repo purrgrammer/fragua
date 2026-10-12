@@ -240,8 +240,9 @@ export function createServer(opts: ServerOptions): Hono {
   // In web mode the API lives ONLY at `/api/*`. The bare paths (`/runs/:id`,
   // `/workflows`) are client-side routes owned by React Router — anything
   // unmatched on the server falls through to index.html so SPA routing works.
-  // `fragua run` uses the discovery file's URL which already includes `/api`
-  // (see packages/cli/src/commands/serve.ts).
+  // `fragua run` never comes here: it is a store client and opens the DB
+  // directly. The `server_endpoint.url` published by `fragua serve` already
+  // carries `/api` for the clients that do (the Web UI, `fragua doctor`).
   app.route("/api", api);
 
   // Static files + SPA fallback. Hono evaluates routes in registration

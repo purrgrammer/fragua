@@ -1,8 +1,9 @@
 // IEventStore sub-interface discipline (types.ts § segregated store
 // interfaces): the composite `IEventStore` is a convenience alias for the
-// six concern-scoped sub-interfaces (IEventWriter / IEventReader /
+// ten concern-scoped sub-interfaces (IEventWriter / IEventReader /
 // IAnalyticsReader / IDaemonCoordinator / IProviderCredentialStore /
-// IProviderConfigStore). Consumers must type their `store` seam against the
+// IProviderConfigStore / IMcpOAuthStore / IBundleStore / IMetricsReader /
+// IJudgeReader). Consumers must type their `store` seam against the
 // narrowest slice (or intersection) they actually call — never the full
 // composite. This scan fails the build if a parameter or property in any
 // `packages/*/src` OUTSIDE `packages/store` is annotated `: IEventStore`, so

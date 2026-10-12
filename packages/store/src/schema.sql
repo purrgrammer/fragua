@@ -356,7 +356,7 @@ CREATE TABLE IF NOT EXISTS mcp_oauth (
 -- One row per provider id; `config` carries the per-provider definition
 -- blob (baseUrl, headers, compat, models, modelOverrides) — the
 -- `ProviderConfigSchema` body minus `apiKey`. Credentials always come
--- from `provider_credentials`. Per-row Ajv validation lives in the
+-- from `provider_credentials`. Per-row TypeBox validation lives in the
 -- agent layer (`ModelRegistry.loadCustomModels`) so one corrupt
 -- provider can be skipped without torching the rest of the registry.
 -- No indexes — PK on `provider` is the only access pattern (lookup by

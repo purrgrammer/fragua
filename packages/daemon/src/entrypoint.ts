@@ -2,8 +2,9 @@
 //
 // Top-level: acquire the daemon lock (with TTL-based reclaim of stale
 // holders), run the startup sweep, start the supervisor fiber, then the
-// executor loop. On SIGTERM/SIGINT: trip shutdownSignal; executor finishes
-// its current turn; supervisor exits; release lock.
+// executor loop. When the caller trips `shutdownSignal` (the `fragua daemon`
+// command does so on SIGTERM/SIGINT): executor finishes its current turn;
+// supervisor exits; release lock.
 
 import type * as coreHandler from "@fragua/core/handler";
 import { DAEMON_LOCK_TTL_MS, hostnameSafe, type IEventStore } from "@fragua/store";
@@ -27,7 +28,8 @@ export interface DaemonMainOpts {
   pid?: number;
   hostname?: string;
   lockTtlMs?: number;
-  /** If omitted, SIGTERM/SIGINT will trigger shutdown. */
+  /** The caller's shutdown trigger; nothing in here listens for process
+   * signals. Omitted, the daemon runs until the executor stops on its own. */
   shutdownSignal?: AbortSignal;
   /** Optional auto-title summariser. When provided, the executor fires
    * `autoTitler.titleRun` right after each run's `fact.run_started`
