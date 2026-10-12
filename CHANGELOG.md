@@ -8,6 +8,10 @@ guarantee.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fragua import` validates every artifact row.** A bundle's `artifacts.jsonl` is shape-checked before the write, its `blobSha` must be a sha256, and it must name a blob the bundle itself carries. A crafted sha can no longer land a path in the artifact index, and an imported run can no longer point at another run's blob already in the store.
+
 ## [0.12.0] — 2026-10-12
 
 ### Added

@@ -72,6 +72,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
     }
     blobs.push({ sha256: b.sha256, size: data.length, data });
   }
+  const bundleBlobShas = new Set(blobs.map((b) => b.sha256));
 
   // Workflows: read the source + IR bytes each manifest entry declares. The
   // `name` length is rejected (not clamped) in assertBundleManifest — same
@@ -158,6 +159,31 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
       }
       if (m.nodeId !== null && typeof m.nodeId !== "string") {
         throw new Error(`importRunBundle: run ${r.runId} message has a non-string nodeId`);
+      }
+    }
+    // Artifact rows feed `upsertArtifact` and, through `blobSha`, the blob
+    // store's path builder (`<root>/<sha[0:2]>/<sha>`) — so a crafted sha is a
+    // path, and a sha the bundle doesn't carry would alias another run's
+    // content already in this store. Gate the envelope, the sha shape, and
+    // membership in the manifest before the txn.
+    for (const a of artifacts) {
+      if (a == null || typeof a !== "object") {
+        throw new Error(`importRunBundle: run ${r.runId} carries a non-object artifact row`);
+      }
+      if (typeof a.nodeId !== "string" || typeof a.key !== "string") {
+        throw new Error(`importRunBundle: run ${r.runId} artifact has a non-string nodeId/key`);
+      }
+      if (typeof a.iteration !== "number" || typeof a.createdAt !== "number") {
+        throw new Error(`importRunBundle: run ${r.runId} artifact has a non-numeric iteration/createdAt`);
+      }
+      if (a.mime !== null && typeof a.mime !== "string") {
+        throw new Error(`importRunBundle: run ${r.runId} artifact has a non-string mime`);
+      }
+      assertSha256(a.blobSha, `run ${r.runId} artifact ${a.nodeId}/${a.key} blobSha`);
+      if (!bundleBlobShas.has(a.blobSha)) {
+        throw new Error(
+          `importRunBundle: run ${r.runId} artifact ${a.nodeId}/${a.key} names blob ${a.blobSha} the bundle does not carry`,
+        );
       }
     }
     // Defense-in-depth: shape-gate the genesis identity fields BEFORE

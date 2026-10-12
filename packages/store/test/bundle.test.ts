@@ -431,6 +431,51 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  /** Re-export `runId`'s bundle with its first artifact row rewritten. */
+  async function bundleWithArtifactRow(mutate: (row: Record<string, unknown>) => void): Promise<Uint8Array> {
+    const src = freshStore();
+    const runId = await seedTerminalRun(src);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x" });
+    src.close();
+    const artName = `runs/${runId}/artifacts.jsonl`;
+    const tampered = readTar(bytes).map((e) => {
+      if (e.name !== artName) return e;
+      const lines = new TextDecoder().decode(e.data).trim().split("\n");
+      const row = JSON.parse(lines[0]!) as Record<string, unknown>;
+      mutate(row);
+      lines[0] = JSON.stringify(row);
+      return { name: e.name, data: new TextEncoder().encode(`${lines.join("\n")}\n`) };
+    });
+    return writeTar(tampered);
+  }
+
+  test("rejects an artifact blobSha that is not a sha256 (a path, not a key)", async () => {
+    const bytes = await bundleWithArtifactRow((row) => {
+      row["blobSha"] = "../../etc/passwd";
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/artifact work\/out blobSha is not a sha256/);
+    dst.close();
+  });
+
+  test("rejects an artifact blobSha the bundle does not carry (no aliasing a resident blob)", async () => {
+    const bytes = await bundleWithArtifactRow((row) => {
+      row["blobSha"] = "f".repeat(64);
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/names blob f{64} the bundle does not carry/);
+    dst.close();
+  });
+
+  test("rejects a malformed artifact row (non-string nodeId)", async () => {
+    const bytes = await bundleWithArtifactRow((row) => {
+      row["nodeId"] = 7;
+    });
+    const dst = freshStore();
+    expect(() => dst.importRunBundle(bytes)).toThrow(/artifact has a non-string nodeId\/key/);
+    dst.close();
+  });
+
   test("rejects a duplicate runId in the manifest", async () => {
     const src = freshStore();
     const runId = await seedTerminalRun(src);
