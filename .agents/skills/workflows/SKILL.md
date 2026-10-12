@@ -64,7 +64,7 @@ inputs:                        # typed run inputs (§3)
 
 defaults:                      # applied to every llm step that omits the key
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 budget: 5.00                   # USD ceiling (run-level)
 budget-policy: pause           # warn | stop | pause
@@ -491,12 +491,12 @@ signoff:
 ```yaml
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6     # applied to every llm step that omits `model`
+  model: claude-sonnet-5-5     # applied to every llm step that omits `model`
 ```
 
-- `claude-sonnet-4-6` — the workhorse (implement, review, fix, commit).
-- `claude-opus-4-7` — deep planning / heavy synthesis.
-- `claude-haiku-4-5` — cheap classification / collectors / diff gates.
+- `claude-sonnet-5-5` — the workhorse (implement, review, fix, commit).
+- `claude-opus-5-5` — deep planning / heavy synthesis.
+- `claude-haiku-5-5` — cheap classification / collectors / diff gates.
 - A classifier's model should match the *cost of getting the call wrong*, not a blanket cheap tier.
 
 `POST /workflows` validates models at registration (`model_unresolved` lists offenders before enqueue). `bun run fragua providers ls` to see what's registered.
@@ -585,7 +585,7 @@ inputs:
   task: { type: string, required: true, description: The task }
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 steps:
   triage:                          # classifier — a judge: isolated, ~free, routes by topology with a confidence floor
@@ -615,7 +615,7 @@ steps:
     next: exit
 
   plan:
-    model: claude-opus-4-7
+    model: claude-opus-5-5
     thread: build
     allowed-tools: [read, grep, find]
     prompt: |

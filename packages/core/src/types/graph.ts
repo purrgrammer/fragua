@@ -30,7 +30,7 @@ export interface NodeAttrs {
   /** Drop the skills catalogue from this step's system prompt
    * (authoring: `skills-disabled`). */
   skills_disabled?: boolean;
-  /** Provider-native LLM model id. Examples: `claude-opus-4-7`. */
+  /** Provider-native LLM model id. Examples: `claude-opus-5-5`. */
   model?: string;
   /** Provider key. E.g. `anthropic`, `openai`. */
   provider?: string;

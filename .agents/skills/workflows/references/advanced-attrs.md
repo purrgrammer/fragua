@@ -30,7 +30,7 @@ The `defaults:` block (SKILL.md §2/§9) sets step attrs once for the whole work
 ```yaml
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
   thread: dev          # every llm step joins `dev` unless it sets its own thread
 ```
 

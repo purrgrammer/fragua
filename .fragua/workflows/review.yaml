@@ -103,7 +103,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 # The run's typed result — what `fragua runs status --json` and an embedding
 # caller bind, instead of scraping it out of the transcript. A review's
@@ -717,7 +717,7 @@ steps:
 
   synthesize:                          # reconcile the four VERIFIED lens results → write review.md
     type: llm
-    model: claude-opus-4-7
+    model: claude-opus-5-5
     effort: high
     timeout-minutes: 8
     allowed-tools: [read, grep, write]

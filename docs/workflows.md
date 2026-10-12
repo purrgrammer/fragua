@@ -26,7 +26,7 @@ inputs:                           # typed run inputs, supplied with --input name
 
 defaults:                         # applied to every llm step that omits the key
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 steps:                            # the FIRST step declared is the entry point
   draft:
@@ -139,7 +139,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 steps:
   draft:

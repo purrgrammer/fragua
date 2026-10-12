@@ -442,7 +442,7 @@ Replay determinism rests on the executor's own decision/effect split (SPEC §3.1
 The LLM client binds an accounting hook. When you call `ctx.llm.call(...)`, tokens + cost + model flow into the node's running totals, which the executor commits onto `fact.node_completed`:
 
 ```typescript
-const res = await ctx.llm.call({ model: "claude-opus-4-7", messages: [...] });
+const res = await ctx.llm.call({ model: "claude-opus-5-5", messages: [...] });
 // res.tokens, res.costUsd, res.model are already in the fact payload.
 return { kind: "transition", nextNode: "next", tokens: 0, costUsd: 0 };
 // Executor fills tokens/costUsd/modelName from accounting if you leave them at 0.
@@ -474,7 +474,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
       const name = typeof ctx.args.inputs?.["name"] === "string" ? ctx.args.inputs["name"] : "friend";
       const sentAt = Date.now();
       const res = await ctx.llm.call({
-        model: "claude-haiku-4-5",
+        model: "claude-haiku-5-5",
         messages: [{ role: "user", content: `Greet ${name} in one sentence.`, timestamp: sentAt }],
       });
       // ctx.messages.append takes a pi-agent-core AgentMessage (assistant content

@@ -41,7 +41,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-opus-4-8
+  model: claude-opus-5-5
 
 steps:
   triage_context:                      # what `triage` judges the task against: the package list + the codebase map
@@ -174,7 +174,7 @@ steps:
 
   fix:
     type: llm
-    model: claude-sonnet-4-6           # mechanical CI fixing; bounded by the run budget, not a per-node cap
+    model: claude-sonnet-5-5           # mechanical CI fixing; bounded by the run budget, not a per-node cap
     allowed-tools: [read, write, edit, bash]
     prompt: |
       CI failed. Re-run `bun run ci`, read the failure, make the minimal fix, and stop. Don't disable tests, lower assertions, or relax linters.

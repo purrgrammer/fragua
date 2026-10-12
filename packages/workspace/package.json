@@ -13,12 +13,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.99.2",
-    "@earendil-works/pi-ai": "0.99.2",
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
     "@sinclair/typebox": "0.34.49",
     "@fragua/core": "workspace:*",
     "@fragua/types": "workspace:*",
-    "@earendil-works/pi-mcp": "0.99.2",
+    "@earendil-works/pi-mcp": "1.1.0",
     "diff": "8.0.4",
     "turndown": "7.2.4",
     "yaml": "2.7.0"

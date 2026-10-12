@@ -21,7 +21,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-opus-4-8
+  model: claude-opus-5-5
 
 steps:
   plan:
@@ -86,7 +86,7 @@ steps:
 
   fix:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
       CI failed. Re-run `bun run ci`, read the first failure, make the minimal fix, and stop. Never disable tests, weaken assertions, relax linters, or add allowlist entries to a discipline lint to make it pass.

@@ -3,7 +3,7 @@
 fragua separates two concepts that are often conflated:
 
 - **Inference provider** — the API endpoint / where the request goes. Set via the `provider` node attribute. Choices: `anthropic`, `openai`, `google`, `openrouter`, `vercel-ai-gateway`, `amazon-bedrock`, `google-vertex`, `github-copilot`, `groq`, `cerebras`, `xai`, `mistral`.
-- **Model provider** — who trained the weights. This is encoded *inside* the model id. On aggregator inference providers (openrouter, vercel-ai-gateway, bedrock, vertex) the model id is namespaced: `anthropic/claude-haiku-4.5`, `google/gemini-2.5-pro`. On direct providers (anthropic, openai, google) the id is bare: `claude-haiku-4-5`, `gpt-4o`.
+- **Model provider** — who trained the weights. This is encoded *inside* the model id. On aggregator inference providers (openrouter, vercel-ai-gateway, bedrock, vertex) the model id is namespaced: `anthropic/claude-haiku-5.5`, `google/gemini-2.5-pro`. On direct providers (anthropic, openai, google) the id is bare: `claude-haiku-5-5`, `gpt-4o`.
 
 ## Setting provider + model
 
@@ -15,13 +15,13 @@ steps:
   plan:
     type: llm
     provider: anthropic
-    model: claude-opus-4-7
+    model: claude-opus-5-5
 
   # OpenRouter serving Anthropic — namespaced id
   plan2:
     type: llm
     provider: openrouter
-    model: anthropic/claude-opus-4.7
+    model: anthropic/claude-opus-5.5
 
   # OpenRouter serving Google
   plan3:

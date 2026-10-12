@@ -140,7 +140,7 @@ export class PiLlmBackend implements LlmBackend {
     // biome-ignore lint/suspicious/noExplicitAny: getModel (imported from @earendil-works/pi-ai/compat) is generically constrained to BuiltinProvider; we intentionally accept any string so custom/faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
     this.getApiKey = opts.getApiKey;
-    this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-4-7" };
+    this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-5-5" };
     this.systemPrompt = opts.systemPrompt ?? "";
     this.messageStore = new MessageStore();
     this.summariser = opts.summariser;
@@ -207,7 +207,7 @@ export class PiLlmBackend implements LlmBackend {
     if (!model) {
       return fail(
         `model "${provider}/${modelId}" is not registered in pi-ai. ` +
-          "Check spelling (OpenRouter uses dotted IDs like `anthropic/claude-opus-4.7`; Anthropic-direct uses hyphens like `claude-opus-4-7`). " +
+          "Check spelling (OpenRouter uses dotted IDs like `anthropic/claude-opus-5.5`; Anthropic-direct uses hyphens like `claude-opus-5-5`). " +
           "Run `fragua providers` to list supported providers.",
       );
     }

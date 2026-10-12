@@ -16,7 +16,7 @@
 //     registered only in a store, so absence is a *warning* — the
 //     authoritative check happens at enqueue. The exception is a
 //     near-miss of a known id (normalised compare catches the
-//     `claude-sonnet-4-6` vs `claude-sonnet-4.6` typo class), which is
+//     `claude-sonnet-5-5` vs `claude-sonnet-5.5` typo class), which is
 //     a known-bad declaration and stays an error.
 //
 // Provider resolution rules for a node:

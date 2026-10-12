@@ -111,9 +111,17 @@ guarantee.
   the model by pi-mcp's `toLlmContent` — embedded text resources become text and
   other non-text blocks become a short placeholder — which can change the exact
   text of such results.
-- **Updated the agent runtime (`pi-ai` / `pi-agent-core`) to 0.99.2.** No change
-  to how workflows are authored. The bundled default model per provider for
-  fireworks, together, and opencode-go moved to its catalogue successor.
+- **Updated the agent runtime (`pi-ai` / `pi-agent-core` / `pi-mcp`) to 1.1.0.**
+  The catalogue now carries `claude-opus-5-5`, `claude-sonnet-5-5`, and
+  `claude-haiku-5-5`. The Azure OpenAI provider id is `azure` (was
+  `azure-openai-responses`); a stored credential or `provider:` under the old id
+  must be re-added under the new one. Anthropic OAuth login now asks for a login
+  method first (browser, or copy-code for a headless box).
+- **Bundled defaults and the shipped workflows run on the 5.5 generation.** The
+  default model for `anthropic` is `claude-opus-5-5` (`us.anthropic.claude-opus-5-5`
+  on Bedrock), the thread summariser uses `claude-haiku-5-5`, and every workflow
+  under `.fragua/workflows/` pins `claude-sonnet-5-5` / `claude-opus-5-5` /
+  `claude-haiku-5-5` where it pinned the 4.x ids. Your own workflows are untouched.
 - **The unauthenticated control plane no longer trusts the Vite dev origin in
   production.** The same-origin gate previously accepted any `localhost:5173`
   page unconditionally, letting a rogue loopback page drive the compiled

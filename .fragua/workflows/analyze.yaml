@@ -42,7 +42,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 steps:
   # Materialise the snapshot ONCE — the lens branches are read-class (no bash),

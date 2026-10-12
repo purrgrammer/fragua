@@ -110,12 +110,12 @@ describe("seedCredsFromEnv", () => {
   });
 
   test("seeds providers outside the former hardcoded subset", async () => {
-    // kimi-coding and azure-openai-responses were never in the old list.
+    // kimi-coding and azure were never in the old list.
     process.env["KIMI_API_KEY"] = "kimi-key";
     process.env["AZURE_OPENAI_API_KEY"] = "azure-key";
     const seeded = seedCredsFromEnv(store);
     expect(seeded).toContain("kimi-coding");
-    expect(seeded).toContain("azure-openai-responses");
+    expect(seeded).toContain("azure");
     const auth = AuthStorage.fromStore(store);
     expect(await auth.getApiKey("kimi-coding")).toBe("kimi-key");
   });

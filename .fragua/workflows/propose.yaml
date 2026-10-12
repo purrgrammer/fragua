@@ -58,7 +58,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-opus-4-8
+  model: claude-opus-5-5
 
 # The run's typed result. propose's deliverable is a file in docs/proposals/ —
 # name it, so a caller doesn't have to parse the transcript to find what was
@@ -171,7 +171,7 @@ steps:
 
   clarity:                             # ambiguity, voice, terminology
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep]
     next: arbitrate
@@ -194,7 +194,7 @@ steps:
 
   precedent:                           # consistency with spec, architecture, prior proposals
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: high
     allowed-tools: [read, grep, find]
     next: arbitrate

@@ -63,7 +63,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5-5
 
 steps:
   collect:                             # deterministic inventory — no model; a non-zero exit halts the run

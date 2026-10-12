@@ -31,7 +31,7 @@ inputs:
 
 defaults:
   provider: anthropic
-  model: claude-opus-4-8
+  model: claude-opus-5-5
 
 outputs:
   scores:        { from: synthesize.scores }
@@ -68,7 +68,7 @@ steps:
 
   survey:                              # ground the lenses once: the claim inventory each lens must verify
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find, ls, write]
     next: panel
@@ -134,7 +134,7 @@ steps:
 
   store_verify:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find]
     next: synthesize
@@ -198,7 +198,7 @@ steps:
 
   daemon_verify:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find]
     next: synthesize
@@ -262,7 +262,7 @@ steps:
 
   core_verify:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find]
     next: synthesize
@@ -326,7 +326,7 @@ steps:
 
   agent_verify:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find]
     next: synthesize
@@ -390,7 +390,7 @@ steps:
 
   surface_verify:
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, grep, find]
     next: synthesize
@@ -482,7 +482,7 @@ steps:
 
   briefs:                              # dispatch-ready ammunition for `fragua run converge`
     type: llm
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5-5
     effort: medium
     allowed-tools: [read, write, ls]
     next: exit

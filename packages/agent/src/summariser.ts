@@ -42,9 +42,9 @@ export interface PiSummariserBackendOptions {
  * gives a sensible answer for the "user just set ANTHROPIC_API_KEY and
  * ran fragua" path. */
 export const DEFAULT_SUMMARISER_MODEL_BY_PROVIDER: Readonly<Record<string, string>> = {
-  anthropic: "claude-haiku-4-5",
+  anthropic: "claude-haiku-5-5",
   openai: "gpt-4o-mini",
-  openrouter: "anthropic/claude-haiku-4.5",
+  openrouter: "anthropic/claude-haiku-5.5",
   google: "gemini-2.5-flash",
   groq: "llama-3.1-8b-instant",
   cerebras: "llama-3.1-8b-instant",

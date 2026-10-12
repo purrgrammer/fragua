@@ -8,7 +8,7 @@
 //   - defaultModelPerProvider: one valid id per static-catalog
 //     KnownProvider (partial — dynamic-only providers such as `radius`
 //     are omitted), used when the user omits --model.
-//   - findByBareId: iterate the registry for "model `claude-opus-4-7`
+//   - findByBareId: iterate the registry for "model `claude-opus-5-5`
 //     under any provider" (catches workflow nodes that declare a model
 //     but no provider).
 //   - firstCredentialedProvider: the daemon's env-autodetect seed.
@@ -31,11 +31,11 @@ import type { ModelRegistry } from "./model-registry.ts";
  * dynamic providers (e.g. `radius`) carry no static catalog entry,
  * so no built-in default id can resolve for them. */
 export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
-  "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
+  "amazon-bedrock": "us.anthropic.claude-opus-5-5",
   "ant-ling": "Ring-2.6-1T",
-  anthropic: "claude-opus-4-8",
+  anthropic: "claude-opus-5-5",
   openai: "gpt-5.4",
-  "azure-openai-responses": "gpt-5.4",
+  azure: "gpt-5.4",
   "openai-codex": "gpt-5.5",
   nvidia: "nvidia/nemotron-3-super-120b-a12b",
   deepseek: "deepseek-v4-pro",
@@ -70,7 +70,7 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 
 /** Find a model by bare id across every provider in the registry.
  * Returns the first match. Used by the workflow validator to accept
- * nodes that declared `model="claude-opus-4-7"` without a provider. */
+ * nodes that declared `model="claude-opus-5-5"` without a provider. */
 export function findByBareId(registry: ModelRegistry, modelId: string): Model<Api> | undefined {
   return registry.getAll().find((m) => m.id === modelId);
 }

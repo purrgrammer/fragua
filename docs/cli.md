@@ -276,7 +276,7 @@ combined, and `--dry-run` reports without changing anything. See
 `validate` is **store-free**: it never opens `~/.fragua/fragua.db` (or any
 store), so it works in CI and editor contexts with no DB present. Model ids
 are checked against the bundled offline pi-ai registry: a near-miss typo of a
-known id (wrong separator, e.g. `claude-sonnet-4.6` for `claude-sonnet-4-6`)
+known id (wrong separator, e.g. `claude-sonnet-5.5` for `claude-sonnet-5-5`)
 is an error; an id absent from the bundled registry is only a *warning* —
 it may be a custom model registered in a store's `provider_config` table,
 which `validate` cannot see. The authoritative model check happens at
