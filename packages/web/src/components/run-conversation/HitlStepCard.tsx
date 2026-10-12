@@ -3,8 +3,10 @@
 // Appears at the tail of the node section that owns the paused human node.
 // Shows the operator-facing question and one button per declared route,
 // reusing the same POST shape as HitlChoice (intent.human_input via
-// /runs/:id/human). The card only renders when the run is paused_human;
-// once the operator picks a route the run resumes and this card disappears.
+// /runs/:id/human). The card only renders when the run is paused_human.
+// The moment its own submit is accepted it turns into the decision banner,
+// without waiting for the SSE status flip: the buttons are gone before a
+// second click can reach a run that is no longer paused.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { UserCheckIcon } from "lucide-react";
@@ -14,6 +16,7 @@ import { humanizeRouteName } from "../../lib/humanize.ts";
 import { queries } from "../../lib/queries.ts";
 import { toastError } from "../../lib/toast.ts";
 import { Button } from "../ui/button.tsx";
+import { HitlDecisionBanner } from "./HitlDecisionBanner.tsx";
 
 export interface HitlStepCardProps {
   runId: string;
@@ -39,6 +42,9 @@ export function HitlStepCard({ runId, label, options, optionLabels }: HitlStepCa
   });
 
   if (options.length === 0) return null;
+  if (mutation.isSuccess) {
+    return <HitlDecisionBanner route={mutation.variables} {...(note.trim() ? { note: note.trim() } : {})} />;
+  }
 
   return (
     <div

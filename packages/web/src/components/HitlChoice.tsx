@@ -13,6 +13,7 @@ import { submitHitlChoice } from "../lib/api.ts";
 import { humanizeRouteName } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { toastError } from "../lib/toast.ts";
+import { HitlDecisionBanner } from "./run-conversation/HitlDecisionBanner.tsx";
 import { Button } from "./ui/button.tsx";
 
 export interface HitlChoiceProps {
@@ -41,6 +42,9 @@ export function HitlChoice({ runId, label, options, routeLabels }: HitlChoicePro
   });
 
   if (options.length === 0) return null;
+  if (mutation.isSuccess) {
+    return <HitlDecisionBanner route={mutation.variables} {...(note.trim() ? { note: note.trim() } : {})} />;
+  }
 
   return (
     <div
