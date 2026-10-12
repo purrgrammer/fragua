@@ -7,7 +7,21 @@ maturity: draft
 
 # Where a run executes — dirty-tree bases and existing checkouts
 
-> **Status: proposal.** Additive. The default stays as it is: a git-backed run gets a
+> **Status: draft, panel did not converge.** The v1 cut below is what gets built;
+> the flag is spelled `--checkout <path>` in the implementation, not `--worktree`.
+>
+> **v1 cut.** Build §2, §3 and §4 with three reductions, and §5 as-is: (1) no lane —
+> a second checkout or dirty run on a held checkout is refused at enqueue with
+> `checkout_busy`, so `checkout_seq`, the claim predicate, `waitingOn` and the
+> live-fiber set do not exist; `fragua runs release` stays, synchronous in the CLI,
+> allowed once the run is terminal; (2) the dirty accept requires HEAD = S^ and every
+> changed path equal to its S entry, writes with `git restore --source=P --worktree`,
+> and records — no partial-land resume; an interrupted land is restored by hand from
+> `refs/fragua/bases/<id>`; (3) the bounded git runner and `core.fsmonitor` hardening
+> are a separate change. The sections describing the cut mechanisms stay below as the
+> design they are a Door to.
+>
+> Additive. The default stays as it is: a git-backed run gets a
 > fresh detached worktree at `<cwd>/.fragua/worktrees/<run_id>/`, based on a commit.
 > This proposal adds two per-run modes, `--dirty` and `--worktree <path>`. They are
 > declared only on `fragua run`. It answers GitHub issue #38 and supersedes the parked
