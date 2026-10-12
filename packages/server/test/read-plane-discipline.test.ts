@@ -15,6 +15,10 @@
 // `currentDaemonLock` / `runStateCounts` and delegates its only write to the
 // reaper), so they are out of scope here — the reaper's `evictDaemonLockIfStale`
 // write is guarded against inline route use by the intent-plane lint instead.
+// `routes/workflows.ts` (`getWorkflow` by sha) and `store/skills-routes.ts`
+// (`listCwds`) read the workflow catalogue and the known project roots, neither
+// a run read, so they stay out of scope too; `routes/providers.ts` never touches
+// the store.
 //
 // This is an AST scan (not a regex over source text), so a forbidden call can't
 // slip past by renaming or aliasing `deps.store`. Shape mirrors
@@ -32,6 +36,7 @@ const SCANNED_FILES = [
   join(SRC_DIR, "store", "runs-routes.ts"),
   join(SRC_DIR, "store", "sse.ts"),
   join(SRC_DIR, "routes", "run-files.ts"),
+  join(SRC_DIR, "routes", "run-snapshots.ts"),
   join(SRC_DIR, "routes", "projects.ts"),
 ];
 const ALLOW_MARKER = "read-discipline-allow:";
@@ -122,6 +127,7 @@ describe("read-plane discipline — no raw deps.store reads in run-read route bo
     expect(SCANNED_FILES.every((f) => existsSync(f))).toBe(true);
     expect(SCANNED_FILES).toContain(join(SRC_DIR, "store", "routes.ts"));
     expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "run-files.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "run-snapshots.ts"));
     expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "projects.ts"));
   });
 

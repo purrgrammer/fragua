@@ -6,9 +6,11 @@
 // `process.env` breaks the invariant — the executor can't enforce AbortSignal,
 // idempotency keys, or accounting on those paths. A justified seam (the tool
 // handler's injected default spawner) is marked `// handler-discipline-allow:`.
-// The `sideEffect:"external"` -> `ctx.externalCall` check is AST-based and
-// follows the handler's transitive relative imports, so a handler that routes its
-// external call through a helper module OUTSIDE handlers/ is still recognised.
+// Both checks are AST-based and follow each handler's transitive relative
+// imports: the I/O ban reaches a helper module OUTSIDE handlers/ that a handler
+// delegates its `fetch` / `node:fs` / `Bun.*` call to, and the
+// `sideEffect:"external"` -> `ctx.externalCall` check recognises an external
+// call routed through such a helper.
 //
 // Browser safety: @fragua/core's MAIN entry must stay browser-safe. This is a
 // TRANSITIVE walk from `src/index.ts` over relative value imports/re-exports —
@@ -37,6 +39,7 @@ const HANDLERS_DIR = join(SRC_DIR, "handler", "handlers");
 const ENTRY = join(SRC_DIR, "index.ts");
 const ALLOW_MARKER = "handler-discipline-allow:";
 const EXTERNAL_FIXTURES = join(__dirname, "fixtures", "handler-external");
+const IO_FIXTURES = join(__dirname, "fixtures", "handler-io");
 
 const PURE_HANDLER_FILES = ["handler/types.ts", "handler/intent-fold.ts"].map((p) => join(SRC_DIR, ...p.split("/")));
 
@@ -102,6 +105,17 @@ function scanString(src: string, includeRuntime = true): Offense[] {
   );
 }
 
+/** Every I/O-ban offense reachable from a handler module through its relative
+ * value imports, keyed by the offending file — so a handler can't launder a
+ * banned call through a helper outside handlers/. */
+function handlerIoOffenses(file: string): Array<{ file: string; offense: Offense }> {
+  const out: Array<{ file: string; offense: Offense }> = [];
+  for (const reachable of transitiveRelativeImports(file)) {
+    for (const offense of scanHandler(parseSource(reachable), true)) out.push({ file: reachable, offense });
+  }
+  return out;
+}
+
 /** True when the file defines a handler spec literal with `sideEffect: "external"`. */
 function declaresExternalSideEffect(sf: ts.SourceFile): boolean {
   let found = false;
@@ -143,15 +157,21 @@ function externalSideEffectOffender(file: string): boolean {
 }
 
 describe("handler discipline", () => {
-  test("no banned imports / raw fetch / Bun.* / process.env in handlers/", () => {
-    const offenders: string[] = [];
+  test("no banned imports / raw fetch / Bun.* / process.env reachable from handlers/", () => {
+    const offenders = new Set<string>();
     for (const file of collect(HANDLERS_DIR)) {
-      for (const o of scanHandler(parseSource(file), true))
-        offenders.push(`${relative(SRC_DIR, file)}:${o.line} → ${o.rule}`);
+      for (const { file: where, offense } of handlerIoOffenses(file))
+        offenders.add(`${relative(SRC_DIR, where)}:${offense.line} → ${offense.rule}`);
     }
-    if (offenders.length > 0)
-      throw new Error(`Handler discipline violations:\n${offenders.map((o) => `  ${o}`).join("\n")}`);
-    expect(offenders).toHaveLength(0);
+    if (offenders.size > 0)
+      throw new Error(`Handler discipline violations:\n${[...offenders].map((o) => `  ${o}`).join("\n")}`);
+    expect(offenders.size).toBe(0);
+  });
+
+  test("a banned import delegated to a helper outside the handler file is flagged", () => {
+    const offenses = handlerIoOffenses(join(IO_FIXTURES, "delegating.ts"));
+    expect(offenses.map((o) => o.offense.rule)).toEqual(["node:fs"]);
+    expect(offenses[0]?.file.endsWith("helper.ts")).toBe(true);
   });
 
   test("ctx.http.fetch is not flagged", () => {

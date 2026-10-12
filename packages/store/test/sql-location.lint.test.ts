@@ -21,7 +21,7 @@ const ALLOWLIST = new Map<string, string>([["migrations.ts", "schema DDL + schem
 
 /** Table DML/DQL that must be centralised in a `*-queries.ts`. */
 const SQL_RE =
-  /\b(SELECT\s|INSERT\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b)/i;
+  /\b(SELECT\s|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b)/i;
 
 function collectSources(dir: string): string[] {
   const out: string[] = [];
@@ -73,6 +73,8 @@ describe("SQL lives in *-queries.ts", () => {
   test("catches an inlined SELECT in a non-queries file", () => {
     expect(scanString("const rows = db.query(`SELECT * FROM run_state`).all();\n")).toEqual([1]);
     expect(scanString('db.query("INSERT INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
+    expect(scanString('db.query("INSERT OR REPLACE INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
+    expect(scanString('db.query("INSERT OR IGNORE INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
   });
 
   test("sweep.ts is not on the SQL allowlist", () => {

@@ -63,6 +63,12 @@ export function parseEventIdx(s: string): number | null {
  *  runs between, plus the run's worktree `cwd`. `against` selects the from-side:
  *  "base" / "previous" / a literal eventIdx; the to-side is always the target
  *  snapshot's commit. Refusals mirror the HTTP route's error taxonomy 1:1. */
+/** A snapshot resolved to the commit it captured, or a refusal. The refusals
+ *  mirror the HTTP route's error taxonomy for the tree / file endpoints. */
+export type SnapshotRef =
+  | { ok: true; cwd: string; commitSha: string }
+  | { ok: false; reason: "run_not_found" | "no_worktree" | "snapshot_not_found" };
+
 export type DiffRange =
   | { ok: true; cwd: string; fromSha: string; toSha: string }
   | {

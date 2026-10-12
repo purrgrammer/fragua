@@ -38,6 +38,7 @@ export {
   extractCommitSha,
   parseEventIdx,
   type SnapshotItem,
+  type SnapshotRef,
   type SnapshotStat,
   toScrubberRow,
 } from "./snapshots.ts";

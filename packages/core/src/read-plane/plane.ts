@@ -35,7 +35,7 @@ import type { RunOutputDecl } from "../types/graph.ts";
 import { buildExplanation, type RunExplanation } from "./explain.ts";
 import { projectRunOutputs, runStateToDetail, runSummaryRowToSummary } from "./projections.ts";
 import type { RunDetail, RunSummary } from "./schemas.ts";
-import { type DiffRange, parseEventIdx, type SnapshotItem, toScrubberRow } from "./snapshots.ts";
+import { type DiffRange, parseEventIdx, type SnapshotItem, type SnapshotRef, toScrubberRow } from "./snapshots.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations, type StepSnapshot } from "./steps.ts";
 
 export type { ArtifactListRow, ArtifactScope, FleetSummary, FleetSummaryOpts, FleetWorkflowRow } from "@fragua/store";
@@ -127,6 +127,10 @@ export interface ReadPlane {
   /** Ordered snapshot scrubber feed, or `null` when the run is absent.
    *  Mirrors `GET /runs/:id/snapshots`. */
   snapshots(runId: string): SnapshotItem[] | null;
+  /** Resolve one snapshot to the commit it captured and the worktree it lives
+   *  in, or a refusal. Backs the tree / file endpoints under
+   *  `GET /runs/:id/snapshots/:eventIdx/…`. */
+  snapshotRef(runId: string, eventIdx: number): SnapshotRef;
   /** Resolve a snapshot diff request into `(cwd, fromSha, toSha)`, or a
    *  refusal. Pure — picks the commit shas; the git diff is the caller's.
    *  Mirrors the resolution in `GET /runs/:id/snapshots/:eventIdx/diff`. */
@@ -292,6 +296,17 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
     snapshots(runId) {
       if (store.getState(runId) == null) return null;
       return store.getSnapshotEvents(runId).map(toScrubberRow);
+    },
+    snapshotRef(runId, eventIdx) {
+      const state = store.getState(runId);
+      if (state == null) return { ok: false, reason: "run_not_found" };
+      if (state.cwd == null) return { ok: false, reason: "no_worktree" };
+      const snapshot = store
+        .getSnapshotEvents(runId)
+        .map(toScrubberRow)
+        .find((s) => s.eventIdx === eventIdx);
+      if (snapshot === undefined) return { ok: false, reason: "snapshot_not_found" };
+      return { ok: true, cwd: state.cwd, commitSha: snapshot.commitSha };
     },
     diffRange(runId, eventIdx, against) {
       const state = store.getState(runId);

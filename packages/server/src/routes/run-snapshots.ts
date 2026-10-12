@@ -21,9 +21,10 @@
 // eventIdx URL parameter is the seq number of the snapshot event.
 // 404 when the run is unknown or the eventIdx doesn't map to a snapshot.
 // All git invocations go through the injected RunSnapshotReader — no
-// direct git calls here; pure request routing + error shaping.
+// direct git calls here; pure request routing + error shaping. Every store
+// read goes through the read plane (`snapshots` / `snapshotRef` / `diffRange`).
 
-import { extractCommitSha, makeReadPlane, parseEventIdx } from "@fragua/core/read-plane";
+import { makeReadPlane, parseEventIdx } from "@fragua/core/read-plane";
 import type { IEventReader } from "@fragua/store";
 import { Hono } from "hono";
 import type { RunSnapshotReader } from "../ports.ts";
@@ -38,6 +39,14 @@ export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
   const { store, reader } = opts;
   const readPlane = makeReadPlane({ store });
 
+  function resolveSnapshot(runId: string, idxParam: string): Resolved {
+    const eventIdx = parseEventIdx(idxParam);
+    if (eventIdx == null) return { ok: false, error: "invalid_event_idx", status: 400 };
+    const ref = readPlane.snapshotRef(runId, eventIdx);
+    if (!ref.ok) return { ok: false, error: "not_found", status: 404 };
+    return { ok: true, cwd: ref.cwd, commitSha: ref.commitSha };
+  }
+
   // ── GET /runs/:id/snapshots ─────────────────────────────────────────
 
   app.get("/runs/:id/snapshots", (c) => {
@@ -49,10 +58,8 @@ export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
   // ── GET /runs/:id/snapshots/:eventIdx/tree ──────────────────────────
 
   app.get("/runs/:id/snapshots/:eventIdx/tree", async (c) => {
-    const resolved = resolveSnapshot(store, c.req.param("id"), c.req.param("eventIdx"));
-    if (resolved.kind === "run_not_found") return c.json({ error: "not_found" }, 404);
-    if (resolved.kind === "bad_event_idx") return c.json({ error: "invalid_event_idx" }, 400);
-    if (resolved.kind === "snapshot_not_found") return c.json({ error: "not_found" }, 404);
+    const resolved = resolveSnapshot(c.req.param("id"), c.req.param("eventIdx"));
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
 
     const result = await reader.lsTree(resolved.cwd, resolved.commitSha);
     if (result == null) return c.json({ entries: [] });
@@ -62,10 +69,8 @@ export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
   // ── GET /runs/:id/snapshots/:eventIdx/file ──────────────────────────
 
   app.get("/runs/:id/snapshots/:eventIdx/file", async (c) => {
-    const resolved = resolveSnapshot(store, c.req.param("id"), c.req.param("eventIdx"));
-    if (resolved.kind === "run_not_found") return c.json({ error: "not_found" }, 404);
-    if (resolved.kind === "bad_event_idx") return c.json({ error: "invalid_event_idx" }, 400);
-    if (resolved.kind === "snapshot_not_found") return c.json({ error: "not_found" }, 404);
+    const resolved = resolveSnapshot(c.req.param("id"), c.req.param("eventIdx"));
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
 
     const path = c.req.query("path");
     if (typeof path !== "string" || path.length === 0) {
@@ -130,29 +135,7 @@ export function runSnapshotsRoutes(opts: RunSnapshotsRouteOptions): Hono {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-type ResolveResult =
-  | { kind: "run_not_found" }
-  | { kind: "bad_event_idx" }
-  | { kind: "snapshot_not_found" }
-  | { kind: "ok"; cwd: string; commitSha: string };
-
-function resolveSnapshot(store: IEventReader, runId: string, idxParam: string): ResolveResult {
-  const state = store.getState(runId);
-  if (state == null) return { kind: "run_not_found" };
-  if (state.cwd == null) return { kind: "run_not_found" };
-
-  const eventIdx = parseEventIdx(idxParam);
-  if (eventIdx == null) return { kind: "bad_event_idx" };
-
-  const snapshots = store.getSnapshotEvents(runId);
-  const ev = snapshots.find((s) => s.seq === eventIdx);
-  if (ev == null) return { kind: "snapshot_not_found" };
-
-  const commitSha = extractCommitSha(ev);
-  if (commitSha == null) return { kind: "snapshot_not_found" };
-
-  return { kind: "ok", cwd: state.cwd, commitSha };
-}
+type Resolved = { ok: true; cwd: string; commitSha: string } | { ok: false; error: string; status: 400 | 404 };
 
 /** Reject inputs that could escape the project root before any git
  *  access. Same logic as `run-files.ts` and `routes/projects.ts`. */
