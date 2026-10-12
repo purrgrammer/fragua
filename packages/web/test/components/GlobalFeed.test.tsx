@@ -122,6 +122,11 @@ describe("metaForEvent — operator-action git-centric verbs", () => {
     expect(m.attention).toBeFalsy();
   });
 
+  test("fact.run_accepted with landedUnstaged reads 'landed as unstaged changes'", () => {
+    const m = meta("fact.run_accepted", { sha: "h", replayed: 0, tailStaged: false, landedUnstaged: true });
+    expect(m.verb).toBe("landed as unstaged changes");
+  });
+
   test("fact.run_discarded → 'discarded'", () => {
     const m = meta("fact.run_discarded", { refs: [] });
     expect(m.verb).toBe("discarded");

@@ -24,11 +24,11 @@
 //      the daemon's startup pwd).
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecutionEnvironment } from "@fragua/core";
-import { LocalEnvironment, WorktreeEnvironment } from "@fragua/workspace";
+import { defaultGitExec, LocalEnvironment, prepareDirtyBase, WorktreeEnvironment } from "@fragua/workspace";
 import { WorktreeProvisioner } from "../src/worktree-provisioner.ts";
 
 function stubEnv(cwd: string): ExecutionEnvironment {
@@ -375,6 +375,84 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
       expect(p.baseGitSha("r-pin")).toBe(pinnedSha);
 
       await p.dispose("r-pin");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("WorktreeProvisioner — dirty base", () => {
+  function dirtyRepo(): { repo: string; git: (args: string[]) => string } {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-dirty-"));
+    const git = (args: string[]) => {
+      const r = Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        cwd: repo,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr.toString()}`);
+      return r.stdout.toString().trim();
+    };
+    git(["init", "-q"]);
+    writeFileSync(
+      join(repo, ".gitignore"),
+      ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n",
+    );
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    return { repo, git };
+  }
+
+  test("worktree HEAD is S, S^ is operator HEAD, untracked files are tracked at HEAD", async () => {
+    const { repo, git } = dirtyRepo();
+    try {
+      const head = git(["rev-parse", "HEAD"]);
+      writeFileSync(join(repo, "a.txt"), "wip\n");
+      writeFileSync(join(repo, "u.txt"), "untracked\n");
+      const d = await prepareDirtyBase(defaultGitExec, repo);
+      if (!d.ok || d.clean) throw new Error("expected a dirty base");
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-dirty", { cwd: repo, baseRef: d.baseGitSha, dirtyBase: true });
+      const wt = (args: string[]) =>
+        Bun.spawnSync({ cmd: ["git", ...args], cwd: env.cwd() })
+          .stdout.toString()
+          .trim();
+      expect(wt(["rev-parse", "HEAD"])).toBe(d.baseGitSha);
+      expect(wt(["rev-parse", "HEAD^"])).toBe(head);
+      expect(wt(["ls-files"]).split("\n")).toContain("u.txt");
+      expect(wt(["status", "--porcelain"])).toBe("");
+      expect(git(["rev-parse", "refs/fragua/bases/r-dirty"])).toBe(d.baseGitSha);
+      await p.dispose("r-dirty");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("rewrites bases/<id> idempotently when the CLI already wrote it", async () => {
+    const { repo, git } = dirtyRepo();
+    try {
+      writeFileSync(join(repo, "a.txt"), "wip\n");
+      const d = await prepareDirtyBase(defaultGitExec, repo);
+      if (!d.ok || d.clean) throw new Error("expected a dirty base");
+      git(["update-ref", "refs/fragua/bases/r-again", d.baseGitSha]);
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-again", { cwd: repo, baseRef: d.baseGitSha, dirtyBase: true });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      expect(git(["rev-parse", "refs/fragua/bases/r-again"])).toBe(d.baseGitSha);
+      await p.dispose("r-again");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("missing S object fails ensure", async () => {
+    const { repo } = dirtyRepo();
+    try {
+      const missing = "1".repeat(40);
+      const p = new WorktreeProvisioner();
+      await expect(p.ensure("r-gone", { cwd: repo, baseRef: missing, dirtyBase: true })).rejects.toThrow(missing);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

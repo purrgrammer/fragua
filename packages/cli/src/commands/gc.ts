@@ -1,7 +1,8 @@
 // `fragua gc` — reclaim per-run worktree artefacts. Two targets, either or
 // both per invocation:
-//   - `--snapshots`: the two non-porcelain refs `refs/fragua/snapshots/<runId>`
-//     (the parented tip) and `refs/fragua/heads/<runId>`; deleting the tip
+//   - `--snapshots`: the non-porcelain refs `refs/fragua/snapshots/<runId>`
+//     (the parented tip), `refs/fragua/heads/<runId>`, and a `--dirty` run's
+//     `refs/fragua/bases/<runId>` (its synthetic base); deleting the tip
 //     drops the whole chain so the next `git gc --auto` reclaims its commits +
 //     trees + blobs. A trailing `git pack-refs --all` keeps the live set compact.
 //   - `--worktrees`: the leftover `.fragua/worktrees/<runId>` directory AND its
@@ -29,7 +30,7 @@ import chalk from "chalk";
 const DEFAULT_OLDER_THAN_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface GcCommandOptions {
-  /** Reclaim worktree snapshot refs (`refs/fragua/{snapshots,heads}/<id>`)
+  /** Reclaim worktree snapshot refs (`refs/fragua/{snapshots,heads,bases}/<id>`)
    * for eligible runs. */
   snapshots?: boolean;
   /** Remove leftover worktree directories + git registrations for eligible
@@ -73,9 +74,11 @@ export async function gcCommand(opts: GcCommandOptions): Promise<number> {
     if (doSnapshots) {
       const existing = await listFraguaRefs(cwd);
       for (const run of eligible) {
-        const refs = [`refs/fragua/snapshots/${run.runId}`, `refs/fragua/heads/${run.runId}`].filter((r) =>
-          existing.has(r),
-        );
+        const refs = [
+          `refs/fragua/snapshots/${run.runId}`,
+          `refs/fragua/heads/${run.runId}`,
+          `refs/fragua/bases/${run.runId}`,
+        ].filter((r) => existing.has(r));
         if (refs.length === 0) continue; // bare-cwd run, or already discarded
         if (dryRun) {
           console.log(
@@ -184,13 +187,14 @@ async function listRegisteredWorktrees(cwd: string): Promise<Map<string, string>
   return byRunId;
 }
 
-/** Every existing `refs/fragua/{snapshots,heads}/*` ref in `cwd`, by full name. */
+/** Every existing `refs/fragua/{snapshots,heads,bases}/*` ref in `cwd`, by full name. */
 async function listFraguaRefs(cwd: string): Promise<Set<string>> {
   const { stdout } = await runGitCapture(cwd, [
     "for-each-ref",
     "--format=%(refname)",
     "refs/fragua/snapshots/",
     "refs/fragua/heads/",
+    "refs/fragua/bases/",
   ]);
   return new Set(
     stdout

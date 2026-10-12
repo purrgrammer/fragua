@@ -248,6 +248,9 @@ export const RunDetail = Type.Object({
    * git metadata and the operator-action target default. */
   baseGitRef: Type.Optional(Type.String()),
   baseGitSha: Type.Optional(Type.String()),
+  /** Present only for a `--dirty` run: the operator HEAD its synthetic
+   * `baseGitSha` was captured over. Drives the `dirty base over` badge. */
+  baseHeadSha: Type.Optional(Type.String()),
   /** True when the run was brought in via `fragua import`. The run has no
    * local `cwd`, the daemon will never dispatch it, and operate controls
    * (pause/resume/cancel) should be suppressed. Derived from `cwd == null`

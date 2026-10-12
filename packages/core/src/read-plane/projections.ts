@@ -166,6 +166,7 @@ export function runStateToDetail(
 
   if (state.baseGitRef != null && state.baseGitRef.length > 0) detail.baseGitRef = state.baseGitRef;
   if (state.baseGitSha != null && state.baseGitSha.length > 0) detail.baseGitSha = state.baseGitSha;
+  if (state.baseHeadSha != null && state.baseHeadSha.length > 0) detail.baseHeadSha = state.baseHeadSha;
   // Authoritative inert marker is `imported_runs` (carried on `state.imported`),
   // NOT `cwd == null` — a legitimately-enqueued run can have a null cwd and must
   // keep its operate controls.

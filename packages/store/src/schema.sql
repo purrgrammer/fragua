@@ -98,8 +98,10 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- default captured at provision; `diff_base_sha` is the honest diff base
   -- at terminal (== base_git_sha unless the workflow relocated HEAD);
   -- `change_stat` is JSON {committed, uncommitted}; `inbox_status` drives
-  -- the inbox.
+  -- the inbox. `base_head_sha` is set only for a `--dirty` run: the operator
+  -- HEAD its synthetic `base_git_sha` was captured over (`base_git_sha^`).
   base_git_ref TEXT,
+  base_head_sha TEXT,
   final_git_sha TEXT,
   final_head_ref TEXT,
   diff_base_sha TEXT,

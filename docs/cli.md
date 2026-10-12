@@ -36,7 +36,7 @@ fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ## create runs — `fragua run <workflow>`
 
 ```sh
-fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref>]
+fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref> | --dirty]
                       [--no-follow] [--cwd <dir>] [--db <path>]
 ```
 
@@ -50,7 +50,24 @@ run, so the worktree is provisioned from that sha (`git worktree add --detach`)
 regardless of where the cwd's HEAD moves afterward; an unresolvable ref is rejected
 before the run is minted, and the resolved sha is printed in the enqueue output.
 Without `--base`, the worktree defaults to the cwd's HEAD at provision time. The
-pinned base surfaces on `fragua runs status`. Saves + enqueues, then
+pinned base surfaces on `fragua runs status`.
+
+`--dirty` bases the run on your uncommitted working tree: at enqueue the CLI
+captures the checkout's index plus untracked, non-ignored files (ignored files and
+the run's own `.fragua/` state excluded) into a synthetic commit parented on HEAD,
+pins it as the run's base, and keeps it at `refs/fragua/bases/<run_id>`. Your index
+and HEAD are not touched. Inside the worktree the agent sees your WIP committed at
+HEAD (untracked files tracked), and `runs diff --against base` shows only the run's
+own work. A clean tree falls back to HEAD (`--dirty: working tree is clean, using
+HEAD`). `runs status` shows `dirty base over <short HEAD>`. It refuses — writing no
+run, event or ref — with `--base` (`--dirty cannot combine with --base: the dirt is
+relative to HEAD`), outside a git checkout, on a repo with no commits (`--dirty needs
+a commit to capture over: <checkout> has no commits yet`), and on a checkout whose
+`.gitignore` lacks the fragua state block (run `fragua init`). Caveat: a branch the
+run pushes descends from the captured commit, so pushing it publishes your WIP,
+untracked files included.
+
+Saves + enqueues, then
 **follows by default** (streams the event log to terminal, answering HITL gates
 inline on a TTY); `--no-follow` prints the run id and exits. The exit code
 reflects the run's outcome (see [Exit codes](#exit-codes)).
@@ -78,7 +95,8 @@ fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path 
 fragua runs accept  <id> [--autostash]            # replay the run's commits onto your branch + stage the tail
                                                   #   --autostash: stash unrelated dirty files around the apply, then restore them (mirrors git rebase --autostash)
                                                   #   a run that commits on its own branch (agent/$FRAGUA_RUN_ID) is not in the inbox: land it via that branch
-fragua runs discard <id>                          # drop the run's fragua refs
+                                                  #   a --dirty run lands as unstaged changes instead (see below); --autostash is ignored
+fragua runs discard <id>                          # drop the run's fragua refs (never refs/fragua/bases/<id>)
 
 # lifecycle + control
 fragua runs respond <id> [route] [--note "…"]     # answer a HITL gate (interactive without a route)
@@ -102,6 +120,34 @@ fragua runs messages  <id> [--node <id>] [--all] [--json] # the LLM-visible tran
 fragua runs artifacts <id>                        # list a run's artifacts
 fragua runs artifact  <id> <nodeId> --key <k> [--iteration N]   # one artifact's bytes to stdout
 ```
+
+**Accepting a `--dirty` run.** A dirty-base run (`runs status` shows `dirty base
+over <sha>`) lands as **unstaged working-tree changes**: HEAD, your branch and your
+index are untouched, and only the paths the run changed (S→P: the captured base to
+the run's snapshot) are written. It does not need a clean tree, and `--autostash` is
+ignored (the CLI says so). Success prints:
+
+```
+landed as unstaged changes in <cwd>: <n> files (+a/-d); undo: git restore --source=<S> --worktree -- <paths>; plus delete: <created paths>
+```
+
+Undo is exactly that: restore the changed paths from S, then delete the paths the
+land created (they are untracked, so a `git restore -- :/` would not remove them and
+would also revert your edits elsewhere). Every refusal writes nothing and names
+`refs/fragua/bases/<run_id>` and the range S→P:
+
+- `relocated_base` — the run moved its own HEAD off S, so S→P is not what you
+  reviewed; land by hand from the printed `git diff <S> <P>`;
+- `checkout_moved` — your HEAD moved since the capture, or a path the run changed no
+  longer holds its captured content; restore it (or check out the captured HEAD) and
+  retry;
+- `checkout_unsafe_path` — the run changed a submodule, a fragua state path, or a
+  `.gitattributes`, or wrote a path that holds something the capture never saw (an
+  ignored `.env`, say); land those by hand.
+
+A land interrupted part-way is not resumed automatically: restore the listed paths
+from `refs/fragua/bases/<run_id>`. `discard` never deletes that ref; `fragua gc
+--snapshots` reclaims it with the run's other refs.
 
 `fragua runs status` surfaces any active soft budget warning (the 80% mark
 before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in
@@ -265,7 +311,7 @@ fragua db migrate [--to <version>] [--dry-run] [--allow-data-loss] [--no-backup]
 `gc` is an operator-invoked sweep over settled runs (`completed` / `halted` /
 `cancelled`, not awaiting an inbox decision) older than `--older-than` (default
 30d). `--snapshots` reclaims each run's worktree snapshot refs
-(`refs/fragua/{snapshots,heads}/<id>`). `--worktrees` removes each run's leftover
+(`refs/fragua/{snapshots,heads,bases}/<id>`). `--worktrees` removes each run's leftover
 worktree directory *and* its git registration, then runs `git worktree prune` to
 clear any registration whose directory was already hand-deleted — a stale
 registration otherwise survives an `rm -rf` and blocks `git checkout <branch>`.

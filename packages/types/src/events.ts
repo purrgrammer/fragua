@@ -404,8 +404,16 @@ export interface RunEnqueuedPayload {
   baseGitSha?: string;
   /** The `--base` ref as typed by the operator (branch, tag, or sha) — the
    * human-readable label for {@link baseGitSha}, surfaced on `run_state`.
-   * Absent when no `--base` was passed. */
+   * Absent when no `--base` was passed. For a `--dirty` run, the operator's
+   * branch at capture (absent when HEAD was detached). */
   baseGitRef?: string;
+  /** The operator's HEAD that a `--dirty` run's synthetic base was captured
+   * over (`baseGitSha^`). Its presence marks `baseGitSha` as a synthetic dirty
+   * base anchored at `refs/fragua/bases/<runId>`; accept then lands the run as
+   * unstaged working-tree changes. Absent for every other run, including a
+   * `--dirty` run over a clean tree. Seeded onto `run_state.base_head_sha` by
+   * `genesisToInitialState`; carried since contract v7. */
+  baseHeadSha?: string;
 }
 
 export type IntentEvent =
@@ -470,9 +478,10 @@ export type IntentEvent =
        * (server replayed the run's commits onto HEAD + staged the tail); this
        * intent records the result and is folded into `fact.run_accepted` by the
        * daemon (projection only — the git already happened). Inbox
-       * `pending → acted`. */
+       * `pending → acted`. `landedUnstaged` marks a dirty-base land: the run's
+       * effect was written to the working tree only (HEAD and index untouched). */
       type: "intent.accept_run";
-      payload: { sha: string; replayed: number; tailStaged: boolean };
+      payload: { sha: string; replayed: number; tailStaged: boolean; landedUnstaged?: true };
     }
   | {
       /** Operator discarded a terminal run's recoverable work — the request
@@ -1115,13 +1124,16 @@ export type FactEvent =
        * run's commits onto the operator's current branch (message + author
        * preserved) and staged the uncommitted tail for the operator to commit.
        * `replayed` = commits replayed; `tailStaged` = an uncommitted tail was
-       * delivered. Sets `run_state.accepted_sha`; inbox `pending → acted`. */
+       * delivered. `landedUnstaged` = a dirty-base land wrote the run's effect
+       * as unstaged working-tree changes (the fold reads only `sha`). Sets
+       * `run_state.accepted_sha`; inbox `pending → acted`. */
       type: "fact.run_accepted";
-      payload: { sha: string; replayed: number; tailStaged: boolean };
+      payload: { sha: string; replayed: number; tailStaged: boolean; landedUnstaged?: true };
     }
   | {
       /** Operator-driven (`intent.discard_run`): deleted the run's
-       * `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`
+       * `refs/fragua/{snapshots,heads}/<id>` (never `bases/<id>`, a dirty-base
+       * run's restore source — gc reclaims it). Inbox `pending → discarded`
        * (terminal-terminal — subsequent actions fail). */
       type: "fact.run_discarded";
       payload: { refs: string[] };

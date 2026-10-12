@@ -63,6 +63,7 @@ function baseState(overrides: Partial<RunState> = {}): RunState {
     title: null,
     baseGitSha: null,
     baseGitRef: null,
+    baseHeadSha: null,
     ...overrides,
   } as RunState;
 }

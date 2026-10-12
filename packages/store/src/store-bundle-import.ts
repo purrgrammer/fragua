@@ -296,6 +296,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             scheduleId: d.scheduleId,
             baseGitSha: d.baseGitSha,
             baseGitRef: d.baseGitRef,
+            baseHeadSha: d.baseHeadSha,
           });
           writeRunStateProjection(ctx.db, {
             runId: d.runId,

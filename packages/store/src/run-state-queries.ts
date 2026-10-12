@@ -62,6 +62,7 @@ export interface RunStateRow {
   workflow_path: string | null;
   base_git_sha: string | null;
   base_git_ref: string | null;
+  base_head_sha: string | null;
   final_git_sha: string | null;
   final_head_ref: string | null;
   diff_base_sha: string | null;
@@ -106,7 +107,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, base_git_ref,
+         base_git_sha, base_git_ref, base_head_sha,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
          inbox_status, accepted_sha, schedule_id,
          ${importedSql("run_state")} AS imported
@@ -479,7 +480,7 @@ const SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL = `
 /** Terminal runs in `cwd` whose snapshot refs are eligible for GC: settled
  *  (not `running`/`queued`/`paused`), older than `cutoff` (ms epoch), and
  *  not awaiting an operator decision (`inbox_status` not `pending`). The
- *  caller deletes each run's `refs/fragua/{snapshots,heads}/<runId>`; runs
+ *  caller deletes each run's `refs/fragua/{snapshots,heads,bases}/<runId>`; runs
  *  that never used a worktree simply have no such refs (a no-op delete). */
 export function selectGcEligibleSnapshotRuns(db: Database, opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
   return db.query<GcSnapshotRunRow, [string, number]>(SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL).all(opts.cwd, opts.cutoff);
@@ -495,8 +496,8 @@ const INSERT_RUN_STATE_SQL = `
     contract_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at, title,
     cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id,
-    base_git_sha, base_git_ref
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    base_git_sha, base_git_ref, base_head_sha
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -521,6 +522,7 @@ export function insertRunState(
     title?: string | null;
     baseGitSha?: string | null;
     baseGitRef?: string | null;
+    baseHeadSha?: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -543,6 +545,7 @@ export function insertRunState(
     args.scheduleId,
     args.baseGitSha ?? null,
     args.baseGitRef ?? null,
+    args.baseHeadSha ?? null,
   );
 }
 

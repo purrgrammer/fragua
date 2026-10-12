@@ -608,6 +608,8 @@ export function createRoutes(deps: ServerDeps): Hono {
         inboxStatus: state.inboxStatus,
         cwd: state.cwd,
         baseGitSha: state.baseGitSha ?? "",
+        baseHeadSha: state.baseHeadSha,
+        diffBaseSha: state.diffBaseSha,
       },
     };
   }
@@ -625,7 +627,8 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!res.ok) return c.json({ error: res.detail, code: res.reason }, 409);
     try {
       const { seq } = plane.commit(runId, plane.buildAcceptRun(res));
-      return c.json({ seq, sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged });
+      const landed = res.landedUnstaged === true ? { landedUnstaged: true } : {};
+      return c.json({ seq, sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged, ...landed });
     } catch (err) {
       if (err instanceof PayloadTooLargeError) {
         return c.json({ error: "payload too large", code: "payload_too_large" }, 413);

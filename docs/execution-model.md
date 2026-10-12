@@ -16,6 +16,8 @@ When fragua starts a run against a git repository it provisions a **git linked w
 
 **Pinning the base with `--base`.** By default the worktree checks out whatever HEAD the run cwd is on *at provision time* — so an operator enqueuing a fix for branch X must keep X checked out until the daemon provisions, or the run silently builds on the wrong HEAD. `fragua run <workflow> --base <ref>` removes that race: the CLI resolves `<ref>` (a branch, tag, or sha) to a commit sha **at enqueue** via `git -C <cwd> rev-parse --verify <ref>^{commit}`, records it on the run (`run_state.base_git_sha` / `base_git_ref`, carried on the genesis `intent.run_enqueued` event), and the provisioner honours it with `git worktree add --detach <worktreePath> <sha>`. An unresolvable `<ref>` is rejected at enqueue — no run is minted. The pinned sha is independent of the cwd's live HEAD, so the operator's checkout is free to move on immediately after enqueue.
 
+**Basing the run on your uncommitted tree with `--dirty`.** `fragua run <workflow> --dirty` captures the operator's working tree at enqueue — the index plus every untracked, non-ignored file; ignored files and run.cwd's own `.fragua/` state are left out — into a tree T, using a throwaway index so the real index and HEAD are never touched. If T equals `tree(HEAD)` the tree is clean and the run is simply pinned to HEAD (`--dirty: working tree is clean, using HEAD`). Otherwise the CLI creates a synthetic commit **S** = `commit-tree T -p HEAD` (authored `fragua <fragua@localhost>`), pins it as the base (`run_state.base_git_sha = S`, `base_head_sha = HEAD`), and anchors it at **`refs/fragua/bases/<run_id>`** in the repo; the provisioner re-writes that ref before `worktree add` and halts the run with `worktree_error` if S is missing. S is an ordinary commit, so inside the worktree the agent sees the operator's WIP as **committed content at HEAD**: `git status` is clean, `HEAD^` is the operator's HEAD, and files that were untracked are tracked. Snapshots, `runs diff --against base` and the inbox stats all measure from S, so they show only the run's work, never the captured WIP. A branch the run creates descends from S — pushing it publishes the captured WIP, untracked files included. `--dirty` cannot combine with `--base`, and is refused on a non-git cwd, an unborn HEAD, or a checkout whose `.gitignore` lacks the fragua state block (`fragua init` writes it).
+
 **All step execution is rooted at this worktree path.** There is no separate "agent sandbox" or "tool directory" — the three execution surfaces a workflow author touches all resolve to the same cwd:
 
 | Surface | How cwd is set | Source |
@@ -158,7 +160,7 @@ snapshot.
 
 | Phase | What happens |
 |---|---|
-| **Provision** | `git worktree add --detach <worktreePath> [<pinned-base-sha>]` from the repo root — the pinned base sha when the run was enqueued with `--base`, else the cwd's live HEAD. Bootstrap command runs inside the fresh worktree if configured. |
+| **Provision** | `git worktree add --detach <worktreePath> [<pinned-base-sha>]` from the repo root — the pinned base sha when the run was enqueued with `--base` (or the synthetic commit S for `--dirty`, after re-pointing `refs/fragua/bases/<run_id>` at it), else the cwd's live HEAD. Bootstrap command runs inside the fresh worktree if configured. |
 | **Run** | All nodes execute. The worktree persists across HITL pauses and daemon restarts — a resumed run reuses the same worktree. |
 | **Terminal snapshot** | When the run reaches a terminal status, fragua captures the worktree's full state (committed + uncommitted) into `refs/fragua/snapshots/<run_id>` before removing the worktree directory. |
 | **Dispose** | `git worktree remove --force <worktreePath>`. Dispose only runs after the terminal snapshot fact lands successfully — work is never discarded silently. |
@@ -194,7 +196,7 @@ This is precisely why `fragua runs diff` shows "no changes" for a step that read
 
 ### What `fragua runs diff` shows
 
-`fragua runs diff` computes `git diff <baseSha>..<snapshotCommitSha>` over the stored snapshot refs. The base is `baseGitSha` — the HEAD SHA of the worktree at provision time. If a step produced no snapshot event (delta-suppressed), that step will not appear as a selectable diff point.
+`fragua runs diff` computes `git diff <baseSha>..<snapshotCommitSha>` over the stored snapshot refs. The base is `baseGitSha` — the HEAD SHA of the worktree at provision time (for a `--dirty` run, the synthetic commit S, so the diff never includes the captured WIP). If a step produced no snapshot event (delta-suppressed), that step will not appear as a selectable diff point.
 
 Implementation: `packages/daemon/src/snapshotter.ts` (`captureSnapshot`), `packages/daemon/src/snapshot-service.ts` (`captureBoundarySnapshot`, `disposeTerminalWorktree`).
 
@@ -236,13 +238,24 @@ The result: the operator's branch has the replayed commits and a staged-but-not-
 
 Implementation: `packages/workspace/src/run-actions.ts` (`applyAccept`).
 
+### Accepting a `--dirty` run
+
+A dirty-base run's dirt is its base, so accept never replays commits and never needs a clean tree. With S = the synthetic base, P = the terminal snapshot and D = the paths S→P changes, it:
+
+1. refuses `relocated_base` if the run moved its HEAD off S (the range you reviewed is not S→P — land by hand from `git diff <S> <P>`);
+2. refuses `checkout_moved` if your HEAD is no longer the commit S was captured over, or if any path in D no longer holds its captured content on disk;
+3. refuses `checkout_unsafe_path` for a submodule (gitlink), a fragua state path, a `.gitattributes`, or a path the capture never saw that now holds something (e.g. an ignored `.env` the run wrote as an un-ignored file);
+4. unlinks the D paths the run deleted, then writes the rest with `git restore --source=P --worktree`.
+
+The run's effect lands as **unstaged changes**: HEAD, the branch and the index are untouched, and paths outside D are never read or written — your other edits survive. `--autostash` is ignored. The success line prints the undo: `git restore --source=<S> --worktree -- <paths>` over the changed paths S holds, plus deleting the paths the land created. S stays reachable at `refs/fragua/bases/<run_id>`, which is also where to restore from if a land is interrupted part-way (there is no automatic resume yet).
+
 ### `fragua runs discard <id>`
 
-Deletes `refs/fragua/snapshots/<run_id>` and `refs/fragua/heads/<run_id>`. The run's work is permanently dropped. Idempotent — a missing ref is tolerated.
+Deletes `refs/fragua/snapshots/<run_id>` and `refs/fragua/heads/<run_id>`. The run's work is permanently dropped. Idempotent — a missing ref is tolerated. Discard never deletes a dirty-base run's `refs/fragua/bases/<run_id>`; `fragua gc --snapshots` reclaims it with the run's other refs.
 
 Implementation: `packages/workspace/src/run-actions.ts` (`applyDiscard`).
 
-Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required for `accept`.
+Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required to `accept` a commit-base run (one not started with `--dirty`).
 
 ### Per-run branches
 

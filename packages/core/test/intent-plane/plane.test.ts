@@ -395,6 +395,13 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.params.baseGitRef).toBe("feature-x");
   });
 
+  test("carries baseHeadSha into params", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", baseGitSha: "s".repeat(40), baseHeadSha: "h".repeat(40) });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.baseHeadSha).toBe("h".repeat(40));
+  });
+
   test("no pinned base → params omit baseGitSha/baseGitRef", () => {
     const { plane } = rig();
     const r = plane.buildEnqueue({ workflowSha: "sha1" });
@@ -418,6 +425,21 @@ describe("intent plane — buildEnqueue", () => {
     if (!r.ok) throw new Error("build failed");
     plane.commitEnqueue(r.params);
     expect(enqueued).toEqual([{ runId: "run-z", workflowSha: "sha1" }]);
+  });
+});
+
+describe("intent plane — buildAcceptRun", () => {
+  test("threads landedUnstaged when set, omits it otherwise", () => {
+    const { plane } = rig();
+    expect(plane.buildAcceptRun({ sha: "h", replayed: 0, tailStaged: false, landedUnstaged: true }).payload).toEqual({
+      sha: "h",
+      replayed: 0,
+      tailStaged: false,
+      landedUnstaged: true,
+    });
+    const plain = plane.buildAcceptRun({ sha: "t", replayed: 2, tailStaged: true }).payload;
+    expect(plain).toEqual({ sha: "t", replayed: 2, tailStaged: true });
+    expect("landedUnstaged" in plain).toBe(false);
   });
 });
 

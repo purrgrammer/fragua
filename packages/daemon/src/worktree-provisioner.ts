@@ -32,7 +32,13 @@
 
 import { spawn } from "node:child_process";
 import type { ExecutionEnvironment } from "@fragua/core";
-import { type BootstrapSpec, LocalEnvironment, WorktreeEnvironment } from "@fragua/workspace";
+import {
+  type BootstrapSpec,
+  dirtyBaseRef,
+  LocalEnvironment,
+  pinDirtyBaseRef,
+  WorktreeEnvironment,
+} from "@fragua/workspace";
 import { captureSnapshot, resolveSnapshotParent, type SnapshotBoundary, type SnapshotResult } from "./snapshotter.ts";
 
 /** Bootstrap pair resolved for a single run against its project root.
@@ -125,6 +131,10 @@ export interface ProvisionOpts {
    * (`git worktree add --detach <path> <sha>`) instead of the cwd's live
    * HEAD. Omitted = default (cwd HEAD at provision time). */
   baseRef?: string;
+  /** `baseRef` is a `--dirty` run's synthetic base S. Before `worktree add`
+   * the provisioner checks S exists and (re)writes `refs/fragua/bases/<runId>`
+   * → S; a missing S fails the provision (→ `worktree_error`). */
+  dirtyBase?: boolean;
 }
 
 export interface Provisioner {
@@ -300,6 +310,14 @@ export class WorktreeProvisioner implements Provisioner {
       return new LocalEnvironment(localOpts);
     }
 
+    if (provisionOpts.dirtyBase === true && provisionOpts.baseRef !== undefined) {
+      const s = provisionOpts.baseRef;
+      if (!(await gitSucceeds(repoRoot, ["cat-file", "-e", `${s}^{commit}`]))) {
+        throw new Error(`dirty base ${s} is missing from ${repoRoot} (expected at ${dirtyBaseRef(runId)})`);
+      }
+      await pinDirtyBaseRef(repoRoot, runId, s);
+    }
+
     const { bootstrap, bootstrapTimeoutMs } = await this.resolveBootstrapFor(repoRoot);
     const opts: ConstructorParameters<typeof WorktreeEnvironment>[0] = {
       runId,
@@ -322,8 +340,12 @@ export class WorktreeProvisioner implements Provisioner {
 }
 
 function isGitRepo(cwd: string): Promise<boolean> {
+  return gitSucceeds(cwd, ["rev-parse", "--is-inside-work-tree"]);
+}
+
+function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
   return new Promise((resolvePromise) => {
-    const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+    const child = spawn("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -123,6 +123,41 @@ describe("operator post-run primitive endpoints", () => {
     expect(lastIntent(store, "r1")).toBe("intent.accept_run");
   });
 
+  test("accept: 200 response carries landedUnstaged for a dirty-base land", async () => {
+    let seenGate: { baseHeadSha: string | null; diffBaseSha: string | null } | undefined;
+    const dirtyActions: RunActionExec = {
+      ...okActions,
+      accept: async (gate) => {
+        seenGate = gate;
+        return { ok: true, sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true };
+      },
+    };
+    const app = createRoutes({ store, runActions: dirtyActions });
+    seed(store, { runId: "rd" });
+    const res = await app.request("/runs/rd/accept", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true });
+    expect(seenGate?.diffBaseSha).toBe(BASE);
+    const intent = store
+      .getEvents("rd")
+      .filter((e) => e.type === "intent.accept_run")
+      .at(-1);
+    expect(intent?.payload).toEqual({ sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true });
+  });
+
+  test("accept: 409 passes checkout_moved through as code", async () => {
+    const movedActions: RunActionExec = {
+      ...okActions,
+      accept: async () => ({ ok: false, reason: "checkout_moved", detail: "HEAD is abc1234" }),
+    };
+    const app = createRoutes({ store, runActions: movedActions });
+    seed(store, { runId: "rm" });
+    const res = await app.request("/runs/rm/accept", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { code?: string }).toMatchObject({ code: "checkout_moved" });
+    expect(lastIntent(store, "rm")).not.toBe("intent.accept_run");
+  });
+
   test("accept: 409 with the reason + no intent when the action refuses (conflict)", async () => {
     const conflictActions: RunActionExec = {
       ...okActions,

@@ -1315,6 +1315,51 @@ steps:
       }
     });
 
+    it("renders the dirty base badge when baseHeadSha is set", async () => {
+      const detail = makeDetail({
+        runId: "run-dirty",
+        status: "success",
+        runStatus: "completed",
+        lastEventSeq: 5,
+        baseGitRef: "main",
+        baseGitSha: "abcdef1234567890",
+        baseHeadSha: "1234567890abcdef",
+      });
+      const { client, mock } = prepare("run-dirty", detail);
+      try {
+        const { container } = mount(client, "/runs/run-dirty/conversation");
+        const badge = await waitFor(() => {
+          const el = container.querySelector(`[data-testid="detail-dirty-base"]`);
+          if (!el) throw new Error("dirty-base badge not found");
+          return el;
+        });
+        expect(badge.textContent).toBe("dirty base over 1234567");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("does not render the dirty base badge without baseHeadSha", async () => {
+      const detail = makeDetail({
+        runId: "run-clean-base",
+        status: "success",
+        runStatus: "completed",
+        lastEventSeq: 5,
+        baseGitRef: "main",
+        baseGitSha: "abcdef1234567890",
+      });
+      const { client, mock } = prepare("run-clean-base", detail);
+      try {
+        const { container } = mount(client, "/runs/run-clean-base/conversation");
+        await waitFor(() => {
+          if (!container.querySelector(`[data-testid="detail-base-ref"]`)) throw new Error("base-ref not found");
+        });
+        expect(container.querySelector(`[data-testid="detail-dirty-base"]`)).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
     it("does not render the base-ref pill when both fields are absent", async () => {
       const detail = makeDetail({
         runId: "run-no-git",

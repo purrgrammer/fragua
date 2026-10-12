@@ -187,6 +187,15 @@ describe("fragua runs --json flags", () => {
     expect(typeof parsed.crashRequeues![0]!.at).toBe("number");
   });
 
+  test("status --json exposes baseHeadSha for a dirty-base run", async () => {
+    const head = "4".repeat(40);
+    r.store.enqueueRun({ runId: "stj4", workflowSha: "wf", cwd: "/tmp/repo", baseGitSha: BASE, baseHeadSha: head });
+    const code = await statusCommand({ runId: "stj4", json: true, dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out()) as RunDetail;
+    expect(parsed.baseHeadSha).toBe(head);
+  });
+
   test("status --json: unknown run → exit 1", async () => {
     const code = await statusCommand({ runId: "nope", json: true, dbPath: r.dbPath });
     expect(code).toBe(1);

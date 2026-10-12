@@ -21,6 +21,7 @@ import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
   ACTIVE_NODES_KEY,
   applyFact,
+  deriveRunState,
   emptyMetrics,
   type FactEvent,
   foldFacts,
@@ -175,6 +176,57 @@ describe("P4 — projection equals fold of facts", () => {
         },
       ),
       { numRuns: pbtRuns(50) },
+    );
+  });
+});
+
+describe("P4 — genesis baseHeadSha: projection equals derivation", () => {
+  test("optional genesis baseHeadSha seeds the projection and the log-derived state alike", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.option(fc.stringMatching(/^[0-9a-f]{40}$/), { nil: undefined }),
+        fc.nat(4),
+        async (baseHeadSha, nFacts) => {
+          const store = freshStore();
+          const sha = await seedWorkflow(store);
+          const runId = nextId();
+          store.enqueueRun({
+            runId,
+            workflowSha: sha,
+            ...(baseHeadSha !== undefined ? { baseGitSha: "5".repeat(40), baseHeadSha } : {}),
+          });
+          let state = store.getState(runId)!;
+          store.appendFact(
+            runId,
+            [
+              {
+                type: "fact.run_started",
+                payload: { workflowSha: sha, contractVersion: state.contractVersion, startNode: "a" },
+              },
+            ],
+            state.version,
+          );
+          for (let i = 0; i < nFacts; i++) {
+            state = store.getState(runId)!;
+            store.appendFact(
+              runId,
+              [
+                {
+                  type: "fact.node_completed",
+                  payload: { nodeId: "a", iteration: i, tokens: 1, costUsd: 0, nextNode: "a" },
+                },
+              ],
+              state.version,
+            );
+          }
+          const live = store.getState(runId)!;
+          const derived = deriveRunState(runId, store.getEvents(runId));
+          expect(live.baseHeadSha).toBe(baseHeadSha ?? null);
+          expect(derived.baseHeadSha).toBe(live.baseHeadSha);
+          store.close();
+        },
+      ),
+      { numRuns: pbtRuns(30) },
     );
   });
 });

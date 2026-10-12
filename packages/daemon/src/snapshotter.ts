@@ -4,10 +4,9 @@
 // without disturbing the workflow's real index or HEAD.
 //
 // Mechanism per the proposal's "Snapshot capture sequence":
-//   - a per-worktree sentinel index (resolved via `git rev-parse --git-path
-//     fragua-index`, so it works in a LINKED worktree where `.git` is a file)
-//     seeded from the real index for a warm stat cache,
-//   - `git add -A` + `write-tree` into the sentinel (never touches `.git/index`),
+//   - the shared `captureTree` (@fragua/workspace): a per-call sentinel index
+//     `fragua-index-<runId>-<nonce>` in the worktree's own git dir, seeded from
+//     the real index, `git add -A` + `write-tree` into it (never `.git/index`),
 //   - `commit-tree` parented to the previous snapshot (lineage),
 //   - a single per-run tip ref `refs/fragua/snapshots/<runId>` moved forward —
 //     the parent chain keeps every prior snapshot reachable, so intermediate
@@ -17,9 +16,10 @@
 // Dormant: not wired into the executor yet (that is step 3).
 
 import { execFile } from "node:child_process";
-import { copyFile, rm } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import { captureTree, parseShortstat, SNAPSHOT_IDENT, updateRefWithRetry } from "@fragua/workspace";
+
+export { parseShortstat };
 
 const execFileP = promisify(execFile);
 
@@ -64,53 +64,13 @@ export type SnapshotResult = {
   uncommitted?: SnapshotStat | null;
 };
 
-/** Snapshot commits are internal fragua machinery, not user authorship —
- * stamp them with a fixed identity so `commit-tree` never depends on the
- * ambient `user.name` / `user.email` git config (absent on fresh CI runners). */
-const SNAPSHOT_IDENT: Record<string, string> = {
-  GIT_AUTHOR_NAME: "fragua",
-  GIT_AUTHOR_EMAIL: "fragua@localhost",
-  GIT_COMMITTER_NAME: "fragua",
-  GIT_COMMITTER_EMAIL: "fragua@localhost",
-};
-
-async function git(cwd: string, args: string[], env?: Record<string, string>): Promise<string> {
+async function git(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
   const { stdout } = await execFileP("git", args, {
     cwd,
     env: env ? { ...process.env, ...env } : process.env,
     maxBuffer: 64 * 1024 * 1024,
   });
   return stdout.toString().trim();
-}
-
-/** `update-ref` against a shared ref store can race on `packed-refs` /
- * loose-ref locks when many runs snapshot concurrently. Bounded retry. */
-async function updateRefWithRetry(cwd: string, ref: string, sha: string): Promise<void> {
-  const maxAttempts = 5;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await git(cwd, ["update-ref", ref, sha]);
-      return;
-    } catch (err) {
-      const msg = String(err);
-      const lockContention = /unable to (?:lock|create|update)|\.lock|cannot lock ref/i.test(msg);
-      if (attempt >= maxAttempts || !lockContention) throw err;
-      await new Promise((r) => setTimeout(r, 40 * attempt));
-    }
-  }
-}
-
-/** Parse `git diff --shortstat` output. Empty output (no changes) → null. */
-export function parseShortstat(out: string): SnapshotStat | null {
-  if (out.trim() === "") return null;
-  const files = /(\d+) files? changed/.exec(out);
-  const ins = /(\d+) insertions?\(\+\)/.exec(out);
-  const del = /(\d+) deletions?\(-\)/.exec(out);
-  return {
-    filesChanged: files ? Number(files[1]) : 0,
-    insertions: ins ? Number(ins[1]) : 0,
-    deletions: del ? Number(del[1]) : 0,
-  };
 }
 
 /**
@@ -141,78 +101,58 @@ export async function resolveSnapshotParent(worktree: string, runId: string, bas
 export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<SnapshotResult | null> {
   const { worktree, runId, baseGitSha, parentSnap, boundary, prevTreeSha } = opts;
 
-  const gitPath = async (name: string): Promise<string> => {
-    const p = await git(worktree, ["rev-parse", "--git-path", name]);
-    return isAbsolute(p) ? p : join(worktree, p);
-  };
-
-  const fraguaIndex = await gitPath("fragua-index");
-  // Seed from the real index so `add -A` re-hashes only changed files. A
-  // fresh worktree always has an index; tolerate its absence regardless.
-  try {
-    await copyFile(await gitPath("index"), fraguaIndex);
-  } catch {
-    // no real index yet — start from an empty sentinel (full rehash).
+  // The worktree is never run.cwd's checkout, so no state excludes apply.
+  const treeSha = await captureTree({ dir: worktree, label: runId, excludes: [] });
+  if (boundary === "step" && prevTreeSha != null && prevTreeSha === treeSha) {
+    return null;
   }
-  const idxEnv = { GIT_INDEX_FILE: fraguaIndex };
 
-  try {
-    await git(worktree, ["add", "-A"], idxEnv);
-    const treeSha = await git(worktree, ["write-tree"], idxEnv);
+  const commitArgs = ["commit-tree", treeSha, "-m", `fragua-snapshot:${runId}:${boundary}`];
+  if (parentSnap !== "") commitArgs.push("-p", parentSnap);
+  const commitSha = await git(worktree, commitArgs, SNAPSHOT_IDENT);
 
-    if (boundary === "step" && prevTreeSha != null && prevTreeSha === treeSha) {
-      return null;
-    }
+  await updateRefWithRetry(worktree, `refs/fragua/snapshots/${runId}`, commitSha);
 
-    const commitArgs = ["commit-tree", treeSha, "-m", `fragua-snapshot:${runId}:${boundary}`];
-    if (parentSnap !== "") commitArgs.push("-p", parentSnap);
-    const commitSha = await git(worktree, commitArgs, SNAPSHOT_IDENT);
-
-    await updateRefWithRetry(worktree, `refs/fragua/snapshots/${runId}`, commitSha);
-
-    const headSha = await git(worktree, ["rev-parse", "HEAD"]);
-    if (baseGitSha !== "" && headSha !== baseGitSha) {
-      await updateRefWithRetry(worktree, `refs/fragua/heads/${runId}`, headSha);
-    }
-
-    const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
-
-    // Diff stats feed the Diff selector and the inbox change-stat — computed
-    // at EVERY boundary (step included) so each selectable snapshot shows its
-    // delta, not just the hitl/terminal ones. Honest diff base: base when the
-    // workflow committed on top of it, the fork point when it checked out an
-    // unrelated line. merge-base(base, HEAD) == base exactly when base is an
-    // ancestor of HEAD; skip it (and the committed diff) when HEAD never moved
-    // off base, which is both the common case and trivially a null delta.
-    const headMovedFromBase = baseGitSha !== "" && headSha !== baseGitSha;
-    let diffBaseSha = baseGitSha;
-    if (headMovedFromBase) {
-      try {
-        diffBaseSha = await git(worktree, ["merge-base", baseGitSha, "HEAD"]);
-      } catch {
-        diffBaseSha = baseGitSha;
-      }
-    }
-    result.committed = headMovedFromBase
-      ? parseShortstat(await git(worktree, ["diff", "--shortstat", diffBaseSha, headSha]))
-      : null;
-    result.uncommitted = parseShortstat(await git(worktree, ["diff", "--shortstat", headSha, commitSha]));
-
-    if (boundary !== "step") {
-      // Branch label + honest diff base — surfaced in the inbox / row feed,
-      // not needed per-step.
-      let headRef: string | null = null;
-      try {
-        headRef = (await git(worktree, ["symbolic-ref", "--short", "HEAD"])) || null;
-      } catch {
-        headRef = null; // detached / tag / unborn
-      }
-      result.headRef = headRef;
-      result.diffBaseSha = diffBaseSha;
-    }
-
-    return result;
-  } finally {
-    await rm(fraguaIndex, { force: true });
+  const headSha = await git(worktree, ["rev-parse", "HEAD"]);
+  if (baseGitSha !== "" && headSha !== baseGitSha) {
+    await updateRefWithRetry(worktree, `refs/fragua/heads/${runId}`, headSha);
   }
+
+  const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
+
+  // Diff stats feed the Diff selector and the inbox change-stat — computed
+  // at EVERY boundary (step included) so each selectable snapshot shows its
+  // delta, not just the hitl/terminal ones. Honest diff base: base when the
+  // workflow committed on top of it, the fork point when it checked out an
+  // unrelated line. merge-base(base, HEAD) == base exactly when base is an
+  // ancestor of HEAD; skip it (and the committed diff) when HEAD never moved
+  // off base, which is both the common case and trivially a null delta.
+  const headMovedFromBase = baseGitSha !== "" && headSha !== baseGitSha;
+  let diffBaseSha = baseGitSha;
+  if (headMovedFromBase) {
+    try {
+      diffBaseSha = await git(worktree, ["merge-base", baseGitSha, "HEAD"]);
+    } catch {
+      diffBaseSha = baseGitSha;
+    }
+  }
+  result.committed = headMovedFromBase
+    ? parseShortstat(await git(worktree, ["diff", "--shortstat", diffBaseSha, headSha]))
+    : null;
+  result.uncommitted = parseShortstat(await git(worktree, ["diff", "--shortstat", headSha, commitSha]));
+
+  if (boundary !== "step") {
+    // Branch label + honest diff base — surfaced in the inbox / row feed,
+    // not needed per-step.
+    let headRef: string | null = null;
+    try {
+      headRef = (await git(worktree, ["symbolic-ref", "--short", "HEAD"])) || null;
+    } catch {
+      headRef = null; // detached / tag / unborn
+    }
+    result.headRef = headRef;
+    result.diffBaseSha = diffBaseSha;
+  }
+
+  return result;
 }

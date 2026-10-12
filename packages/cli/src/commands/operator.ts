@@ -10,7 +10,7 @@
 // resolves the commit range through `readPlane.diffRange` and runs the git diff
 // inline with the same `@fragua/workspace` `gitDiff` the server uses.
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
 import type { DiffRange, FleetSummary, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
@@ -22,7 +22,14 @@ import {
   type SqliteStore,
   type StoredEvent,
 } from "@fragua/store";
-import { applyAccept, applyDiscard, defaultGitExec, gitDiff, type RunActionGate } from "@fragua/workspace";
+import {
+  applyAccept,
+  applyDiscard,
+  type DirtyLand,
+  defaultGitExec,
+  gitDiff,
+  type RunActionGate,
+} from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
 import { followRun, renderEvent } from "../run-follow.ts";
@@ -136,12 +143,22 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
+    if (gate.baseHeadSha != null && opts.autostash === true) {
+      console.warn(
+        chalk.yellow("accept: --autostash is ignored for a dirty-base run") +
+          chalk.dim(" — it lands per path and never touches the paths it did not change"),
+      );
+    }
     const res = await applyAccept(defaultGitExec, gate, { autostash: opts.autostash === true });
     if (!res.ok) {
       console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
       return 1;
     }
     plane.commit(opts.runId, plane.buildAcceptRun(res));
+    if (res.landedUnstaged === true && res.land != null) {
+      console.log(chalk.green(renderUnstagedLand(gate.cwd ?? res.land.top, res.land)));
+      return 0;
+    }
     const tail = res.tailStaged ? "; tail staged — `git commit` when ready" : "";
     console.log(chalk.green("accepted") + chalk.dim(` (run ${opts.runId}, replayed ${res.replayed}${tail})`));
     if (res.stashPopConflict === true) {
@@ -166,7 +183,38 @@ function readGate(store: SqliteStore, runId: string): RunActionGate | null {
     inboxStatus: state.inboxStatus,
     cwd: state.cwd,
     baseGitSha: state.baseGitSha ?? "",
+    baseHeadSha: state.baseHeadSha,
+    diffBaseSha: state.diffBaseSha,
   };
+}
+
+function canonicalPath(p: string): string {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
+
+/** Quote a path for the printed undo command when it needs it. */
+function shellQuote(p: string): string {
+  return /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The dirty-base accept success line: what landed where, and the undo. */
+export function renderUnstagedLand(cwd: string, land: DirtyLand): string {
+  const { stat } = land;
+  const files = `${stat.filesChanged} file${stat.filesChanged === 1 ? "" : "s"} (+${stat.insertions}/-${stat.deletions})`;
+  const gitC = canonicalPath(land.top) === canonicalPath(cwd) ? "git" : `git -C ${shellQuote(land.top)}`;
+  const parts = [`landed as unstaged changes in ${cwd}: ${files}`];
+  if (land.restorable.length > 0) {
+    parts.push(
+      `undo: ${gitC} restore --source=${land.baseSha.slice(0, 7)} --worktree -- ${land.restorable.map(shellQuote).join(" ")}`,
+    );
+  }
+  let line = parts.join("; ");
+  if (land.created.length > 0) line += `; plus delete: ${land.created.map(shellQuote).join(" ")}`;
+  return line;
 }
 
 interface InboxRunRow {
@@ -361,7 +409,8 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   if (d.baseGitRef != null || d.baseGitSha != null) {
     const ref = d.baseGitRef != null ? d.baseGitRef : "";
     const sha = d.baseGitSha != null ? chalk.dim(` ${d.baseGitSha.slice(0, 7)}`) : "";
-    console.log(`  base:     ${ref}${sha}`);
+    const dirty = d.baseHeadSha != null ? chalk.yellow(` dirty base over ${d.baseHeadSha.slice(0, 7)}`) : "";
+    console.log(`  base:     ${ref}${sha}${dirty}`);
   }
   console.log(`  cost:     $${d.costUsd.toFixed(4)} ${chalk.dim(`(${d.inputTokens}+${d.outputTokens} tok)`)}`);
   if (d.durationMs != null) console.log(`  duration: ${(d.durationMs / 1000).toFixed(1)}s`);

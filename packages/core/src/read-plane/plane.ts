@@ -64,6 +64,9 @@ export interface RunControlState {
   inboxStatus: InboxStatus | null;
   cwd: string | null;
   baseGitSha: string | null;
+  /** Non-null marks a dirty-base run (accept lands it unstaged). */
+  baseHeadSha: string | null;
+  diffBaseSha: string | null;
 }
 
 /** The run's diff baseline: the resolved project root and the honest diff
@@ -384,6 +387,8 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
         inboxStatus: state.inboxStatus,
         cwd: state.cwd,
         baseGitSha: state.baseGitSha,
+        baseHeadSha: state.baseHeadSha,
+        diffBaseSha: state.diffBaseSha,
       };
     },
     diffContext(runId) {
