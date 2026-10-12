@@ -435,6 +435,7 @@ describe("reducer purity for outputs (no-bump invariant)", () => {
       title: null,
       baseGitSha: null,
       baseGitRef: null,
+      baseHeadSha: null,
       finalGitSha: null,
       finalHeadRef: null,
       diffBaseSha: null,

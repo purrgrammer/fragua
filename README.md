@@ -97,7 +97,7 @@ One bet: the **control plane** is worth making deterministic even when the LLM b
 
 ## Prerequisites
 
-- **git** (recommended) — a git repo gives each run an isolated worktree with diff / accept / discard as git operations; without one, a run executes directly in its `cwd` with no isolation layer (see [execution-model](docs/execution-model.md)).
+- **git** (recommended) — a git repo gives each run an isolated worktree — based on HEAD, a pinned ref, or your uncommitted tree — with diff / accept / discard as git operations; without one, a run executes directly in its `cwd` with no isolation layer (see [execution-model](docs/execution-model.md)).
 - **A provider API key** — Anthropic, OpenAI, or any [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai) provider. `fragua providers add` stores it. Workflows with `type: judge` steps also need a [TypeSafe](https://docs.typesafe.ai) key (`fragua providers add typesafe`).
 - **Bun ≥ 1.2** — only to build from source; release binaries are self-contained.
 - **[`gh`](https://cli.github.com/)** (optional) — only for PR-number targets (`target="PR <n>"`).

@@ -8,8 +8,9 @@
 // inbox projection (the reducer cases drive `inbox_status` from the fact).
 //
 //   accept   replay the run's commits onto the operator's current branch +
-//            stage the uncommitted tail (`@fragua/workspace.applyAccept`)
-//   discard  update-ref -d refs/fragua/{snapshots,heads}/<runId>
+//            stage the uncommitted tail, or — for a dirty-base run — land the
+//            run's effect as unstaged changes (`@fragua/workspace.applyAccept`)
+//   discard  update-ref -d refs/fragua/{snapshots,heads}/<runId> (never bases/)
 //
 // A refusal (accept conflict / dirty tree / missing snapshot, or a discard
 // throw) yields `null` / a throw and the intent is left unadvanced — never a
@@ -53,8 +54,16 @@ function nextOperatorIntent(
 function applyAction(intent: PendingOperatorIntent): FactEvent {
   switch (intent.type) {
     case "intent.accept_run": {
-      const p = intent.payload as { sha: string; replayed: number; tailStaged: boolean };
-      return { type: "fact.run_accepted", payload: { sha: p.sha, replayed: p.replayed, tailStaged: p.tailStaged } };
+      const p = intent.payload as { sha: string; replayed: number; tailStaged: boolean; landedUnstaged?: true };
+      return {
+        type: "fact.run_accepted",
+        payload: {
+          sha: p.sha,
+          replayed: p.replayed,
+          tailStaged: p.tailStaged,
+          ...(p.landedUnstaged === true ? { landedUnstaged: true as const } : {}),
+        },
+      };
     }
     case "intent.discard_run": {
       const p = intent.payload as { refs: string[] };

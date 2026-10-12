@@ -8,6 +8,16 @@ guarantee.
 
 ## [Unreleased]
 
+### Added
+
+- **`fragua run --dirty`.** Bases a run on your uncommitted working tree: the index plus untracked, non-ignored files are captured at enqueue into a synthetic commit parented on HEAD and kept at `refs/fragua/bases/<run_id>`. The agent sees the WIP committed at HEAD, and `runs diff --against base` shows only the run's work. A clean tree falls back to HEAD. It cannot be combined with `--base`, and it is refused outside a git checkout, on a repo with no commits, and when `.gitignore` lacks the fragua state block. `runs status` and the run-detail header show `dirty base over <sha>`.
+- **Dirty-base accept.** `fragua runs accept` lands a `--dirty` run as unstaged working-tree changes, writing only the paths the run changed, and leaves HEAD, the branch and the index untouched. It refuses `relocated_base`, `checkout_moved` or `checkout_unsafe_path` rather than overwrite anything, and prints the `git restore` undo. `--autostash` is ignored for such runs. `discard` keeps `refs/fragua/bases/<id>`, and `fragua gc --snapshots` reclaims it.
+
+### Changed
+
+- **Event contract v7, schema v6.** The genesis `intent.run_enqueued` gains an optional `baseHeadSha`, seeded onto the new `run_state.base_head_sha` column. `intent.accept_run` / `fact.run_accepted` gain an optional `landedUnstaged`. Runs pinned at v1–v6 fold unchanged.
+- **Snapshot capture uses a per-call sentinel index** (`fragua-index-<run>-<nonce>`) instead of a fixed name, so a capture killed mid-way no longer leaves a lock that blocks later snapshots.
+
 ### Fixed
 
 - **`fragua import` validates every artifact row.** A bundle's `artifacts.jsonl` is shape-checked before the write, its `blobSha` must be a sha256, and it must name a blob the bundle itself carries. A crafted sha can no longer land a path in the artifact index, and an imported run can no longer point at another run's blob already in the store.

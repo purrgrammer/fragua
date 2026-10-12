@@ -371,3 +371,157 @@ describe("coerceInputs (merge-only; type coercion lives in buildEnqueue)", () =>
     expect(out["constructor"]).toBe("a");
   });
 });
+
+describe("fragua run --dirty", () => {
+  const BLOCK = ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n";
+
+  function g(cwd: string, ...args: string[]): string {
+    const res = Bun.spawnSync({
+      cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (res.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr.toString()}`);
+    return res.stdout.toString().trim();
+  }
+
+  /** A project repo with a committed config + .gitignore (optionally lacking
+   * the fragua block) and, unless `commit:false`, one commit. */
+  function project(opts: { block?: boolean; commit?: boolean } = {}): string {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-dirty-run-"));
+    tmps.push(repo);
+    g(repo, "init", "-q", "-b", "main");
+    mkdirSync(join(repo, ".fragua"), { recursive: true });
+    writeFileSync(join(repo, ".fragua", "config.yaml"), "id: 0190a0a0-0000-7000-8000-000000000001\nname: p\n");
+    writeFileSync(join(repo, ".gitignore"), opts.block === false ? "*.log\n" : BLOCK);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    if (opts.commit !== false) {
+      g(repo, "add", "-A");
+      g(repo, "commit", "-q", "-m", "base");
+    }
+    return repo;
+  }
+
+  async function capture<T>(fn: () => Promise<T>): Promise<{ result: T; out: string; err: string }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const ol = console.log;
+    const oe = console.error;
+    console.log = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => err.push(a.map(String).join(" "));
+    try {
+      return { result: await fn(), out: out.join("\n"), err: err.join("\n") };
+    } finally {
+      console.log = ol;
+      console.error = oe;
+    }
+  }
+
+  test("--dirty with --base → exit 1, nothing enqueued", async () => {
+    const r = rig();
+    try {
+      const repo = project();
+      const { result, err } = await capture(() =>
+        runCommand({
+          workflow: writeWorkflow(),
+          dbPath: r.dbPath,
+          cwd: repo,
+          follow: false,
+          dirty: true,
+          base: "HEAD",
+        }),
+      );
+      expect(result).toBe(1);
+      expect(err).toContain("--dirty cannot combine with --base: the dirt is relative to HEAD");
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--dirty on a non-git cwd / unborn HEAD → exit 1, no run, no ref", async () => {
+    const r = rig();
+    try {
+      const nogit = mkdtempSync(join(tmpdir(), "fragua-dirty-nogit-"));
+      tmps.push(nogit);
+      const a = await capture(() =>
+        runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, cwd: nogit, follow: false, dirty: true }),
+      );
+      expect(a.result).toBe(1);
+      expect(a.err).toContain("--dirty needs a git checkout");
+
+      const unborn = project({ commit: false });
+      const b = await capture(() =>
+        runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, cwd: unborn, follow: false, dirty: true }),
+      );
+      expect(b.result).toBe(1);
+      expect(b.err).toContain("--dirty needs a commit to capture over:");
+      expect(b.err).toContain("has no commits yet");
+      expect(g(unborn, "for-each-ref", "refs/fragua")).toBe("");
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--dirty without the fragua ignore block → refuses naming fragua init", async () => {
+    const r = rig();
+    try {
+      const repo = project({ block: false });
+      writeFileSync(join(repo, "a.txt"), "wip\n");
+      const { result, err } = await capture(() =>
+        runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, cwd: repo, follow: false, dirty: true }),
+      );
+      expect(result).toBe(1);
+      expect(err).toContain("fragua init");
+      expect(r.store.listRunIds()).toHaveLength(0);
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--dirty on a clean tree pins HEAD and prints the notice", async () => {
+    const r = rig();
+    try {
+      const repo = project();
+      const head = g(repo, "rev-parse", "HEAD");
+      const { result, out } = await capture(() =>
+        runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, cwd: repo, follow: false, dirty: true }),
+      );
+      expect(result).toBe(0);
+      expect(out).toContain("--dirty: working tree is clean, using HEAD");
+      const state = r.store.getState(r.store.listRunIds()[0]!)!;
+      expect(state.baseGitSha).toBe(head);
+      expect(state.baseHeadSha).toBeNull();
+      expect(g(repo, "for-each-ref", "refs/fragua/bases")).toBe("");
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("--dirty on a dirty tree pins S, records baseHeadSha, writes bases/<id>", async () => {
+    const r = rig();
+    try {
+      const repo = project();
+      const head = g(repo, "rev-parse", "HEAD");
+      writeFileSync(join(repo, "a.txt"), "wip\n");
+      writeFileSync(join(repo, "u.txt"), "untracked\n");
+      const indexBefore = g(repo, "ls-files", "-s");
+      const { result } = await capture(() =>
+        runCommand({ workflow: writeWorkflow(), dbPath: r.dbPath, cwd: repo, follow: false, dirty: true }),
+      );
+      expect(result).toBe(0);
+      const runId = r.store.listRunIds()[0]!;
+      const state = r.store.getState(runId)!;
+      expect(state.baseHeadSha).toBe(head);
+      expect(state.baseGitRef).toBe("main");
+      expect(g(repo, "rev-parse", `${state.baseGitSha}^`)).toBe(head);
+      expect(g(repo, "rev-parse", `refs/fragua/bases/${runId}`)).toBe(state.baseGitSha!);
+      expect(g(repo, "rev-parse", "HEAD")).toBe(head);
+      expect(g(repo, "ls-files", "-s")).toBe(indexBefore);
+    } finally {
+      await r.close();
+    }
+  });
+});

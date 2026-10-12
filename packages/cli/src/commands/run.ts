@@ -18,7 +18,7 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { defaultGitExec, resolveBaseRef } from "@fragua/workspace";
+import { defaultGitExec, pinDirtyBaseRef, prepareDirtyBase, resolveBaseRef } from "@fragua/workspace";
 import chalk from "chalk";
 import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
@@ -46,6 +46,11 @@ export interface RunCommandOptions {
    * the worktree detached at that sha. Unresolvable refs reject the enqueue.
    * Omitted = default (cwd HEAD at provision time). */
   base?: string;
+  /** `--dirty`: base the run on the operator's uncommitted working tree,
+   * captured at enqueue into a synthetic commit S (parented on HEAD) and
+   * anchored at `refs/fragua/bases/<runId>`. A clean tree falls back to HEAD.
+   * Cannot combine with `base`. */
+  dirty?: boolean;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -56,6 +61,10 @@ export interface RunCommandOptions {
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
+  if (opts.dirty === true && opts.base !== undefined) {
+    console.error(chalk.red("run: --dirty cannot combine with --base: the dirt is relative to HEAD"));
+    return 1;
+  }
   const invocationCwd = opts.cwd ?? process.cwd();
   // Resolve project identity (walk up to the nearest .fragua/config.yaml,
   // bounded by the git root; auto-init a real id when none is found). The
@@ -106,6 +115,24 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       console.error(chalk.red(`run: ${opts.workflow} ${verb}: ${mint.detail}`));
       return 1;
     }
+    // Capture the dirty base before any write, so a refusal leaves no
+    // workflow row, run, event, or ref behind.
+    let dirty: { s: string; head: string; ref: string | null; top: string } | undefined;
+    let cleanDirtyBase: { sha: string; ref: string | null } | undefined;
+    if (opts.dirty === true) {
+      const d = await prepareDirtyBase(defaultGitExec, cwd);
+      if (!d.ok) {
+        console.error(chalk.red(`run: ${d.detail}`));
+        return 1;
+      }
+      if (d.clean) {
+        cleanDirtyBase = { sha: d.headSha, ref: d.baseGitRef };
+        console.log(chalk.yellow("--dirty: working tree is clean, using HEAD"));
+      } else {
+        dirty = { s: d.baseGitSha, head: d.baseHeadSha, ref: d.baseGitRef, top: d.top };
+      }
+    }
+
     client.plane.commitSaveWorkflow({ sha: mint.sha, name, source, ir: mint.ir, irVersion: mint.irVersion });
     console.log(chalk.dim(`workflow ${name} -> ${mint.sha.slice(0, 12)}`));
 
@@ -142,6 +169,12 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(opts.title !== undefined && opts.title.length > 0 ? { title: opts.title } : {}),
       ...(base !== undefined ? { baseGitSha: base.sha, baseGitRef: base.ref } : {}),
+      ...(cleanDirtyBase !== undefined
+        ? { baseGitSha: cleanDirtyBase.sha, ...(cleanDirtyBase.ref != null ? { baseGitRef: cleanDirtyBase.ref } : {}) }
+        : {}),
+      ...(dirty !== undefined
+        ? { baseGitSha: dirty.s, baseHeadSha: dirty.head, ...(dirty.ref != null ? { baseGitRef: dirty.ref } : {}) }
+        : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`run: ${enq.error}`));
@@ -151,6 +184,19 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     console.log(chalk.green(`run queued: ${enq.runId}`));
     if (base !== undefined) {
       console.log(chalk.dim(`base ${base.ref} -> ${base.sha.slice(0, 12)}`));
+    }
+    if (dirty !== undefined) {
+      // The provisioner rewrites this ref before `worktree add`, so a failure
+      // here is recoverable — warn rather than fail the already-queued run.
+      try {
+        await pinDirtyBaseRef(dirty.top, enq.runId, dirty.s);
+      } catch (err) {
+        console.error(
+          chalk.yellow(`run: could not write refs/fragua/bases/${enq.runId}: ${(err as Error).message}`) +
+            chalk.dim(" — the daemon writes it when the run starts"),
+        );
+      }
+      console.log(chalk.dim(`dirty base ${dirty.s.slice(0, 7)} over ${dirty.head.slice(0, 7)}`));
     }
 
     if (opts.follow === false) return 0;

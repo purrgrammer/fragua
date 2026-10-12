@@ -58,6 +58,7 @@ fragua run <workflow>  \
   [--input name=value]   # typed input; repeat for several (gh-style)
   [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
+  [--dirty]              # base the run on your uncommitted tree (captured now; untracked included, ignored excluded; not with --base)
   [--no-follow]          # enqueue and exit; print only the run id
   [--db path/to/db]      # target a specific store (default ~/.fragua/fragua.db)
 ```
@@ -184,6 +185,14 @@ fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (
 
 `accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
 
+**Dirty-base runs** (`fragua run --dirty`; `runs status` shows `dirty base over <sha>`) land differently: `accept` writes the run's effect as **unstaged changes** in the run's checkout, touching only the paths the run changed and leaving HEAD and the index alone, and prints `landed as unstaged changes in <cwd>: … ; undo: git restore --source=<S> --worktree -- <paths>` (plus `plus delete: <paths>` for files it created). It needs no clean tree; `--autostash` is ignored. It refuses — writing nothing — with:
+
+- `relocated_base` — the run moved its HEAD off its base; land by hand from the printed `git diff <S> <P>`;
+- `checkout_moved` — your HEAD moved since the capture, or a path the run changed no longer holds its captured content;
+- `checkout_unsafe_path` — a submodule, a fragua state path, a `.gitattributes`, or a path the capture never saw that now holds something (e.g. an ignored `.env`).
+
+S, the captured base, stays at `refs/fragua/bases/<id>` — the undo and restore source if a land is interrupted. `discard` never deletes it; `fragua gc --snapshots` does.
+
 ---
 
 ## 8. Schedules — recurring runs
@@ -205,7 +214,7 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 
 - **Don't spam steer.** 5 aborts without progress halts the run with `reason:"abort_loop"`; usually `cancel` + re-enqueue with a better prompt is right.
 - **Don't write intents the user didn't ask for.** Steer / pause / cancel / unquarantine can lose work or change external state. Present evidence, let the user decide.
-- **Don't `accept` over a dirty tree.** Commit/stash local changes first, or it refuses with `dirty_tree`.
+- **Don't `accept` a commit-base run over a dirty tree.** Commit/stash local changes first, or it refuses with `dirty_tree`. (Dirty-base runs from `--dirty` land per path as unstaged changes and don't need a clean tree.)
 - **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist; pass `--db` to target one.
 - **Don't treat `queued` as broken.** No daemon = no dispatch. Check the harness first.
 

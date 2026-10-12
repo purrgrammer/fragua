@@ -62,6 +62,25 @@ describe("processOperatorActions", () => {
     expect(appended[0]?.advanceAppliedTo).toBe(7);
   });
 
+  test("projects landedUnstaged onto fact.run_accepted", () => {
+    const { store, appended } = fakeStore({
+      runId: "run-u",
+      state: {},
+      intents: [
+        {
+          type: "intent.accept_run",
+          seq: 3,
+          payload: { sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true },
+        },
+      ],
+    });
+    expect(processOperatorActions(store)).toEqual(["run-u"]);
+    expect(appended[0]?.fact).toEqual({
+      type: "fact.run_accepted",
+      payload: { sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true },
+    });
+  });
+
   test("discard: projects intent.discard_run → fact.run_discarded from the carried refs", () => {
     const refs = ["refs/fragua/heads/run-d", "refs/fragua/snapshots/run-d"];
     const { store, appended } = fakeStore({

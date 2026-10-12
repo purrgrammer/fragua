@@ -90,6 +90,19 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     down: (db) => db.exec("DROP TABLE IF EXISTS mcp_oauth"),
     lossy: true,
   },
+  // v5 → v6: `run_state.base_head_sha` marks a `--dirty` run's synthetic base.
+  // Guarded ADD COLUMN like v4. `down` is lossy: dropping it would send a
+  // dirty-base run back through the commit-base accept.
+  6: {
+    up: (db) => {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(run_state)").all();
+      if (!cols.some((c) => c.name === "base_head_sha")) {
+        db.exec("ALTER TABLE run_state ADD COLUMN base_head_sha TEXT");
+      }
+    },
+    down: (db) => db.exec("ALTER TABLE run_state DROP COLUMN base_head_sha"),
+    lossy: true,
+  },
 };
 
 /** Steps that deliberately ship without a `down`, each with the reason a

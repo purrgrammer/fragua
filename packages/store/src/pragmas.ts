@@ -10,8 +10,10 @@ import type { Database } from "bun:sqlite";
  * BYTE cap (I2/I10) is enforced in the store.ts write guard, NOT a SQL CHECK —
  * a byte-exact CHECK can't be applied retroactively over historical rows.
  * v5 adds the `mcp_oauth` table (per-server OAuth state for remote MCP
- * servers, additive). */
-export const CURRENT_SCHEMA_VERSION = 5;
+ * servers, additive).
+ * v6 adds `run_state.base_head_sha` (the operator HEAD a `--dirty` run's
+ * synthetic base was captured over). */
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */
@@ -56,8 +58,14 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * `run_state.title`. A v5 daemon folding a v6 run would null `currentNode` on
  * requeue and miss the seeded title. `MIN_COMPATIBLE` stays 1 — pre-v6 runs
  * carry no genesis title and their requeue facts still fold (currentNode was
- * already null at the point they were nulled), so v1-v5 runs resume untouched. */
-export const EVENT_CONTRACT_VERSION = 6;
+ * already null at the point they were nulled), so v1-v5 runs resume untouched.
+ * v7 adds the optional genesis `baseHeadSha` (a `--dirty` run's synthetic base
+ * marker, seeded onto `run_state.base_head_sha` by `genesisToInitialState`) and
+ * the optional `landedUnstaged` on `intent.accept_run` / `fact.run_accepted`. A
+ * v6 daemon would drop the marker and land a dirty-base run through the
+ * commit-base accept. `MIN_COMPATIBLE` stays 1 — pre-v7 genesis carries no
+ * `baseHeadSha`, so v1-v6 runs seed it null and fold unchanged. */
+export const EVENT_CONTRACT_VERSION = 7;
 
 /** Lowest contract version the daemon folds. THE RULE: write the newest
  * version, READ ALL versions. Events are an immutable, append-only log, so the

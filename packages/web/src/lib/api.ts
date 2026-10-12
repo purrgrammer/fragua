@@ -733,7 +733,9 @@ export async function unquarantineRun(
   return postJson(`/runs/${encodeURIComponent(id)}/unquarantine`, body, isAcceptedSeq);
 }
 
-export async function acceptRun(id: string): Promise<{ seq: number }> {
+/** `landedUnstaged` is set when a dirty-base run landed as unstaged
+ * working-tree changes instead of being replayed onto the branch. */
+export async function acceptRun(id: string): Promise<{ seq: number; landedUnstaged?: boolean }> {
   return postJson(`/runs/${encodeURIComponent(id)}/accept`, {}, isAcceptedSeq);
 }
 

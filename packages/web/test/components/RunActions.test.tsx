@@ -144,6 +144,24 @@ describe("RunActions", () => {
       }
     });
 
+    test('accept toast reads "landed as unstaged changes" when the response sets landedUnstaged', async () => {
+      const { restore } = renderActions(
+        RUN_PENDING,
+        { [ACCEPT_URL]: () => json({ seq: 1, sha: "h", replayed: 0, tailStaged: false, landedUnstaged: true }) },
+        "accept",
+      );
+      try {
+        const confirmBtn = await findInBody<HTMLButtonElement>("accept-confirm-btn-run-1");
+        fireEvent.click(confirmBtn);
+        await waitFor(() => {
+          if (successSpy.mock.calls.length === 0) throw new Error("no success toast yet");
+        });
+        expect(String((successSpy.mock.calls[0] as unknown[])[0])).toContain("landed as unstaged changes");
+      } finally {
+        restore();
+      }
+    });
+
     test("shows the refusal inline on 409 and keeps the dialog open", async () => {
       const mocks: Record<string, () => Response | Promise<Response>> = {
         [ACCEPT_URL]: () =>

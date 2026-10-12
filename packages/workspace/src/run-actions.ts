@@ -10,10 +10,12 @@
 // history — replayed commits keep their own message/author; the tail is the
 // operator's commit.
 import { execFile } from "node:child_process";
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { lstat, readlink, rm, rmdir } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { type InboxStatus, isTerminal, type RunStatus } from "@fragua/types";
+import { type DiffStat, dirtyBaseRef, isFraguaStatePath, parseShortstat } from "./capture.ts";
 
 const execFileP = promisify(execFile);
 
@@ -67,6 +69,11 @@ export interface RunActionGate {
   inboxStatus: InboxStatus | null;
   cwd: string | null;
   baseGitSha: string;
+  /** `run_state.base_head_sha` — non-null marks a dirty-base run, which accept
+   * lands as unstaged working-tree changes instead of replaying commits. */
+  baseHeadSha: string | null;
+  /** `run_state.diff_base_sha` — the range the review surfaces showed. */
+  diffBaseSha: string | null;
 }
 
 /** Refusals from the state gate, shared by accept and discard. */
@@ -135,9 +142,39 @@ async function pruneOrRollback(git: GitExec, cwd: string, target: string): Promi
   }
 }
 
+/** What a dirty-base land wrote — enough for the caller to print the undo.
+ * Paths are relative to `top`, the checkout toplevel. */
+export interface DirtyLand {
+  top: string;
+  /** S — the synthetic base, the pre-accept content of every path in D. */
+  baseSha: string;
+  /** P — the run's terminal snapshot. */
+  snapSha: string;
+  /** Paths in D that S holds: `git restore --source=S --worktree` undoes them. */
+  restorable: string[];
+  /** Paths the land created (absent from S): undo deletes them. */
+  created: string[];
+  stat: DiffStat;
+}
+
+/** Refusals of the dirty-base accept, shared with the checkout mode. */
+export type DirtyAcceptRefusal = "relocated_base" | "checkout_moved" | "checkout_unsafe_path";
+
 export type AcceptResult =
-  | { ok: true; sha: string; replayed: number; tailStaged: boolean; stashPopConflict?: boolean }
-  | { ok: false; reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict"; detail: string };
+  | {
+      ok: true;
+      sha: string;
+      replayed: number;
+      tailStaged: boolean;
+      stashPopConflict?: boolean;
+      landedUnstaged?: true;
+      land?: DirtyLand;
+    }
+  | {
+      ok: false;
+      reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict" | DirtyAcceptRefusal;
+      detail: string;
+    };
 
 /** Knobs on the accept action. `autostash` mirrors `git rebase --autostash`:
  * stash the operator's unrelated working-tree changes before the apply and
@@ -179,6 +216,9 @@ export async function applyAccept(
   const g = checkGate(gate);
   if (!g.ok) return g;
   const cwd = g.cwd;
+  // A dirty-base run's dirt is its base: it lands per path and never needs the
+  // tree clean, so autostash does not apply.
+  if (gate.baseHeadSha != null) return acceptDirtyBase(git, gate, cwd);
   if (options?.autostash !== true) return acceptInner(git, gate, cwd);
 
   // Autostash: park unrelated dirt so the clean-tree gate doesn't refuse, then
@@ -289,6 +329,222 @@ async function acceptInner(git: GitExec, gate: RunActionGate, cwd: string): Prom
   return { ok: true, sha: replayedTip ?? target, replayed, tailStaged };
 }
 
+type TreeEntry = { mode: string; sha: string } | null;
+
+interface DiffPath {
+  path: string;
+  s: TreeEntry;
+  p: TreeEntry;
+}
+
+type DiskState =
+  | { kind: "absent" }
+  | { kind: "dir" }
+  | { kind: "other" }
+  | { kind: "entry"; mode: string; sha: string };
+
+const ZERO_MODE = "000000";
+const REGULAR_MODES = new Set(["100644", "100755"]);
+
+/** Parse `git diff --raw -z --no-renames` into per-path S/P entries. */
+function parseRawDiff(out: string): DiffPath[] {
+  const parts = out.split("\0");
+  const paths: DiffPath[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const meta = parts[i]!;
+    const path = parts[i + 1]!;
+    if (!meta.startsWith(":") || path === "") break;
+    const [m1, m2, s1, s2] = meta.slice(1).split(" ");
+    const entry = (mode: string | undefined, sha: string | undefined): TreeEntry =>
+      mode == null || sha == null || mode === ZERO_MODE ? null : { mode, sha };
+    paths.push({ path, s: entry(m1, s1), p: entry(m2, s2) });
+  }
+  return paths;
+}
+
+/** A path's on-disk state, read with lstat and git's own hashing — never
+ * through ignore rules, so a land cannot change what it compares against. */
+async function readDiskState(git: GitExec, top: string, path: string, fileMode: boolean): Promise<DiskState> {
+  let st: Awaited<ReturnType<typeof lstat>>;
+  try {
+    st = await lstat(join(top, path));
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
+    throw err;
+  }
+  if (st.isDirectory()) return { kind: "dir" };
+  if (st.isSymbolicLink()) {
+    const target = await readlink(join(top, path));
+    const sha = await mustGit(git, top, ["hash-object", "--stdin", "--no-filters"], target);
+    return { kind: "entry", mode: "120000", sha };
+  }
+  if (st.isFile()) {
+    const sha = await mustGit(git, top, ["hash-object", "--", path]);
+    const mode = fileMode && (st.mode & 0o111) !== 0 ? "100755" : "100644";
+    return { kind: "entry", mode, sha };
+  }
+  return { kind: "other" };
+}
+
+/**
+ * Land a dirty-base run's effect as unstaged working-tree changes in its
+ * checkout, path by path. S = `baseGitSha` (the synthetic base), P = the
+ * terminal snapshot, D = the paths S→P changes. Every path in D must still hold
+ * its S content; paths outside D are never read or written; HEAD, the branch
+ * and the index are untouched. Refusals write nothing.
+ */
+async function acceptDirtyBase(git: GitExec, gate: RunActionGate, cwd: string): Promise<AcceptResult> {
+  const { runId, baseGitSha: s } = gate;
+  const baseRef = dirtyBaseRef(runId);
+  const snapRef = `refs/fragua/snapshots/${runId}`;
+  const p = await revParse(git, cwd, snapRef);
+  if (p == null) return { ok: false, reason: "no_work", detail: `no ${snapRef} (restore source: ${baseRef})` };
+  const where = `restore source: ${baseRef}; range ${s.slice(0, 7)}→${p.slice(0, 7)}`;
+
+  if (gate.diffBaseSha !== s) {
+    return {
+      ok: false,
+      reason: "relocated_base",
+      detail: `the run moved its HEAD off its dirty base, so the reviewed range is not the one accept would land; land by hand from \`git diff ${s} ${p}\` (${where})`,
+    };
+  }
+
+  const top = await mustGit(git, cwd, ["rev-parse", "--show-toplevel"]);
+  const h = await revParse(git, top, "HEAD");
+  if (h == null || h !== gate.baseHeadSha) {
+    return {
+      ok: false,
+      reason: "checkout_moved",
+      detail: `HEAD is ${h?.slice(0, 7) ?? "unborn"} but the run was captured over ${gate.baseHeadSha?.slice(0, 7)}; check out ${gate.baseHeadSha?.slice(0, 7)} and retry (${where})`,
+    };
+  }
+
+  const raw = await git(top, ["diff", "--no-renames", "--no-abbrev", "-z", "--raw", s, p]);
+  if (raw.exitCode !== 0) {
+    return { ok: false, reason: "no_work", detail: `git diff ${s} ${p} failed: ${raw.stderr.trim()} (${where})` };
+  }
+  const d = parseRawDiff(raw.stdout);
+
+  // Paths the land cannot write safely: a gitlink (removing a deleted
+  // submodule would delete a working tree with its own .git), fragua's own
+  // state, and `.gitattributes` (it changes how the other paths hash).
+  const cwdRel = relative(realpathSync.native(top), realpathSync.native(cwd));
+  const rel = cwdRel.startsWith("..") ? null : cwdRel;
+  const unsafe = d
+    .filter(
+      (e) =>
+        e.s?.mode === "160000" ||
+        e.p?.mode === "160000" ||
+        (rel != null && isFraguaStatePath(e.path, rel)) ||
+        e.path === ".gitattributes" ||
+        e.path.endsWith("/.gitattributes"),
+    )
+    .map((e) => e.path);
+  if (unsafe.length > 0) {
+    return {
+      ok: false,
+      reason: "checkout_unsafe_path",
+      detail: `cannot land ${unsafe.join(", ")} (a submodule, fragua state, or .gitattributes); land those by hand (${where})`,
+    };
+  }
+
+  const fileModeR = await git(top, ["config", "--bool", "core.fileMode"]);
+  const fileMode = fileModeR.stdout.trim() !== "false";
+  const moved: string[] = [];
+  const outside: string[] = [];
+  const present = new Set<string>();
+  for (const e of d) {
+    const disk = await readDiskState(git, top, e.path, fileMode);
+    if (disk.kind !== "absent") present.add(e.path);
+    let matches: boolean;
+    if (e.s == null) {
+      matches = disk.kind === "absent" || (disk.kind === "dir" && (await revParse(git, top, `${s}:${e.path}`)) != null);
+    } else {
+      matches =
+        disk.kind === "entry" &&
+        disk.sha === e.s.sha &&
+        (disk.mode === e.s.mode || (!fileMode && REGULAR_MODES.has(disk.mode) && REGULAR_MODES.has(e.s.mode)));
+    }
+    if (matches) continue;
+    if (e.s == null) outside.push(e.path);
+    else moved.push(e.path);
+  }
+  if (outside.length > 0) {
+    return {
+      ok: false,
+      reason: "checkout_unsafe_path",
+      detail: `${outside.join(", ")} ${outside.length === 1 ? "holds" : "hold"} content outside the captured base, which accept could not restore; move ${outside.length === 1 ? "it" : "them"} aside and retry (${where})`,
+    };
+  }
+  if (moved.length > 0) {
+    return {
+      ok: false,
+      reason: "checkout_moved",
+      detail: `${moved.join(", ")} changed since the run was captured; restore ${moved.length === 1 ? "it" : "them"} from ${baseRef} or land by hand (${where})`,
+    };
+  }
+
+  // Removals first, so a path the run turned from a file into a directory (or
+  // back) can be written in place.
+  const writes = d.filter((e) => e.p != null).map((e) => e.path);
+  try {
+    for (const e of d) {
+      if (e.p != null || !present.has(e.path)) continue;
+      await rm(join(top, e.path), { force: true });
+      for (let dir = dirname(e.path); dir !== "." && dir !== ""; dir = dirname(dir)) {
+        try {
+          await rmdir(join(top, dir));
+        } catch {
+          break;
+        }
+      }
+    }
+    if (writes.length > 0) {
+      await mustGit(
+        git,
+        top,
+        [
+          "--literal-pathspecs",
+          "restore",
+          `--source=${p}`,
+          "--worktree",
+          "--pathspec-from-file=-",
+          "--pathspec-file-nul",
+        ],
+        `${writes.join("\0")}\0`,
+      );
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "conflict",
+      detail: `land stopped part-way: ${err instanceof Error ? err.message : String(err)}; restore the paths from ${baseRef} (${where})`,
+    };
+  }
+
+  const stat = parseShortstat((await git(top, ["diff", "--shortstat", s, p])).stdout) ?? {
+    filesChanged: 0,
+    insertions: 0,
+    deletions: 0,
+  };
+  return {
+    ok: true,
+    sha: h,
+    replayed: 0,
+    tailStaged: false,
+    landedUnstaged: true,
+    land: {
+      top,
+      baseSha: s,
+      snapSha: p,
+      restorable: d.filter((e) => e.s != null).map((e) => e.path),
+      created: d.filter((e) => e.s == null && e.p != null).map((e) => e.path),
+      stat,
+    },
+  };
+}
+
 /** One-shot `git diff <fromSha>..<toSha> [-- <path>]` in `cwd`, returning
  * stdout. Tolerant like the rest of run-actions — a non-zero git exit yields
  * "" rather than throwing. The single git-diff implementation shared by the
@@ -310,7 +566,8 @@ export type DiscardResult = { ok: true; refs: string[] } | { ok: false; reason: 
 
 /** Drop a run's recoverable work — delete its `refs/fragua/{snapshots,heads}`.
  * Gated like accept (terminal + in-inbox + has-worktree); idempotent past the
- * gate — a missing ref is tolerated. */
+ * gate — a missing ref is tolerated. Never deletes `refs/fragua/bases/<id>`:
+ * after an interrupted dirty-base land it is the only restore source. */
 export async function applyDiscard(git: GitExec, gate: RunActionGate): Promise<DiscardResult> {
   const g = checkGate(gate);
   if (!g.ok) return g;

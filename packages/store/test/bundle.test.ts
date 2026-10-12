@@ -254,6 +254,35 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  test("round-trips baseHeadSha through export/import", async () => {
+    const src = freshStore();
+    const sha = await seedWorkflow(src, "a".repeat(64));
+    const runId = newRunId();
+    const s = "5".repeat(40);
+    const head = "4".repeat(40);
+    src.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id",
+      projectName: "proj",
+      baseGitSha: s,
+      baseGitRef: "main",
+      baseHeadSha: head,
+    });
+    const v = src.getState(runId)!.version;
+    src.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "work" } }], v);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const state = dst.getState(runId)!;
+    expect(state.baseHeadSha).toBe(head);
+    expect(state.baseGitSha).toBe(s);
+    dst.close();
+  });
+
   test("a cwd-less run WITHOUT the import marker is NOT flagged imported", async () => {
     // The regression guard: `imported` keys on the `imported_runs` marker, not on
     // a null cwd. A run enqueued without filesystem context (CI / API by sha) has

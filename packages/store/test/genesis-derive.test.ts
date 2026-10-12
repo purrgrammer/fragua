@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import type { RunEnqueuedPayload } from "@fragua/types";
 import {
   applyFact,
+  deriveRunState,
   EVENT_CONTRACT_VERSION,
   type FactEvent,
   genesisToInitialState,
@@ -181,6 +182,75 @@ describe("genesis derivation", () => {
     const derived = deriveFromLog(runId, store.getEvents(runId));
     expect(derived.baseGitSha).toBe(baseSha);
     expect(derived.baseGitRef).toBe("feature-x");
+    store.close();
+  });
+
+  test("baseHeadSha seeds run_state.base_head_sha and deriveRunState agrees with the live projection", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const runId = newRunId();
+    const s = "5".repeat(40);
+    const head = "4".repeat(40);
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id-1",
+      projectName: "proj",
+      baseGitSha: s,
+      baseGitRef: "main",
+      baseHeadSha: head,
+    });
+    expect(store.getState(runId)!.baseHeadSha).toBe(head);
+    const v0 = store.getState(runId)!.version;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: sha, contractVersion: EVENT_CONTRACT_VERSION, startNode: "n1", baseGitSha: s },
+        },
+      ],
+      v0,
+    );
+    const v1 = store.getState(runId)!.version;
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }], v1);
+    const v2 = store.getState(runId)!.version;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.snapshot_recorded",
+          payload: {
+            eventIdx: 4,
+            treeSha: "t".repeat(40),
+            commitSha: "p".repeat(40),
+            parentSnap: s,
+            headSha: s,
+            headRef: null,
+            diffBaseSha: s,
+            committed: null,
+            uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 },
+          },
+        },
+      ],
+      v2,
+    );
+    const live = store.getState(runId)!;
+    const derived = deriveRunState(runId, store.getEvents(runId));
+    expect(live.baseHeadSha).toBe(head);
+    expect(derived.baseHeadSha).toBe(head);
+    expect(normalize(derived)).toEqual(normalize(live));
+    store.close();
+  });
+
+  test("a run enqueued without --dirty derives baseHeadSha null", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: "/p", projectId: "x", projectName: "p" });
+    expect(store.getState(runId)!.baseHeadSha).toBeNull();
+    expect(deriveRunState(runId, store.getEvents(runId)).baseHeadSha).toBeNull();
     store.close();
   });
 

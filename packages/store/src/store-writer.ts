@@ -387,6 +387,7 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
     ...(params.title != null && params.title.length > 0 ? { title: params.title } : {}),
     ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
     ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
+    ...(params.baseHeadSha != null ? { baseHeadSha: params.baseHeadSha } : {}),
   } satisfies RunEnqueuedPayload);
   const genesisBytes = utf8ByteLength(genesisPayload);
   if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
@@ -424,6 +425,7 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
       title: params.title != null && params.title.length > 0 ? params.title : null,
       baseGitSha: params.baseGitSha ?? null,
       baseGitRef: params.baseGitRef ?? null,
+      baseHeadSha: params.baseHeadSha ?? null,
     });
 
     const seq = bumpRunSeq(ctx.db, params.runId);

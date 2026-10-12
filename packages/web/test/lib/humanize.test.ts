@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { humanizeHaltReason, humanizeNodeCompletedSuffix, humanizeRouteName } from "../../src/lib/humanize.ts";
+import {
+  humanizeHaltReason,
+  humanizeNodeCompletedSuffix,
+  humanizeOperatorActionVerb,
+  humanizeRouteName,
+} from "../../src/lib/humanize.ts";
 
 describe("humanizeHaltReason", () => {
   it("labels route_not_picked / route_call_not_isolated / edge_no_match", () => {
@@ -46,5 +51,21 @@ describe("humanizeNodeCompletedSuffix", () => {
 
   it("returns empty string for empty route string", () => {
     expect(humanizeNodeCompletedSuffix({ route: "" })).toBe("");
+  });
+});
+
+describe("humanizeOperatorActionVerb", () => {
+  it('fact.run_accepted with landedUnstaged reads "landed as unstaged changes"', () => {
+    expect(
+      humanizeOperatorActionVerb("fact.run_accepted", {
+        sha: "h",
+        replayed: 0,
+        tailStaged: false,
+        landedUnstaged: true,
+      }),
+    ).toBe("landed as unstaged changes");
+    expect(humanizeOperatorActionVerb("fact.run_accepted", { sha: "t", replayed: 2, tailStaged: true })).toBe(
+      "accepted (replayed 2)",
+    );
   });
 });

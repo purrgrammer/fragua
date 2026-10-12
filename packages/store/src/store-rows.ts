@@ -92,6 +92,7 @@ export function rowToRunState(row: RunStateRow): RunState {
     title: row.title,
     baseGitSha: row.base_git_sha,
     baseGitRef: row.base_git_ref,
+    baseHeadSha: row.base_head_sha ?? null,
     finalGitSha: row.final_git_sha,
     finalHeadRef: row.final_head_ref,
     diffBaseSha: row.diff_base_sha,

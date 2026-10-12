@@ -96,8 +96,12 @@ function RunActionsInner({
 
   const acceptM = useMutation({
     mutationFn: () => acceptRun(row.runId),
-    onSuccess: () => {
-      toast.success("Accepted — replayed onto your branch; tail staged to commit");
+    onSuccess: (res) => {
+      toast.success(
+        res.landedUnstaged === true
+          ? "Accepted — landed as unstaged changes"
+          : "Accepted — replayed onto your branch; tail staged to commit",
+      );
       setOpenAction(null);
       invalidateInboxDeferred();
     },

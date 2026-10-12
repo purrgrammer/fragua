@@ -5,7 +5,7 @@
 
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { migrate, verifySchema } from "../src/migrations.ts";
+import { migrate, migrateTo, planMigration, verifySchema } from "../src/migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "../src/pragmas.ts";
 
 function freshDb(): Database {
@@ -88,6 +88,27 @@ describe("migrate — schema version handling", () => {
     // The row's value survived the rename under the new column name.
     const row = db.query<{ title: string }, []>("SELECT title FROM schedules WHERE id = 's1'").get();
     expect(row?.title).toBe("nightly dep sweep");
+    db.close();
+  });
+});
+
+describe("v5 ↔ v6 — run_state.base_head_sha", () => {
+  const cols = (db: Database) =>
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(run_state)")
+      .all()
+      .map((c) => c.name);
+
+  test("v5 → v6 adds run_state.base_head_sha; down drops it (lossy)", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(cols(db)).toContain("base_head_sha");
+    expect(planMigration(6, 5).steps).toEqual([{ version: 6, class: "lossy" }]);
+    expect(() => migrateTo(db, 5)).toThrow();
+    migrateTo(db, 5, { allowDataLoss: true });
+    expect(cols(db)).not.toContain("base_head_sha");
+    migrate(db);
+    expect(cols(db)).toContain("base_head_sha");
     db.close();
   });
 });

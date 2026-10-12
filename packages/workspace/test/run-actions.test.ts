@@ -4,7 +4,8 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pinDirtyBaseRef, prepareDirtyBase } from "../src/capture.ts";
 import {
   applyAccept,
   applyDiscard,
@@ -103,6 +104,8 @@ const gate = (cwd: string, baseGitSha: string): RunActionGate => ({
   inboxStatus: "pending",
   cwd,
   baseGitSha,
+  baseHeadSha: null,
+  diffBaseSha: baseGitSha,
 });
 
 describe("applyAccept", () => {
@@ -689,5 +692,214 @@ describe("resolveBaseRef", () => {
     dirs.push(cwd);
     const r = await resolveBaseRef(git, cwd, "main");
     expect(r.ok).toBe(false);
+  });
+});
+
+// ── dirty-base accept ──────────────────────────────────────────────────────
+
+const FRAGUA_BLOCK = ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n";
+
+function gitEnv(cwd: string, args: string[], env: Record<string, string>): string {
+  const r = Bun.spawnSync({
+    cmd: ["git", ...args],
+    cwd,
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
+  return r.stdout.toString().trim();
+}
+
+/** Operator repo with committed files, an operator WIP (f.txt edited, u.txt
+ * untracked), and S captured over it. `extra` runs before the base commit. */
+async function setupDirty(extra?: (cwd: string) => Promise<void>): Promise<{ cwd: string; head: string; s: string }> {
+  const cwd = mkdtempSync(join(tmpdir(), "ra-dirty-"));
+  dirs.push(cwd);
+  await must(cwd, ["init", "-q", "-b", "main"]);
+  await must(cwd, ["config", "user.name", "Operator"]);
+  await must(cwd, ["config", "user.email", "op@ex"]);
+  await must(cwd, ["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(cwd, ".gitignore"), `${FRAGUA_BLOCK}.env\n`);
+  writeFileSync(join(cwd, "f.txt"), lines());
+  writeFileSync(join(cwd, "a.txt"), "a\n");
+  mkdirSync(join(cwd, "dir"));
+  writeFileSync(join(cwd, "dir", "x.txt"), "x\n");
+  if (extra) await extra(cwd);
+  await must(cwd, ["add", "-A"]);
+  await must(cwd, ["commit", "-qm", "base"]);
+  const head = await must(cwd, ["rev-parse", "HEAD"]);
+  writeFileSync(join(cwd, "f.txt"), lines().replace("L01\n", "L01-WIP\n"));
+  writeFileSync(join(cwd, "u.txt"), "untracked wip\n");
+  const r = await prepareDirtyBase(git, cwd);
+  if (!r.ok || r.clean) throw new Error("expected a dirty base");
+  await pinDirtyBaseRef(cwd, RUN, r.baseGitSha);
+  return { cwd, head, s: r.baseGitSha };
+}
+
+/** Run the "agent" in a worktree at S, then record P under snapshots/<RUN>. */
+async function makeDirtyRun(cwd: string, s: string, work: (wt: string) => void): Promise<string> {
+  const wt = mkdtempSync(join(tmpdir(), "ra-dwt-"));
+  dirs.push(wt);
+  await must(cwd, ["worktree", "add", "-q", "--detach", wt, s]);
+  work(wt);
+  await must(wt, ["add", "-A"]);
+  const tree = await must(wt, ["write-tree"]);
+  const p = await must(cwd, ["commit-tree", tree, "-p", s, "-m", "fragua-snap"]);
+  await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, p]);
+  await must(cwd, ["worktree", "remove", "--force", wt]);
+  return p;
+}
+
+const dirtyGate = (cwd: string, s: string, head: string): RunActionGate => ({
+  ...gate(cwd, s),
+  baseHeadSha: head,
+  diffBaseSha: s,
+});
+
+const read = (cwd: string, p: string) => readFileSync(join(cwd, p), "utf8");
+
+describe("applyAccept dirty base", () => {
+  test("lands unstaged and leaves index and HEAD alone", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => {
+      writeFileSync(join(wt, "f.txt"), lines().replace("L01\n", "L01-WIP\n").replace("L05\n", "L05-RUN\n"));
+      writeFileSync(join(wt, "new.txt"), "created by run\n");
+    });
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (!r.ok) throw new Error(`${r.reason}: ${r.detail}`);
+    expect(r).toMatchObject({ sha: head, replayed: 0, tailStaged: false, landedUnstaged: true });
+    expect(r.land?.created).toEqual(["new.txt"]);
+    expect(r.land?.restorable).toEqual(["f.txt"]);
+    expect(read(cwd, "f.txt")).toContain("L05-RUN");
+    expect(read(cwd, "f.txt")).toContain("L01-WIP");
+    expect(read(cwd, "new.txt")).toBe("created by run\n");
+    expect(await staged(cwd)).toBe("");
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(head);
+    expect(read(cwd, "u.txt")).toBe("untracked wip\n");
+  });
+
+  test("refuses checkout_moved when HEAD moved", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    await must(cwd, ["commit", "-q", "--allow-empty", "-m", "operator moves on"]);
+    const moved = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("checkout_moved");
+    expect(r.detail).toContain(moved.slice(0, 7));
+    expect(r.detail).toContain(`refs/fragua/bases/${RUN}`);
+    expect(r.detail).toContain(`${s.slice(0, 7)}→`);
+    expect(read(cwd, "a.txt")).toBe("a\n");
+  });
+
+  test("refuses checkout_moved when a changed path moved", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    writeFileSync(join(cwd, "a.txt"), "operator edit\n");
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("checkout_moved");
+    expect(r.detail).toContain("a.txt");
+    expect(read(cwd, "a.txt")).toBe("operator edit\n");
+  });
+
+  test("an operator edit outside D survives the land", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    writeFileSync(join(cwd, "u.txt"), "edited after capture\n");
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (!r.ok) throw new Error(`${r.reason}: ${r.detail}`);
+    expect(read(cwd, "a.txt")).toBe("run\n");
+    expect(read(cwd, "u.txt")).toBe("edited after capture\n");
+  });
+
+  test("refuses checkout_unsafe_path for an un-ignored .env the run also wrote", async () => {
+    const { cwd, head, s } = await setupDirty();
+    writeFileSync(join(cwd, ".env"), "OPERATOR_SECRET=1\n");
+    await makeDirtyRun(cwd, s, (wt) => {
+      writeFileSync(join(wt, ".gitignore"), FRAGUA_BLOCK);
+      writeFileSync(join(wt, ".env"), "RUN=1\n");
+    });
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("checkout_unsafe_path");
+    expect(r.detail).toContain(".env");
+    expect(read(cwd, ".env")).toBe("OPERATOR_SECRET=1\n");
+    expect(read(cwd, ".gitignore")).toContain(".env");
+  });
+
+  test("refuses checkout_unsafe_path for a deleted submodule gitlink", async () => {
+    const { cwd, head, s } = await setupDirty(async (c) => {
+      const sub = join(c, "sub");
+      mkdirSync(sub);
+      await must(sub, ["init", "-q"]);
+      writeFileSync(join(sub, "s.txt"), "s\n");
+      await must(sub, ["add", "-A"]);
+      await must(sub, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sub"]);
+    });
+    expect(await must(cwd, ["ls-tree", s, "sub"])).toContain("160000");
+    const idx = join(mkdtempSync(join(tmpdir(), "ra-idx-")), "index");
+    dirs.push(dirname(idx));
+    gitEnv(cwd, ["read-tree", s], { GIT_INDEX_FILE: idx });
+    gitEnv(cwd, ["update-index", "--force-remove", "sub"], { GIT_INDEX_FILE: idx });
+    const tree = gitEnv(cwd, ["write-tree"], { GIT_INDEX_FILE: idx });
+    const p = await must(cwd, ["commit-tree", tree, "-p", s, "-m", "fragua-snap"]);
+    await must(cwd, ["update-ref", `refs/fragua/snapshots/${RUN}`, p]);
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("checkout_unsafe_path");
+    expect(r.detail).toContain("sub");
+    expect(existsSync(join(cwd, "sub", ".git"))).toBe(true);
+  });
+
+  test("refuses checkout_unsafe_path for a changed .gitattributes", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, ".gitattributes"), "* text=auto\n"));
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("checkout_unsafe_path");
+    expect(existsSync(join(cwd, ".gitattributes"))).toBe(false);
+  });
+
+  test("refuses relocated_base when diffBaseSha ≠ baseGitSha", async () => {
+    const { cwd, head, s } = await setupDirty();
+    const p = await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    const r = await applyAccept(git, { ...dirtyGate(cwd, s, head), diffBaseSha: head });
+    if (r.ok) throw new Error("expected refusal");
+    expect(r.reason).toBe("relocated_base");
+    expect(r.detail).toContain(`git diff ${s} ${p}`);
+  });
+
+  test("removes only D paths P lacks and prunes emptied dirs", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => rmSync(join(wt, "dir"), { recursive: true }));
+    mkdirSync(join(cwd, "other"));
+    writeFileSync(join(cwd, "other", "keep.txt"), "keep\n");
+    const r = await applyAccept(git, dirtyGate(cwd, s, head));
+    if (!r.ok) throw new Error(`${r.reason}: ${r.detail}`);
+    expect(existsSync(join(cwd, "dir"))).toBe(false);
+    expect(read(cwd, "other/keep.txt")).toBe("keep\n");
+    expect(read(cwd, "a.txt")).toBe("a\n");
+  });
+
+  test("ignores autostash", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    const r = await applyAccept(git, dirtyGate(cwd, s, head), { autostash: true });
+    if (!r.ok) throw new Error(`${r.reason}: ${r.detail}`);
+    expect((await git(cwd, ["rev-parse", "--verify", "--quiet", "refs/stash"])).exitCode).not.toBe(0);
+    expect(read(cwd, "a.txt")).toBe("run\n");
+  });
+});
+
+describe("applyDiscard dirty base", () => {
+  test("keeps refs/fragua/bases/<id>", async () => {
+    const { cwd, head, s } = await setupDirty();
+    await makeDirtyRun(cwd, s, (wt) => writeFileSync(join(wt, "a.txt"), "run\n"));
+    const r = await applyDiscard(git, dirtyGate(cwd, s, head));
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.refs).toEqual([`refs/fragua/snapshots/${RUN}`]);
+    expect(await must(cwd, ["rev-parse", `refs/fragua/bases/${RUN}`])).toBe(s);
   });
 });

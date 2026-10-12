@@ -415,6 +415,18 @@ const DetailHeader = memo(function DetailHeader({
             </span>
           </>
         )}
+        {detail?.baseHeadSha && (
+          <>
+            <span className="text-xs text-sw-muted/40">·</span>
+            <span
+              data-testid="detail-dirty-base"
+              className="font-mono text-xs text-sw-muted"
+              title={`synthetic base captured from your uncommitted tree over ${detail.baseHeadSha}`}
+            >
+              dirty base over {detail.baseHeadSha.slice(0, 7)}
+            </span>
+          </>
+        )}
         {showLive && (
           <>
             <span className="text-xs text-sw-muted/40">·</span>

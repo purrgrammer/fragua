@@ -205,6 +205,10 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta | null {
     if (fromStatus === "paused") return { ...base, verb: "retrying" };
     if (fromStatus === "paused_auto") return { ...base, verb: "retrying" };
   }
+  if (event.type === "fact.run_accepted") {
+    const landedUnstaged = (event.payload as { landedUnstaged?: unknown } | null)?.landedUnstaged;
+    if (landedUnstaged === true) return { ...base, verb: "landed as unstaged changes" };
+  }
   // Operator-action facts: short single verb (git-centric row).
   const opShortVerb = humanizeOperatorActionShortVerb(event.type);
   if (opShortVerb !== null) return { ...base, verb: opShortVerb };

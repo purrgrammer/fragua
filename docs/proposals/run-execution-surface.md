@@ -10,6 +10,11 @@ maturity: draft
 > **Status: draft, panel did not converge.** The v1 cut below is what gets built;
 > the flag is spelled `--checkout <path>` in the implementation, not `--worktree`.
 >
+> **Landed: deliverable 2 (`--dirty`, §3).** `captureTree`, `fragua run --dirty`,
+> `run_state.base_head_sha` (contract v7, schema v6) and the reduced dirty-base
+> accept are implemented. The checkout mode (§4) is next; this proposal stays open
+> until it lands.
+>
 > **v1 cut.** Build §2, §3 and §4 with three reductions, and §5 as-is: (1) no lane —
 > a second checkout or dirty run on a held checkout is refused at enqueue with
 > `checkout_busy`, so `checkout_seq`, the claim predicate, `waitingOn` and the

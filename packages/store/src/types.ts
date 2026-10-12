@@ -235,6 +235,10 @@ export interface RunState {
    * `null` when the source checkout is detached / on a tag / unborn, or for
    * runs without a provisioner. */
   baseGitRef: string | null;
+  /** The operator HEAD a `--dirty` run's synthetic `baseGitSha` was captured
+   * over (`baseGitSha^`). Non-null marks a dirty-base run; seeded from the
+   * genesis payload and immutable after enqueue. */
+  baseHeadSha: string | null;
   /** Worktree snapshot + inbox projection, written by the terminal
    * `fact.snapshot_recorded`. All `null` while the run is live and for
    * bare-cwd runs. `finalGitSha` / `finalHeadRef` = worktree HEAD + its
@@ -622,6 +626,9 @@ export interface EnqueueRunParams {
   /** The `--base` ref as typed (branch/tag/sha). Seeds
    * `run_state.base_git_ref`; the human label for `baseGitSha`. */
   baseGitRef?: string;
+  /** `fragua run --dirty`: the operator HEAD the synthetic `baseGitSha` was
+   * captured over. Seeds `run_state.base_head_sha`. */
+  baseHeadSha?: string;
 }
 
 export interface GetEventsOpts {

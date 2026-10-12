@@ -29,6 +29,7 @@ function runningState(): RunState {
     title: null,
     baseGitSha: null,
     baseGitRef: null,
+    baseHeadSha: null,
     finalGitSha: null,
     finalHeadRef: null,
     diffBaseSha: null,

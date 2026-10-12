@@ -74,12 +74,14 @@ export function humanizeOperatorActionShortVerb(type: string): "accepted" | "dis
 /** Build a short feed verb for the post-terminal operator-action facts.
  *  Returns `null` for any other event type.
  *
- *  - fact.run_accepted  → "accepted (replayed N)"
+ *  - fact.run_accepted  → "accepted (replayed N)", or "landed as unstaged
+ *    changes" for a dirty-base land
  *  - fact.run_discarded → "discarded"
  */
 export function humanizeOperatorActionVerb(type: string, payload: Record<string, unknown>): string | null {
   switch (type) {
     case "fact.run_accepted": {
+      if (payload["landedUnstaged"] === true) return "landed as unstaged changes";
       const replayed = typeof payload["replayed"] === "number" ? payload["replayed"] : 0;
       return replayed > 0 ? `accepted (replayed ${replayed})` : "accepted";
     }

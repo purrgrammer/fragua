@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,9 +52,20 @@ describe("captureSnapshot", () => {
     // tip ref points at the snapshot commit; no heads ref since HEAD == base.
     expect(g(repo, "rev-parse", "refs/fragua/snapshots/r1")).toBe(res.commitSha);
     expect(gStatus(repo, "rev-parse", "--verify", "refs/fragua/heads/r1")).not.toBe(0);
-    // real index + HEAD untouched, sentinel cleaned up.
+    // real index + HEAD untouched.
     expect(g(repo, "rev-parse", "HEAD")).toBe(base);
-    expect(gStatus(repo, "cat-file", "-e", ":fragua-index")).not.toBe(0);
+  });
+
+  test("uses a per-call sentinel and leaves no fragua-index-* behind", async () => {
+    const base = g(repo, "rev-parse", "HEAD");
+    await writeFile(join(repo, "b.txt"), "B\n");
+    expectSnapshot(
+      await captureSnapshot({ worktree: repo, runId: "r1", baseGitSha: base, parentSnap: base, boundary: "step" }),
+    );
+    expectSnapshot(
+      await captureSnapshot({ worktree: repo, runId: "r1", baseGitSha: base, parentSnap: base, boundary: "terminal" }),
+    );
+    expect(readdirSync(join(repo, ".git")).filter((f) => f.startsWith("fragua-index"))).toEqual([]);
   });
 
   test("uncommitted dirt → uncommitted delta; snapshot tree captures untracked files", async () => {

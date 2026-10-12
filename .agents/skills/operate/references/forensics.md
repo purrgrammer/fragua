@@ -135,7 +135,8 @@ Authoritative source: `FactEvent` union in `packages/types/src/fragua-events.ts`
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep recovered a run that was `running` when the prior daemon died. The reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs`. |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (30s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
-| `fact.run_discarded` | `refs[]` | Operator (`fragua runs discard`): deleted the run's `refs/fragua/{snapshots,heads}/<id>`. Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
+| `fact.run_accepted` | `sha`, `replayed`, `tailStaged`, `landedUnstaged?` | Operator (`fragua runs accept`) landed the run. `landedUnstaged: true` = a `--dirty` run written as unstaged changes (HEAD/index untouched; `sha` = HEAD at accept). Inbox `pending → acted`. |
+| `fact.run_discarded` | `refs[]` | Operator (`fragua runs discard`): deleted the run's `refs/fragua/{snapshots,heads}/<id>` (never `bases/<id>`). Inbox `pending → discarded`. Now in `FEED_EVENT_KINDS`. |
 | `fact.snapshot_recorded` | `eventIdx`, `treeSha`, `commitSha`, `parentSnap`, `headSha`, `headRef`, `diffBaseSha`, `committed`, `uncommitted` | Terminal worktree snapshot (`docs/execution-model.md` §3–§4). Once per worktree-backed run, after the terminal status fact; projects `change_stat` / `inbox_status` / `final_*`. Per-step + HITL snapshots are the `snapshot.captured` observability event (no fact). |
 
 ---
@@ -274,6 +275,10 @@ The "resolve via" / "raise via" actions are operator intents — write them with
 | `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (30s) without respecting `ctx.signal`. Handler bug. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (`fragua doctor`, §1). |
 | Status `paused_auto`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (`fragua doctor`, §1). |
+| `fragua runs accept` exits 1 `[relocated_base]` | dirty-base run | The run moved its own HEAD off its synthetic base S, so S→P is not the range `runs diff` showed. Nothing was written. Land by hand from the printed `git diff <S> <P>`; S is at `refs/fragua/bases/<id>`. |
+| `fragua runs accept` exits 1 `[checkout_moved]` | dirty-base run | The operator's HEAD is no longer the commit the run was captured over (`runs status` → `dirty base over …`), or a path the run changed no longer holds its captured content. Nothing was written. Restore the listed paths from `refs/fragua/bases/<id>` (or check out the captured HEAD) and retry. |
+| `fragua runs accept` exits 1 `[checkout_unsafe_path]` | dirty-base run | The run changed a gitlink (submodule), a fragua state path, or a `.gitattributes`, or wrote a path the capture never saw that now holds something on disk (typically an ignored `.env`). Nothing was written; land those paths by hand from `git diff <S> <P>`. |
+| `fragua runs accept` exits 1 `[conflict]` naming `refs/fragua/bases/<id>` | dirty-base run | The land stopped part-way (git or filesystem error). Some paths may hold the run's content; restore them with `git restore --source=<S> --worktree -- <paths>` from `refs/fragua/bases/<id>`. No intent was recorded, so the run stays in the inbox. |
 
 ---
 

@@ -225,9 +225,10 @@ async function ensureRunEnv(deps: RunDeps, ts: RunTurnState, runState: RunState)
   const opts = deps.opts;
   if (!(opts.provisioner && ts.runEnv === undefined)) return undefined;
   try {
-    const provisionOpts: { cwd?: string; baseRef?: string } = {};
+    const provisionOpts: { cwd?: string; baseRef?: string; dirtyBase?: boolean } = {};
     if (runState.cwd != null) provisionOpts.cwd = runState.cwd;
     if (runState.baseGitSha != null) provisionOpts.baseRef = runState.baseGitSha;
+    if (runState.baseHeadSha != null) provisionOpts.dirtyBase = true;
     const alreadyProvisioned = opts.provisioner.envFor(deps.runId) !== undefined;
     ts.runEnv = await opts.provisioner.ensure(deps.runId, provisionOpts);
     if (!alreadyProvisioned) {

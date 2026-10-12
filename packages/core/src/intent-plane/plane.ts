@@ -98,8 +98,12 @@ export interface EnqueueInput {
    * Carried onto the genesis payload + `run_state.base_git_sha`; the provisioner
    * provisions the worktree detached at this sha. */
   baseGitSha?: string | undefined;
-  /** The `--base` ref as typed (branch/tag/sha) — human label for `baseGitSha`. */
+  /** The `--base` ref as typed (branch/tag/sha) — human label for `baseGitSha`.
+   * For `--dirty`, the operator's branch at capture. */
   baseGitRef?: string | undefined;
+  /** `--dirty`: the operator HEAD the synthetic `baseGitSha` was captured over.
+   * Carried onto the genesis payload + `run_state.base_head_sha`. */
+  baseHeadSha?: string | undefined;
 }
 
 export type EnqueueBuild =
@@ -198,7 +202,12 @@ export interface IntentPlane {
   /** Record a completed local accept (the git already ran in `@fragua/workspace`;
    * this only constructs the intent the daemon folds into `fact.run_accepted`).
    * Pure — no validation, the inputs come from a typed workspace result. */
-  buildAcceptRun(result: { sha: string; replayed: number; tailStaged: boolean }): IntentOf<"intent.accept_run">;
+  buildAcceptRun(result: {
+    sha: string;
+    replayed: number;
+    tailStaged: boolean;
+    landedUnstaged?: true;
+  }): IntentOf<"intent.accept_run">;
   /** Record a completed local discard (refs already deleted). Pure. */
   buildDiscardRun(result: { refs: string[] }): IntentOf<"intent.discard_run">;
   /** Workflow-identity mint (parse + hash + serialize IR). Pure. */
@@ -309,7 +318,12 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
     buildAcceptRun(result) {
       return {
         type: "intent.accept_run",
-        payload: { sha: result.sha, replayed: result.replayed, tailStaged: result.tailStaged },
+        payload: {
+          sha: result.sha,
+          replayed: result.replayed,
+          tailStaged: result.tailStaged,
+          ...(result.landedUnstaged === true ? { landedUnstaged: true as const } : {}),
+        },
       };
     },
     buildDiscardRun(result) {
@@ -409,6 +423,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.baseGitSha !== undefined ? { baseGitSha: input.baseGitSha } : {}),
         ...(input.baseGitRef !== undefined ? { baseGitRef: input.baseGitRef } : {}),
+        ...(input.baseHeadSha !== undefined ? { baseHeadSha: input.baseHeadSha } : {}),
       };
       return { ok: true, runId, params };
     },

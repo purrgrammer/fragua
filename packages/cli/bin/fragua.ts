@@ -559,6 +559,10 @@ cli
     "--base <ref>",
     "Pin the worktree base to this branch/tag/sha, resolved to a sha at enqueue (default: cwd HEAD at provision)",
   )
+  .option(
+    "--dirty",
+    "Base the run on your uncommitted working tree (captured now into a synthetic commit; untracked files included, ignored files excluded). Cannot combine with --base.",
+  )
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
   .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
@@ -591,6 +595,7 @@ cli
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
       ...(pick("base") !== undefined ? { base: pick("base")! } : {}),
+      ...(options["dirty"] === true ? { dirty: true } : {}),
       ...(pick("inputJson") !== undefined ? { inputJson: pick("inputJson")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
@@ -681,6 +686,7 @@ function runsHelp(): void {
 
   Disposition (terminal runs with recoverable work):
     accept  <id> [--autostash]        replay the run's commits onto your branch + stage the tail to commit
+                                      (a --dirty run lands as unstaged changes instead; --autostash ignored)
     discard <id>                      drop the run's fragua refs
     diff    <id> [--against <ref>] [--snap <idx>] [--path <p>]  print the snapshot diff
 

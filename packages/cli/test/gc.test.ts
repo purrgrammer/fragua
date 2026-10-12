@@ -156,6 +156,15 @@ describe("fragua gc --snapshots", () => {
     expect(refExists(cwd, "refs/fragua/heads/old-run")).toBe(false);
   });
 
+  test("reclaims refs/fragua/bases/<id> with the run's other refs", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "old-run", ageMs: 60 * 24 * 60 * 60 * 1000 });
+    git(cwd, "update-ref", "refs/fragua/bases/old-run", git(cwd, "rev-parse", "HEAD"));
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(refExists(cwd, "refs/fragua/bases/old-run")).toBe(false);
+    expect(refExists(cwd, "refs/fragua/snapshots/old-run")).toBe(false);
+  });
+
   test("refs inside the retention window survive", async () => {
     const cwd = makeRepoWithSnapshotRun({ runId: "fresh-run", ageMs: 1 * 24 * 60 * 60 * 1000 });
     const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });

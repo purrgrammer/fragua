@@ -10,13 +10,14 @@
 // short-circuits before opening the store.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import type { RunSnapshotReader } from "@fragua/server";
 import { createServer } from "@fragua/server";
 import { type IEventStore, RUN_STATUSES, SqliteStore } from "@fragua/store";
+import { defaultGitExec, pinDirtyBaseRef, prepareDirtyBase } from "@fragua/workspace";
 import { doctorCommand } from "../src/commands/doctor.ts";
 import {
   acceptCommand,
@@ -246,6 +247,137 @@ describe("fragua operator verbs", () => {
   test("accept: unknown run → exit 1", async () => {
     const code = await acceptCommand({ runId: "nope", dbPath: r.dbPath });
     expect(code).toBe(1);
+  });
+
+  // ─── accept: dirty-base land (real git — the success line + undo recipe)
+
+  function gitIn(cwd: string, args: string[]): string {
+    const res = Bun.spawnSync({
+      cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (res.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr.toString()}`);
+    return res.stdout.toString().trim();
+  }
+
+  /** A real repo with a captured dirty base S and a run snapshot P that edits
+   * a.txt and creates new.txt, plus a store run pointing at it. */
+  async function seedDirtyRun(runId: string): Promise<{ repo: string; s: string; head: string }> {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-op-dirty-"));
+    gitIn(repo, ["init", "-q", "-b", "main"]);
+    writeFileSync(
+      join(repo, ".gitignore"),
+      ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n",
+    );
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    gitIn(repo, ["add", "-A"]);
+    gitIn(repo, ["commit", "-q", "-m", "base"]);
+    const head = gitIn(repo, ["rev-parse", "HEAD"]);
+    writeFileSync(join(repo, "wip.txt"), "wip\n");
+    const d = await prepareDirtyBase(defaultGitExec, repo);
+    if (!d.ok || d.clean) throw new Error("expected a dirty base");
+    const s = d.baseGitSha;
+    await pinDirtyBaseRef(repo, runId, s);
+    const wt = join(repo, ".fragua", "worktrees", runId);
+    mkdirSync(join(repo, ".fragua", "worktrees"), { recursive: true });
+    gitIn(repo, ["worktree", "add", "-q", "--detach", wt, s]);
+    writeFileSync(join(wt, "a.txt"), "a run\n");
+    writeFileSync(join(wt, "new.txt"), "new\n");
+    gitIn(wt, ["add", "-A"]);
+    const p = gitIn(repo, ["commit-tree", gitIn(wt, ["write-tree"]), "-p", s, "-m", "snap"]);
+    gitIn(repo, ["update-ref", `refs/fragua/snapshots/${runId}`, p]);
+    gitIn(repo, ["worktree", "remove", "--force", wt]);
+
+    r.store.enqueueRun({ runId, workflowSha: "wf", cwd: repo, baseGitSha: s, baseGitRef: "main", baseHeadSha: head });
+    const s0 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1", baseGitSha: s },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+      s1.version,
+    );
+    const s2 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.snapshot_recorded",
+          payload: {
+            eventIdx: 3,
+            treeSha: "t".repeat(40),
+            commitSha: p,
+            parentSnap: s,
+            headSha: s,
+            headRef: null,
+            diffBaseSha: s,
+            committed: null,
+            uncommitted: { filesChanged: 2, insertions: 2, deletions: 1 },
+          },
+        },
+      ],
+      s2.version,
+    );
+    return { repo, s, head };
+  }
+
+  test("accept: dirty-base accept prints the unstaged land + undo recipe, and the autostash note", async () => {
+    const { repo, s, head } = await seedDirtyRun("rdirty");
+    try {
+      const logs: string[] = [];
+      const warns: string[] = [];
+      (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+      spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        logs.push(a.join(" "));
+      });
+      spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+        warns.push(a.join(" "));
+      });
+      const code = await acceptCommand({ runId: "rdirty", dbPath: r.dbPath, autostash: true });
+      expect(code).toBe(0);
+      const out = logs.join("\n");
+      expect(out).toContain(`landed as unstaged changes in ${repo}: 2 files`);
+      expect(out).toContain(`undo: git restore --source=${s.slice(0, 7)} --worktree -- a.txt`);
+      expect(out).toContain("plus delete: new.txt");
+      expect(warns.join("\n")).toContain("--autostash is ignored for a dirty-base run");
+      const intent = r.store
+        .getEvents("rdirty")
+        .filter((e) => e.type === "intent.accept_run")
+        .at(-1);
+      expect(intent?.payload).toEqual({ sha: head, replayed: 0, tailStaged: false, landedUnstaged: true });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("status: prints dirty base over <short>", async () => {
+    r.store.enqueueRun({
+      runId: "rdb",
+      workflowSha: "wf",
+      cwd: "/tmp/repo",
+      baseGitSha: "5".repeat(40),
+      baseGitRef: "main",
+      baseHeadSha: "abc1234".padEnd(40, "0"),
+    });
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rdb", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("dirty base over abc1234");
   });
 
   // ─── status / tail (read verbs)
