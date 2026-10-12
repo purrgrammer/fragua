@@ -53,6 +53,14 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
+  test("forwards engineEnv to the inner LocalEnvironment exec", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "wt-1", engineEnv: { FRAGUA_RUN_ID: "wt-1" } });
+    await env.init();
+    const r = await env.exec('printf %s "$FRAGUA_RUN_ID"');
+    expect(r.stdout).toBe("wt-1");
+    await env.dispose();
+  });
+
   test("init records baseGitRef = null when the source repo is on a detached HEAD", async () => {
     spawnSync("git", ["-C", repo, "checkout", "--detach", "HEAD"], { encoding: "utf8" });
     const env = new WorktreeEnvironment({ repoRoot: repo, runId: "detached-run" });

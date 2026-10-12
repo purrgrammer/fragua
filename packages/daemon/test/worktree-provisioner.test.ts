@@ -263,6 +263,38 @@ describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
     }
   });
 
+  test("non-git run cwd → LocalEnvironment exec sees FRAGUA_RUN_ID", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "fragua-prov-runid-"));
+    try {
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-env", { cwd: nonGit });
+      const r = await env.exec('printf %s "$FRAGUA_RUN_ID"');
+      expect(r.stdout).toBe("r-env");
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+
+  test("git run cwd → WorktreeEnvironment exec sees FRAGUA_RUN_ID", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-prov-git-runid-"));
+    try {
+      const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo });
+      if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
+      Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+        cwd: repo,
+      });
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-git-env", { cwd: repo });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      const r = await env.exec('printf %s "$FRAGUA_RUN_ID"');
+      expect(r.stdout).toBe("r-git-env");
+      await p.dispose("r-git-env");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("two non-git runs from different cwds → distinct envs at their own cwds", async () => {
     const a = mkdtempSync(join(tmpdir(), "fragua-prov-a-"));
     const b = mkdtempSync(join(tmpdir(), "fragua-prov-b-"));

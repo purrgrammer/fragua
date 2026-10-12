@@ -63,9 +63,10 @@ const CD_ESCAPE_PATTERN = /\bcd\s+(['"]?)(\/[^\s'"&;|()]+)\1/g;
  *  repo's own workflows shell out to (`git`, `gh`, `bun`, coreutils) need to
  *  function; `HOME` in particular anchors `git`/`gh` credential-helper and
  *  config lookup. `LC_*` locale vars are admitted by prefix in
- *  {@link isBaselineEnvAllowed}. Engine vars (`FRAGUA_OUTPUT`, …) are NOT
- *  admitted by an ambient prefix — the engine injects them per-step through
- *  `opts.env`, which wins over the allow-list at spawn time. */
+ *  {@link isBaselineEnvAllowed}. Engine vars (`FRAGUA_RUN_ID`, `FRAGUA_OUTPUT`)
+ *  are NOT admitted by an ambient prefix — the engine injects them through
+ *  `engineEnv` (run-scoped) and `opts.env` (per-exec), both applied over the
+ *  allow-list at spawn time. */
 export const BASELINE_ENV_ALLOW: ReadonlySet<string> = new Set([
   "PATH",
   "HOME",
@@ -79,8 +80,8 @@ export const BASELINE_ENV_ALLOW: ReadonlySet<string> = new Set([
 /** True when `name` is in the built-in baseline allow-list — an exact
  *  {@link BASELINE_ENV_ALLOW} member or an `LC_*` locale var. The floor beneath
  *  every operator/CI allow-list. An ambient `FRAGUA_*` var is NOT admitted here:
- *  engine-set vars reach the subprocess via `opts.env` (applied after this
- *  filter), and admitting arbitrary ambient `FRAGUA_*` names was a leak surface
+ *  engine-set vars reach the subprocess via `engineEnv` / `opts.env` (applied
+ *  after this filter), and admitting arbitrary ambient `FRAGUA_*` names was a leak surface
  *  under the single-user threat model. */
 export function isBaselineEnvAllowed(name: string): boolean {
   return BASELINE_ENV_ALLOW.has(name) || name.startsWith("LC_");
@@ -108,6 +109,10 @@ export interface LocalEnvironmentOptions {
    * {@link envAllowNames} set for a rule that can't be enumerated ahead of time.
    * The baseline and `envAllowNames` are checked first. */
   envAllowPredicate?: (name: string) => boolean;
+  /** Engine-set, run-scoped vars (e.g. `FRAGUA_RUN_ID`) applied on every `exec`
+   * AFTER the allow-list filter — so the deny-by-default policy never strips
+   * them — and BENEATH per-exec `opts.env`, which wins on a shared key. */
+  engineEnv?: Readonly<Record<string, string>>;
 }
 
 /** Walk up `absolutePath` until a path component exists on disk, realpath
@@ -136,6 +141,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
   private readonly extraBlocked: string[];
   private readonly envAllowNames: ReadonlySet<string> | undefined;
   private readonly envAllowPredicate: ((name: string) => boolean) | undefined;
+  private readonly engineEnv: Readonly<Record<string, string>> | undefined;
 
   constructor(opts: LocalEnvironmentOptions = {}) {
     this._cwd = resolve(opts.cwd ?? process.cwd());
@@ -143,6 +149,7 @@ export class LocalEnvironment implements ExecutionEnvironment {
     this.extraBlocked = opts.extraBlockedPatterns ?? [];
     if (opts.envAllowNames !== undefined) this.envAllowNames = opts.envAllowNames;
     if (opts.envAllowPredicate !== undefined) this.envAllowPredicate = opts.envAllowPredicate;
+    if (opts.engineEnv !== undefined) this.engineEnv = opts.engineEnv;
   }
 
   /** Memoised realpath(_cwd). Computed lazily because WorktreeEnvironment
@@ -335,9 +342,11 @@ export class LocalEnvironment implements ExecutionEnvironment {
               merged[name] = value;
             }
           }
-          // Engine-set vars (e.g. FRAGUA_OUTPUT) always pass — they are supplied
-          // by the handler through opts.env, not inherited from the ambient env,
-          // and this assignment wins over the allow-list filter above.
+          // Engine-set vars always pass — they are supplied by the engine, not
+          // inherited from the ambient env, so they land after the allow-list
+          // filter. Run-scoped engineEnv (FRAGUA_RUN_ID) first, then per-exec
+          // opts.env (FRAGUA_OUTPUT), which wins on a shared key.
+          if (this.engineEnv !== undefined) Object.assign(merged, this.engineEnv);
           Object.assign(merged, opts.env);
           return merged as NodeJS.ProcessEnv;
         })(),

@@ -235,6 +235,8 @@ Scope a thread to the steps that genuinely converse (e.g. `plan ↔ implement �
 
 Many steps need no upstream artifact — they re-derive from git / fs / a script. Say so in the prompt ("Fresh thread — read state via git"). Cheaper than threading and harder to get wrong: `commit`, `merge::preflight`, `ci`, gates that read `git diff`.
 
+Every `bash` call and `tool` process sees `$FRAGUA_RUN_ID` (shell-only; literal text in a prompt). For a per-run branch use `git switch -c "agent/$FRAGUA_RUN_ID"` — it lands via the branch, not the inbox (`docs/execution-model.md` § Per-run branches).
+
 ### Typed outputs (`outputs:`)
 
 An `llm` or `tool` step declares typed `outputs:`; downstream steps read them with `${{ outputs.<producer>.<field>[.<sub>] }}` in `prompt:` (llm), `run:` (tool), or `text:` (human). A scalar leaf interpolates as its value, a record/array as JSON, a dotted leaf as the inner scalar. **Reads fail closed** — referencing a field the producer never populated on the taken path *fails the consuming node*, never a silent `""`.

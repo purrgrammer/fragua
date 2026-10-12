@@ -101,6 +101,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       ...(opts.extraBlockedPatterns !== undefined ? { extraBlockedPatterns: opts.extraBlockedPatterns } : {}),
       ...(opts.envAllowNames !== undefined ? { envAllowNames: opts.envAllowNames } : {}),
       ...(opts.envAllowPredicate !== undefined ? { envAllowPredicate: opts.envAllowPredicate } : {}),
+      ...(opts.engineEnv !== undefined ? { engineEnv: opts.engineEnv } : {}),
     });
   }
 

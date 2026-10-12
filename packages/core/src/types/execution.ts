@@ -45,7 +45,10 @@ export interface ExecutionEnvironment {
    * use it to surface partial output to the UI during long commands.
    * `signal` triggers process-tree termination; backends should send
    * SIGTERM to the whole process group, then SIGKILL after a short
-   * grace window, so stuck child processes don't leak past abort. */
+   * grace window, so stuck child processes don't leak past abort.
+   * Engine-scoped vars (e.g. `FRAGUA_RUN_ID`), fixed when the environment is
+   * built, are applied on every exec after the env allow-list and beneath
+   * per-exec `env`, so per-exec `env` wins on a shared key. */
   exec(
     command: string,
     opts?: {

@@ -306,6 +306,36 @@ describe("LocalEnvironment", () => {
       expect(r.stdout).toContain("O=/tmp/scratch-x");
     });
 
+    test("(g) engineEnv FRAGUA_RUN_ID survives the deny-by-default allow-filter", async () => {
+      const env = new LocalEnvironment({ cwd: scratch, engineEnv: { FRAGUA_RUN_ID: "run-abc" } });
+      const r = await env.exec("echo R=${FRAGUA_RUN_ID:-STRIPPED}");
+      expect(r.stdout).toContain("R=run-abc");
+    });
+
+    test("(h) per-exec opts.env wins over engineEnv on the same key", async () => {
+      const env = new LocalEnvironment({ cwd: scratch, engineEnv: { FRAGUA_OUTPUT: "/engine", FRAGUA_RUN_ID: "r1" } });
+      const r = await env.exec("echo O=$FRAGUA_OUTPUT R=$FRAGUA_RUN_ID", { env: { FRAGUA_OUTPUT: "/per-exec" } });
+      expect(r.stdout).toContain("O=/per-exec");
+      expect(r.stdout).toContain("R=r1");
+    });
+
+    test("(i) engineEnv overrides an allow-listed ambient var of the same name", async () => {
+      const prev = process.env["FRAGUA_RUN_ID"];
+      process.env["FRAGUA_RUN_ID"] = "ambient";
+      try {
+        const env = new LocalEnvironment({
+          cwd: scratch,
+          envAllowNames: new Set(["FRAGUA_RUN_ID"]),
+          engineEnv: { FRAGUA_RUN_ID: "engine" },
+        });
+        const r = await env.exec("echo R=$FRAGUA_RUN_ID");
+        expect(r.stdout).toContain("R=engine");
+      } finally {
+        if (prev === undefined) delete process.env["FRAGUA_RUN_ID"];
+        else process.env["FRAGUA_RUN_ID"] = prev;
+      }
+    });
+
     test("(e) an ambient FRAGUA_* var is DROPPED unless allow-listed", async () => {
       const prev = process.env["FRAGUA_FOO"];
       process.env["FRAGUA_FOO"] = "ambient-must-not-leak-abcdef";

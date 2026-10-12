@@ -258,8 +258,10 @@ are exactly three guardrails, none of which is isolation:
    allow-list (`bash.env-passthrough` under the daemon/harness, `--allow-env`
    under `fragua ci`). Everything else, including the operator's provider
    credentials and any ambient `FRAGUA_*` var, is dropped by default
-   (deny-by-default); engine vars such as `$FRAGUA_OUTPUT` reach a producing
-   `tool` step through the engine's per-step `opts.env`, not an ambient prefix. Provider-credential
+   (deny-by-default); engine vars reach the shell from the engine, not an ambient
+   prefix: run-scoped `$FRAGUA_RUN_ID` on every exec (the environment's
+   `engineEnv`), and `$FRAGUA_OUTPUT` for a producing `tool` step through the
+   per-step `opts.env`, which wins on a shared key. Provider-credential
    names are refused from the allow-list outright. This keeps secrets out of the
    shell; it does **not** stop the command from reading the host filesystem or
    reaching the network.

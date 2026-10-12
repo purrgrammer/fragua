@@ -66,6 +66,8 @@ fragua run <workflow>  \
 
 > **A multi-line or punctuation-heavy value → `@file`/`@-`, never an inline `--input x="…"`.** Your *shell* expands the quoted string before `fragua` sees it: backticks run as command substitution (silently deleting the wrapped words), `$(…)` / `$VAR` get evaluated, and embedded quotes truncate it — so a long task prompt arrives mangled, and the run executes against corrupted text. Write the prompt to a file and pass `--input task=@prompt.txt` (or pipe it via `--input task=@-`). This is purely about getting the bytes past the shell intact; the workflow's `${{ inputs.x }}` substitution is a separate, safe step.
 
+Every `bash` call and `tool` step in the run sees `$FRAGUA_RUN_ID` (the run's id, engine-set, shell-only) — see `docs/execution-model.md` § Per-run branches.
+
 ---
 
 ## 3. Watch a run
@@ -183,6 +185,8 @@ fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (
 ```
 
 `accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
+
+A run that commits on its own branch (`agent/$FRAGUA_RUN_ID`) lands through that branch, not the inbox: it never shows under READY TO LAND and `accept` refuses it, so merge or PR the branch, and prune it yourself (`docs/execution-model.md` § Per-run branches).
 
 ---
 

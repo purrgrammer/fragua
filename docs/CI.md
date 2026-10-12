@@ -97,8 +97,8 @@ because `fragua ci` gives tool subprocesses (and the `bash` tool) a
 `HOME`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `LANG`, and every `LC_*` — plus the
 names you pass with `--allow-env`. Everything else in the CI job's environment,
 including the provider credentials and any ambient `FRAGUA_*` var, is dropped;
-engine vars such as `$FRAGUA_OUTPUT` are injected per-step by the engine, not
-admitted by an ambient prefix.
+engine vars (`$FRAGUA_RUN_ID` on every step, `$FRAGUA_OUTPUT` per producing
+step) are injected by the engine, not admitted by an ambient prefix.
 
 ```yaml
 - run: fragua ci pr_review --input pr=${{ github.event.pull_request.number }} --allow-env GH_TOKEN

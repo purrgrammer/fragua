@@ -264,6 +264,27 @@ describe("ciCommand --json terminal result envelope", () => {
     expect(results[0]!.status).toBe("errored");
   });
 
+  test("a tool step sees FRAGUA_RUN_ID equal to the run's id (ci provisioner)", async () => {
+    writeFileSync(
+      wfPath,
+      [
+        "name: ci-run-id",
+        "outputs:",
+        "  rid: { from: probe.runId }",
+        "steps:",
+        "  probe:",
+        "    type: tool",
+        `    run: printf '{"runId":"%s"}' "$FRAGUA_RUN_ID" > "$FRAGUA_OUTPUT"`,
+        "    outputs:",
+        "      runId: { type: string }",
+        "    next: exit",
+      ].join("\n"),
+    );
+    const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);
+    expect(results[0]!.status).toBe("completed");
+    expect(results[0]!.outputs?.["rid"]).toBe(results[0]!.runId);
+  });
+
   test("outputs omitted (typed-partial) when the workflow declares none", async () => {
     writeFileSync(wfPath, "name: ci-no-out\nsteps:\n  done: {type: exit}\n");
     const { results } = partition((await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true })).lines);

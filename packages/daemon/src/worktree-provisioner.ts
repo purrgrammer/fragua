@@ -290,7 +290,10 @@ export class WorktreeProvisioner implements Provisioner {
     const envAllow = await this.resolveEnvAllowFor(repoRoot);
 
     if (!(await isGitRepo(repoRoot))) {
-      const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };
+      const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = {
+        cwd: repoRoot,
+        engineEnv: { FRAGUA_RUN_ID: runId },
+      };
       if (this.defaultShellTimeoutMs !== undefined) localOpts.defaultTimeoutMs = this.defaultShellTimeoutMs;
       if (envAllow.names !== undefined) localOpts.envAllowNames = envAllow.names;
       if (envAllow.predicate !== undefined) localOpts.envAllowPredicate = envAllow.predicate;
@@ -303,6 +306,7 @@ export class WorktreeProvisioner implements Provisioner {
       repoRoot,
       worktreesDir: this.worktreesDir,
       keepAfterDispose: this.keepAfterDispose,
+      engineEnv: { FRAGUA_RUN_ID: runId },
     };
     if (provisionOpts.baseRef !== undefined) opts.baseRef = provisionOpts.baseRef;
     if (bootstrap !== undefined) opts.bootstrap = bootstrap;

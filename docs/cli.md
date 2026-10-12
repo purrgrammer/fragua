@@ -77,6 +77,7 @@ fragua runs wait <id...> | --workflow <name> | --all-running         # block unt
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
 fragua runs accept  <id> [--autostash]            # replay the run's commits onto your branch + stage the tail
                                                   #   --autostash: stash unrelated dirty files around the apply, then restore them (mirrors git rebase --autostash)
+                                                  #   a run that commits on its own branch (agent/$FRAGUA_RUN_ID) is not in the inbox: land it via that branch
 fragua runs discard <id>                          # drop the run's fragua refs
 
 # lifecycle + control

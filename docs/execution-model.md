@@ -94,9 +94,10 @@ environment **built from an allow-list**, not a filtered copy of the daemon's
 unless the operator names it: under `fragua daemon` / `fragua harness` through
 `bash.env-passthrough` in `.fragua/config.yaml` (below), under `fragua ci`
 through `--allow-env NAME` (see [CI.md](CI.md)). Provider-credential names are
-refused from both lists. Engine variables a step needs (`FRAGUA_OUTPUT` for a
-`tool` producer) are injected per step through the explicit per-call env, never
-admitted by an ambient prefix. The allow-list is applied at spawn time, so the
+refused from both lists. Engine variables are set by fragua, never admitted by an
+ambient prefix: `FRAGUA_RUN_ID` (the run's id, on every `bash` call and `tool`
+process) and `FRAGUA_OUTPUT` (per step, for a `tool` producer; it wins on its own
+key). The allow-list is applied at spawn time, so the
 daemon's own environment changing mid-run changes nothing a shell sees.
 
 The **worktree bootstrap command runs under the same allow-list** — `init()`
@@ -242,6 +243,27 @@ Deletes `refs/fragua/snapshots/<run_id>` and `refs/fragua/heads/<run_id>`. The r
 Implementation: `packages/workspace/src/run-actions.ts` (`applyDiscard`).
 
 Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required for `accept`.
+
+### Per-run branches
+
+Every `bash` call and `tool` process sees `$FRAGUA_RUN_ID`, the run's id. It is
+shell-only: it never appears in the system prompt, and a bare `$FRAGUA_RUN_ID`
+in a prompt is literal text that the agent's shell expands when it runs it.
+
+A workflow that wants its own branch creates one from a step:
+
+```sh
+git switch -c "agent/$FRAGUA_RUN_ID"
+```
+
+fragua never creates, switches, or deletes branches, and gc never touches
+`refs/heads`, so pruning `agent/*` branches is the operator's job.
+
+**Such a run lands through its branch, not the inbox.** The inbox counts
+committed work as the run's own only when the run ended detached
+(`committedIsAgentWork` requires `headRef === null`), so a run that ends on
+`agent/<run_id>` does not enter Ready to land and `accept` refuses it. Merge the
+branch or open a PR from it instead.
 
 ---
 
