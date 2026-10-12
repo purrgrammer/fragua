@@ -203,68 +203,77 @@ export function WorkflowDetail(): JSX.Element {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="graph" className="min-h-[480px] min-w-0 flex-1">
-          {graph ? (
-            <>
-              <div className="h-full min-h-[480px] min-w-0">
+        <div
+          data-testid={`workflow-${graph ? requestedView : "source"}-region`}
+          className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-sw-bg"
+        >
+          <TabsContent value="graph" className="h-full">
+            {graph ? (
+              <div className="h-full min-h-[480px] min-w-0 p-2">
                 <GraphView
                   graph={graph}
                   orientation="TB"
                   selectedNodeId={selectedNodeId}
                   onNodeClick={setSelectedNodeId}
                 />
+                <Sheet
+                  open={selected !== null}
+                  onOpenChange={(open) => {
+                    if (!open) setSelectedNodeId(null);
+                  }}
+                >
+                  <SheetContent
+                    side="right"
+                    className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}
+                  >
+                    {selected ? (
+                      <>
+                        <SheetHeader className="border-b border-sw-border px-4 py-3">
+                          <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
+                            {selected.attrs.label ?? selected.id}
+                          </SheetTitle>
+                          <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
+                        </SheetHeader>
+                        <NodeInspector
+                          node={selected}
+                          className="min-h-0 flex-1 rounded-none border-0 bg-transparent"
+                        />
+                      </>
+                    ) : null}
+                  </SheetContent>
+                </Sheet>
               </div>
-              <Sheet
-                open={selected !== null}
-                onOpenChange={(open) => {
-                  if (!open) setSelectedNodeId(null);
-                }}
-              >
-                <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}>
-                  {selected ? (
-                    <>
-                      <SheetHeader className="border-b border-sw-border px-4 py-3">
-                        <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
-                          {selected.attrs.label ?? selected.id}
-                        </SheetTitle>
-                        <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
-                      </SheetHeader>
-                      <NodeInspector node={selected} className="min-h-0 flex-1 rounded-none border-0 bg-transparent" />
-                    </>
-                  ) : null}
-                </SheetContent>
-              </Sheet>
-            </>
-          ) : null}
-        </TabsContent>
+            ) : null}
+          </TabsContent>
 
-        <TabsContent value="source" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-          {!graph && (
-            <EmptyState
-              data-testid="workflow-detail-parse-error"
-              title="Couldn't parse workflow"
-              description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
-            />
-          )}
-          <CodeBlock
-            code={detail.source}
-            language="yaml"
-            data-testid="workflow-detail-source"
-            // The block fills the tab and its body scrolls, so a long
-            // workflow pages inside the highlighted area rather than
-            // stretching the page.
-            className="flex min-h-0 min-w-0 flex-1 flex-col [&>div:last-child]:min-h-0 [&>div:last-child]:flex-1"
-          >
-            <CodeBlockHeader>
-              <CodeBlockTitle>
-                <CodeBlockFilename>{detail.path}</CodeBlockFilename>
-              </CodeBlockTitle>
-              <CodeBlockActions>
-                <CodeBlockCopyButton />
-              </CodeBlockActions>
-            </CodeBlockHeader>
-          </CodeBlock>
-        </TabsContent>
+          <TabsContent value="source" className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-2">
+            {!graph && (
+              <EmptyState
+                data-testid="workflow-detail-parse-error"
+                title="Couldn't parse workflow"
+                description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
+              />
+            )}
+            <CodeBlock
+              code={detail.source}
+              language="yaml"
+              data-testid="workflow-detail-source"
+              // The block fills the tab and its body scrolls, so a long
+              // workflow pages inside the highlighted area rather than
+              // stretching the page.
+              className="flex min-h-0 min-w-0 flex-1 flex-col [&>div:last-child]:min-h-0 [&>div:last-child]:flex-1"
+            >
+              <CodeBlockHeader>
+                <CodeBlockTitle>
+                  <CodeBlockFilename>{detail.path}</CodeBlockFilename>
+                </CodeBlockTitle>
+                <CodeBlockActions>
+                  <CodeBlockCopyButton />
+                </CodeBlockActions>
+              </CodeBlockHeader>
+            </CodeBlock>
+          </TabsContent>
+        </div>
       </Tabs>
     </section>
   );
