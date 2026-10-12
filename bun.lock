@@ -12,7 +12,7 @@
     },
     "packages/agent": {
       "name": "@fragua/agent",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.1.0",
         "@earendil-works/pi-ai": "1.1.0",
@@ -30,7 +30,7 @@
     },
     "packages/cli": {
       "name": "@fragua/cli",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "bin": {
         "fragua": "./bin/fragua.ts",
       },
@@ -66,7 +66,7 @@
     },
     "packages/core": {
       "name": "@fragua/core",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@fragua/types": "workspace:*",
         "@noble/hashes": "2.2.0",
@@ -82,7 +82,7 @@
     },
     "packages/daemon": {
       "name": "@fragua/daemon",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
@@ -97,7 +97,7 @@
     },
     "packages/server": {
       "name": "@fragua/server",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/store": "workspace:*",
@@ -115,7 +115,7 @@
     },
     "packages/store": {
       "name": "@fragua/store",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@fragua/core": "workspace:*",
         "@fragua/types": "workspace:*",
@@ -128,7 +128,7 @@
     },
     "packages/test-utils": {
       "name": "@fragua/test-utils",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "devDependencies": {
         "@earendil-works/pi-ai": "1.1.0",
         "typescript": "5.7.3",
@@ -136,7 +136,7 @@
     },
     "packages/types": {
       "name": "@fragua/types",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.1.0",
         "@earendil-works/pi-ai": "1.1.0",
@@ -147,7 +147,7 @@
     },
     "packages/web": {
       "name": "@fragua/web",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.2.9",
         "@fragua/core": "workspace:*",
@@ -204,7 +204,7 @@
     },
     "packages/workspace": {
       "name": "@fragua/workspace",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.1.0",
         "@earendil-works/pi-ai": "1.1.0",

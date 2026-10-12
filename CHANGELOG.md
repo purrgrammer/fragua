@@ -8,39 +8,11 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-12
+
 ### Added
 
 - **`docs/SECURITY.md`, the threat model.** One page states who is trusted, which boundaries are defended and the test that pins each, and what is explicitly not defended (`bash` is arbitrary code execution on the host; the worktree is working-tree isolation, not security isolation; no API auth beyond loopback plus the origin gate). SPEC, STATUS, the handler contract, and the execution model point at it instead of each carrying a partial account.
-
-### Fixed
-
-- **A `tool` step interrupted by a pause, steer, cancel or daemon shutdown is an abort, not a failure.** The killed command's non-zero exit used to take the step's `fail` edge (or halt the run with no fail route), so a restart mid-CI sent the run into its fixer. The step now re-runs when the run resumes, as an `llm` step already did.
-- **The `write` tool keeps an existing file's mode.** Rewriting an executable script no longer drops its executable bit.
-- **Blob garbage collection can no longer delete a live spilled blob.** The sweep used to read the routing and outputs roots in one step and delete orphans in another, so a run enqueued or an output emitted in between could lose the blob it had just spilled. The roots are now resolved inside the delete statement itself, and the file-side pass leaves any blob file younger than five minutes alone, since a write commits its row only after the file is on disk.
-
-- **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
-  When a live secret sits verbatim in an unscrubbed binary artifact, nothing is
-  written to the export path (and a stale bundle there is removed), so an
-  `if: always()` artifact-upload step cannot publish it. The job still exits
-  with the scrub-leak code. `fragua runs export` keeps writing and warning.
-- **The agent `read` tool no longer bypasses the working-directory jail.** Reads
-  now go through the execution environment's own byte read, which applies the
-  cwd realpath check to the same path it reads, closing a symlink-swap race
-  where a link pointing outside the run's directory could be followed unchecked.
-  No change to authored workflows.
-
-### Changed
-
-- **Read-path ceilings on the dashboard and run-detail APIs.** The
-  `/metrics/global` window (`?windowHours=`) is now clamped to a 5-year maximum
-  so a pathological value can't scan all history; the default 30-day window is
-  unchanged. `GET /runs/:id/events.json` and `GET /runs/:id/messages` now clamp
-  an explicit `?limit=` to 5000, matching the run event-stream sibling; both
-  stay uncapped by default so the full-fidelity transcript still returns
-  everything.
-
-### Added
-
 - **`type: judge` steps can name a backend.** `provider:` on a judge step picks
   which System One model answers, and `judge: {provider, model}` in
   `~/.fragua/config.yaml` sets the default. Two backends ship: `typesafe`
@@ -98,9 +70,23 @@ guarantee.
   the command's terminal output as a JSON block titled `outputs.<node>`. A node
   that emits and prints nothing shows one card, not an empty terminal stacked
   on its struct.
+- **Workflow page: Graph and Source tabs.** The workflow detail page shows the
+  parsed graph and the YAML source side by side, the source highlighted and
+  scrolling inside its own panel; `?view=source` deep-links to it.
+- **Substituted values render as labelled blocks in the run conversation.** An
+  `${{ outputs.X.f }}` or `${{ inputs.x }}` value interpolated into a prompt
+  shows as its own block titled with the producing step and field (JSON for a
+  record or array), instead of the raw boundary tags around it.
 
 ### Changed
 
+- **Read-path ceilings on the dashboard and run-detail APIs.** The
+  `/metrics/global` window (`?windowHours=`) is now clamped to a 5-year maximum
+  so a pathological value can't scan all history; the default 30-day window is
+  unchanged. `GET /runs/:id/events.json` and `GET /runs/:id/messages` now clamp
+  an explicit `?limit=` to 5000, matching the run event-stream sibling; both
+  stay uncapped by default so the full-fidelity transcript still returns
+  everything.
 - **MCP client now runs on `@earendil-works/pi-mcp`.** fragua's remote and
   stdio MCP support is rebuilt on the standalone pi-mcp package; the official
   `@modelcontextprotocol/sdk` is no longer a runtime dependency. `.mcp.json`
@@ -186,9 +172,25 @@ guarantee.
   broadcasts, and `fact.steering_applied` records where each steer landed — or
   that it was buffered — so an accepted steer that reached nobody is visible
   rather than silent.
+- **Inbox rows lead with how long the run has been waiting,** at the same small
+  size as the change stat that follows it. The activity feed uses one-word
+  verbs: `requeued`, `retrying`, `awaiting`, `delayed`.
 
 ### Fixed
 
+- **A `tool` step interrupted by a pause, steer, cancel or daemon shutdown is an abort, not a failure.** The killed command's non-zero exit used to take the step's `fail` edge (or halt the run with no fail route), so a restart mid-CI sent the run into its fixer. The step now re-runs when the run resumes, as an `llm` step already did.
+- **The `write` tool keeps an existing file's mode.** Rewriting an executable script no longer drops its executable bit.
+- **Blob garbage collection can no longer delete a live spilled blob.** The sweep used to read the routing and outputs roots in one step and delete orphans in another, so a run enqueued or an output emitted in between could lose the blob it had just spilled. The roots are now resolved inside the delete statement itself, and the file-side pass leaves any blob file younger than five minutes alone, since a write commits its row only after the file is on disk.
+- **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
+  When a live secret sits verbatim in an unscrubbed binary artifact, nothing is
+  written to the export path (and a stale bundle there is removed), so an
+  `if: always()` artifact-upload step cannot publish it. The job still exits
+  with the scrub-leak code. `fragua runs export` keeps writing and warning.
+- **The agent `read` tool no longer bypasses the working-directory jail.** Reads
+  now go through the execution environment's own byte read, which applies the
+  cwd realpath check to the same path it reads, closing a symlink-swap race
+  where a link pointing outside the run's directory could be followed unchecked.
+  No change to authored workflows.
 - **MCP stdio diagnostics redact every non-flag argument.** A credential passed
   as a bare positional argument (not only `--flag=VALUE` / `--flag VALUE`) no
   longer survives into the connect-failure diagnostic or an export bundle.
