@@ -1130,14 +1130,3 @@ export function selectFleetSummary(db: Database, opts: FleetSummaryOpts = {}): F
 
   return { statusCounts, workflows, inFlightCostUsd: cost?.inFlightCostUsd ?? 0, totalRuns };
 }
-
-const SELECT_ALL_ROUTINGS_SQL = `SELECT routing FROM run_state`;
-
-/** Return the raw routing JSON strings for every run — used by gcBlobs to
- *  collect routing-referenced blob shas as GC roots. */
-export function selectAllRoutings(db: Database): string[] {
-  return db
-    .query<{ routing: string }, []>(SELECT_ALL_ROUTINGS_SQL)
-    .all()
-    .map((r) => r.routing);
-}

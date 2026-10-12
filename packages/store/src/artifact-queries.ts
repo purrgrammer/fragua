@@ -115,16 +115,37 @@ export function selectArtifactsForRun(db: Database, runId: string): ArtifactList
 // Blob garbage collection
 // ─────────────────────────────────────────────────────────────────────
 
+/** Every blob sha the live data still points at, beyond the `artifacts`
+ *  table: a `{ "$fragua_blob": "<sha>" }` ref anywhere inside a run's routing
+ *  (spilled inputs — `json_tree` walks the nesting), or an outputs-index row
+ *  that is itself a spilled-struct ref. Computed in SQL so the orphan DELETE
+ *  below can read it in the same statement it deletes under — a root that lands
+ *  between a separate scan and the delete can't be collected, because there is
+ *  no "between". `routing` is `NOT NULL` and written as JSON; the `json_valid`
+ *  guard keeps a corrupt row from aborting the whole sweep. */
+const BLOB_ROOTS_SQL = `
+  SELECT t.value AS sha256
+    FROM run_state r, json_tree(CASE WHEN json_valid(r.routing) THEN r.routing ELSE '{}' END) t
+   WHERE t.key = '$fragua_blob' AND t.type = 'text'
+  UNION
+  SELECT json_extract(o.struct, '$."$fragua_blob"') AS sha256
+    FROM outputs o
+   WHERE json_type(o.struct, '$."$fragua_blob"') = 'text'
+`;
+
+const SELECT_BLOB_ROOTS_SQL = `
+  WITH roots AS (${BLOB_ROOTS_SQL})
+  SELECT sha256 FROM roots
+`;
+
 const DELETE_ORPHAN_BLOBS_SQL = `
-  WITH protected AS (
-    SELECT value AS sha256 FROM json_each(?)
-  ),
+  WITH roots AS (${BLOB_ROOTS_SQL}),
   orphans AS (
     SELECT b.sha256
       FROM blobs b
       LEFT JOIN artifacts a ON a.blob_sha = b.sha256
      WHERE a.blob_sha IS NULL
-       AND b.sha256 NOT IN (SELECT sha256 FROM protected)
+       AND b.sha256 NOT IN (SELECT sha256 FROM roots)
      LIMIT ?
   )
   DELETE FROM blobs
@@ -132,18 +153,26 @@ const DELETE_ORPHAN_BLOBS_SQL = `
   RETURNING sha256
 `;
 
-/** Delete up to `limit` orphan blob rows (no artifact referent AND not a
- *  routing-referenced blob root) and return their sha256s so the file-side
- *  delete pass can drop the on-disk content. RETURNING ensures row-without-file
- *  is impossible mid-sweep.
- *
- *  `protectedShasJson` is a JSON array string of sha256 hex strings that must
- *  not be collected — routing-spilled input blobs live here. Pass `"[]"` when
- *  no routing roots are known. */
-export function deleteOrphanBlobs(db: Database, limit: number, protectedShasJson: string): string[] {
+/** The routing / outputs blob roots, for the file-side pass that has no row
+ *  to join against. */
+export function selectBlobRootShas(db: Database): Set<string> {
+  return new Set(
+    db
+      .query<{ sha256: string }, []>(SELECT_BLOB_ROOTS_SQL)
+      .all()
+      .map((r) => r.sha256),
+  );
+}
+
+/** Delete up to `limit` orphan blob rows — no artifact referent AND not a
+ *  routing / outputs root — and return their sha256s so the file-side delete
+ *  pass can drop the on-disk content. The roots are resolved inside this one
+ *  statement, so the scan and the delete see a single snapshot. RETURNING
+ *  ensures row-without-file is impossible mid-sweep. */
+export function deleteOrphanBlobs(db: Database, limit: number): string[] {
   return db
-    .query<{ sha256: string }, [string, number]>(DELETE_ORPHAN_BLOBS_SQL)
-    .all(protectedShasJson, limit)
+    .query<{ sha256: string }, [number]>(DELETE_ORPHAN_BLOBS_SQL)
+    .all(limit)
     .map((r) => r.sha256);
 }
 

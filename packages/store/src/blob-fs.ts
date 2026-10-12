@@ -89,8 +89,9 @@ export class BlobFS {
     }
   }
 
-  /** Enumerate every stored sha. Used by GC to find orphan files. */
-  listAllShas(): string[] {
+  /** Enumerate every stored sha, or with `modifiedBefore` only the files whose
+   * mtime is older than that instant. Used by GC to find orphan files. */
+  listAllShas(opts: { modifiedBefore?: number } = {}): string[] {
     if (!existsSync(this.root)) return [];
     const out: string[] = [];
     for (const shard of readdirSync(this.root)) {
@@ -105,7 +106,17 @@ export class BlobFS {
       }
       if (!st.isDirectory()) continue;
       for (const name of readdirSync(shardPath)) {
-        if (name.length === 64) out.push(name);
+        if (name.length !== 64) continue;
+        if (opts.modifiedBefore !== undefined) {
+          let mtimeMs: number;
+          try {
+            mtimeMs = statSync(join(shardPath, name)).mtimeMs;
+          } catch {
+            continue;
+          }
+          if (mtimeMs >= opts.modifiedBefore) continue;
+        }
+        out.push(name);
       }
     }
     return out;

@@ -75,14 +75,3 @@ export function getLatestOutputBatch(
     .query<{ nodeId: string; struct: string }, [string, string]>(GET_LATEST_OUTPUT_BATCH_SQL)
     .all(runId, JSON.stringify(nodeIds));
 }
-
-const ALL_OUTPUT_STRUCTS_SQL = `SELECT struct FROM outputs`;
-
-/** Every stored output struct across all runs — used by blob GC to protect
- * spilled-output blob refs (a struct may itself be a `{$fragua_blob}` ref). */
-export function getAllOutputStructs(db: Database): string[] {
-  return db
-    .query<{ struct: string }, []>(ALL_OUTPUT_STRUCTS_SQL)
-    .all()
-    .map((r) => r.struct);
-}

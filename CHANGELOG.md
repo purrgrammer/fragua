@@ -16,6 +16,7 @@ guarantee.
 
 - **A `tool` step interrupted by a pause, steer, cancel or daemon shutdown is an abort, not a failure.** The killed command's non-zero exit used to take the step's `fail` edge (or halt the run with no fail route), so a restart mid-CI sent the run into its fixer. The step now re-runs when the run resumes, as an `llm` step already did.
 - **The `write` tool keeps an existing file's mode.** Rewriting an executable script no longer drops its executable bit.
+- **Blob garbage collection can no longer delete a live spilled blob.** The sweep used to read the routing and outputs roots in one step and delete orphans in another, so a run enqueued or an output emitted in between could lose the blob it had just spilled. The roots are now resolved inside the delete statement itself, and the file-side pass leaves any blob file younger than five minutes alone, since a write commits its row only after the file is on disk.
 
 - **`fragua ci --export` withholds a bundle the binary-residual scan flagged.**
   When a live secret sits verbatim in an unscrubbed binary artifact, nothing is

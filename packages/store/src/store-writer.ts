@@ -1,18 +1,23 @@
 import { readRawInputs, validateRoutingPatch } from "@fragua/core";
 import type { RunEnqueuedPayload } from "@fragua/types";
-import { blobRowExists, deleteOrphanBlobs, insertBlobIfAbsent, upsertArtifact } from "./artifact-queries.ts";
+import {
+  blobRowExists,
+  deleteOrphanBlobs,
+  insertBlobIfAbsent,
+  selectBlobRootShas,
+  upsertArtifact,
+} from "./artifact-queries.ts";
 import { insertEventDaemon, insertEventRunEnqueued, insertEventWeb } from "./event-queries.ts";
 import { insertMessage, selectMaxMessageOrdinal, selectMessageByDedup } from "./message-queries.ts";
-import { getAllOutputStructs, insertOutput } from "./outputs-queries.ts";
+import { insertOutput } from "./outputs-queries.ts";
 import { EVENT_CONTRACT_VERSION } from "./pragmas.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
-import { collectRoutingBlobShas, isBlobRef, maybeSpillStruct, spillRoutingInputs } from "./routing-blobs.ts";
+import { maybeSpillStruct, spillRoutingInputs } from "./routing-blobs.ts";
 import {
   bumpRunSeq,
   claimQueuedRun,
   countDispatchableRunningRuns,
   insertRunState,
-  selectAllRoutings,
   selectNextQueuedRun,
   selectRunStateRow,
   updateRunStateTitle,
@@ -606,57 +611,39 @@ export function vacuum(ctx: StoreCtx): void {
   ctx.db.exec("VACUUM");
 }
 
+/** A blob file younger than this is left alone by the file-side pass even
+ * when no row names it: `putArtifact` and the routing spill write the file,
+ * fsync, and only then commit the row, so a file this fresh is most likely a
+ * write in flight, not a crash leftover. */
+const ORPHAN_FILE_GRACE_MS = 5 * 60_000;
+
 export function gcBlobs(ctx: StoreCtx, maxRows?: number): { deleted: number } {
   const limit = maxRows ?? 1000;
 
-  // Collect routing-referenced blob shas as GC roots so spilled input blobs
-  // are never collected while the run is still live. This is the single place
-  // that decides blob reachability; routing roots extend artifact reachability.
-  const routingStrings = selectAllRoutings(ctx.db);
-  const routingRootShas = new Set<string>();
-  for (const routingJson of routingStrings) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(routingJson);
-    } catch {
-      continue;
-    }
-    for (const sha of collectRoutingBlobShas(parsed)) {
-      routingRootShas.add(sha);
-    }
-  }
-  // Spilled structured-output blobs are GC roots too: each outputs-index row
-  // may itself be a `{$fragua_blob}` ref. Without this they'd be collected as
-  // orphans and a later `${{ outputs.X.f }}` read would fail to rehydrate.
-  for (const structJson of getAllOutputStructs(ctx.db)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(structJson);
-    } catch {
-      continue;
-    }
-    if (isBlobRef(parsed)) routingRootShas.add(parsed.$fragua_blob);
-  }
-  const protectedShasJson = JSON.stringify([...routingRootShas]);
-
-  // Pass 1: drop `blobs` rows with no artifact referent AND not a routing
-  // root. RETURNING feeds the file-delete pass so row-without-file is
-  // impossible mid-sweep.
-  const orphanShas = deleteOrphanBlobs(ctx.db, limit, protectedShasJson);
+  // Pass 1: drop `blobs` rows with no artifact referent and not a routing /
+  // outputs root. The roots are resolved inside the DELETE statement itself,
+  // so nothing can become a root between the scan and the delete. RETURNING
+  // feeds the file-delete pass so row-without-file is impossible mid-sweep.
+  let orphanShas: string[] = [];
+  ctx.writeTxn(() => {
+    orphanShas = deleteOrphanBlobs(ctx.db, limit);
+  });
   for (const sha of orphanShas) ctx.blobs.delete(sha);
 
-  // Pass 2: remove blob files with no matching row. Catches files left
-  // behind when a row was deleted directly (cascade) or when a crash
-  // between put() and INSERT orphaned the file. Bounded by the same
-  // per-sweep limit to keep tail latency predictable. Routing-root files
-  // (even those without a row, e.g., mid-write crash) are preserved.
+  // Pass 2: remove blob files with no matching row — left behind when a row
+  // was deleted directly (cascade) or when a crash between put() and INSERT
+  // orphaned the file. Bounded by the same per-sweep limit to keep tail
+  // latency predictable. Root files (even those without a row, e.g. a
+  // mid-write crash) are preserved, and so is any file still inside the
+  // write-in-flight grace window.
   let extraDeleted = 0;
   const budget = limit - orphanShas.length;
   if (budget > 0) {
-    const shas = ctx.blobs.listAllShas();
+    const roots = selectBlobRootShas(ctx.db);
+    const shas = ctx.blobs.listAllShas({ modifiedBefore: ctx.now() - ORPHAN_FILE_GRACE_MS });
     for (const sha of shas) {
       if (extraDeleted >= budget) break;
-      if (routingRootShas.has(sha)) continue;
+      if (roots.has(sha)) continue;
       if (!blobRowExists(ctx.db, sha)) {
         ctx.blobs.delete(sha);
         extraDeleted++;

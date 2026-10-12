@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { utimesSync } from "node:fs";
+import { join } from "node:path";
 import type { BlobFS } from "../src/blob-fs.ts";
 import {
   ArtifactTooLargeError,
@@ -1055,6 +1057,13 @@ describe("SqliteStore — listThreadsWithMessages", () => {
   });
 });
 
+/** Set a blob file's mtime to `atMs` (the store's clock, not the wall clock)
+ * so the file-side GC pass sees it as older than the write grace window. */
+function backdateBlobFile(blobs: BlobFS, sha: string, atMs: number): void {
+  const root = (blobs as unknown as { root: string }).root;
+  utimesSync(join(root, sha.slice(0, 2), sha), new Date(atMs), new Date(atMs));
+}
+
 describe("SqliteStore — gcBlobs", () => {
   test("deletes orphan blobs, preserves referenced ones", async () => {
     const store = freshStore();
@@ -1076,12 +1085,16 @@ describe("SqliteStore — gcBlobs", () => {
     store.close();
   });
 
-  test("sweeps orphan blob files with no matching row", async () => {
+  test("sweeps an orphan blob file with no matching row once it is past the write grace window", async () => {
     const store = freshStore();
     const blobs = (store as unknown as { blobs: BlobFS }).blobs;
     const stray = "a".repeat(64);
     blobs.put(stray, new Uint8Array([9, 9, 9]));
     expect(blobs.has(stray)).toBe(true);
+    // A file this fresh may be a put() whose row has not committed yet.
+    store.gcBlobs();
+    expect(blobs.has(stray)).toBe(true);
+    backdateBlobFile(blobs, stray, 1_700_000_000_000 - 10 * 60_000);
     store.gcBlobs();
     expect(blobs.has(stray)).toBe(false);
     store.close();
