@@ -133,6 +133,12 @@ describe("metaForEvent — operator-action git-centric verbs", () => {
     expect(m.attention).toBeFalsy();
   });
 
+  test("renders fact.checkout_released with verb 'released'", () => {
+    const m = meta("fact.checkout_released", {});
+    expect(m.verb).toBe("released");
+    expect(m.attention).toBeFalsy();
+  });
+
   test("operator-action facts always return single-word verbs regardless of payload", () => {
     expect(meta("fact.run_accepted", {}).verb).toBe("accepted");
     expect(meta("fact.run_discarded", {}).verb).toBe("discarded");

@@ -92,6 +92,34 @@ describe("migrate — schema version handling", () => {
   });
 });
 
+describe("v6 ↔ v7 — checkout columns", () => {
+  const cols = (db: Database) =>
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(run_state)")
+      .all()
+      .map((c) => c.name);
+  const hasIndex = (db: Database) =>
+    db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_run_state_checkout'").get() != null;
+
+  test("v6 → v7 adds in_checkout, checkout_path, checkout_released and idx_run_state_checkout; down drops them (lossy)", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(CURRENT_SCHEMA_VERSION).toBe(7);
+    for (const c of ["in_checkout", "checkout_path", "checkout_released"]) expect(cols(db)).toContain(c);
+    expect(hasIndex(db)).toBe(true);
+    expect(planMigration(7, 6).steps).toEqual([{ version: 7, class: "lossy" }]);
+    expect(() => migrateTo(db, 6)).toThrow();
+    migrateTo(db, 6, { allowDataLoss: true });
+    for (const c of ["in_checkout", "checkout_path", "checkout_released"]) expect(cols(db)).not.toContain(c);
+    expect(hasIndex(db)).toBe(false);
+    // walking forward from v6 re-runs schema.sql first, which must not need the columns
+    migrate(db);
+    for (const c of ["in_checkout", "checkout_path", "checkout_released"]) expect(cols(db)).toContain(c);
+    expect(hasIndex(db)).toBe(true);
+    db.close();
+  });
+});
+
 describe("v5 ↔ v6 — run_state.base_head_sha", () => {
   const cols = (db: Database) =>
     db

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fraguaStateExcludes } from "@fragua/workspace";
 import { captureSnapshot, parseShortstat, type SnapshotResult } from "../src/snapshotter.ts";
 
 function g(cwd: string, ...args: string[]): string {
@@ -176,5 +177,119 @@ describe("captureSnapshot", () => {
       insertions: 2,
       deletions: 0,
     });
+  });
+});
+
+describe("captureSnapshot — checkout arm", () => {
+  let repo: string;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), "fragua-snap-co-"));
+    g(repo, "init", "-q");
+    g(repo, "config", "user.email", "test@fragua.local");
+    g(repo, "config", "user.name", "fragua test");
+    g(repo, "config", "commit.gpgsign", "false");
+    await writeFile(join(repo, "a.txt"), "A\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "A");
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  test("diffBaseSha is baseGitSha even after the run committed", async () => {
+    const base = g(repo, "rev-parse", "HEAD");
+    await writeFile(join(repo, "a.txt"), "A2\n");
+    g(repo, "commit", "-q", "-am", "run commit");
+    const res = expectSnapshot(
+      await captureSnapshot({
+        worktree: repo,
+        runId: "c1",
+        baseGitSha: base,
+        parentSnap: base,
+        boundary: "terminal",
+        mode: "checkout",
+      }),
+    );
+    expect(res.diffBaseSha).toBe(base);
+  });
+
+  test("heads/<id> is written only when HEAD moved off baseHeadSha ?? baseGitSha", async () => {
+    const head = g(repo, "rev-parse", "HEAD");
+    // dirty base S over HEAD: HEAD has not moved, so no heads ref
+    await writeFile(join(repo, "a.txt"), "wip\n");
+    g(repo, "add", "-A");
+    const s = g(repo, "commit-tree", g(repo, "write-tree"), "-p", head, "-m", "S");
+    g(repo, "reset", "-q");
+    await writeFile(join(repo, "b.txt"), "run\n");
+    expectSnapshot(
+      await captureSnapshot({
+        worktree: repo,
+        runId: "c2",
+        baseGitSha: s,
+        baseHeadSha: head,
+        parentSnap: s,
+        boundary: "terminal",
+        mode: "checkout",
+      }),
+    );
+    expect(gStatus(repo, "rev-parse", "--verify", "refs/fragua/heads/c2")).not.toBe(0);
+    // now the run commits: HEAD moved → heads ref written
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "run");
+    const moved = expectSnapshot(
+      await captureSnapshot({
+        worktree: repo,
+        runId: "c2",
+        baseGitSha: s,
+        baseHeadSha: head,
+        parentSnap: s,
+        boundary: "terminal",
+        mode: "checkout",
+      }),
+    );
+    expect(g(repo, "rev-parse", "refs/fragua/heads/c2")).toBe(moved.headSha);
+    expect(moved.diffBaseSha).toBe(s);
+  });
+
+  test("uncommitted is base→snapshot and committed is null", async () => {
+    const base = g(repo, "rev-parse", "HEAD");
+    await writeFile(join(repo, "a.txt"), "A2\n");
+    g(repo, "commit", "-q", "-am", "committed by run");
+    await writeFile(join(repo, "c.txt"), "dirt\n");
+    const res = expectSnapshot(
+      await captureSnapshot({
+        worktree: repo,
+        runId: "c3",
+        baseGitSha: base,
+        parentSnap: base,
+        boundary: "step",
+        mode: "checkout",
+      }),
+    );
+    expect(res.committed).toBeNull();
+    expect(res.uncommitted).toEqual({ filesChanged: 2, insertions: 2, deletions: 1 });
+  });
+
+  test("excludes keep run.cwd's .fragua state out of the capture", async () => {
+    const base = g(repo, "rev-parse", "HEAD");
+    await mkdir(join(repo, ".fragua", "runs"), { recursive: true });
+    await writeFile(join(repo, ".fragua", "runs", "state.json"), "{}\n");
+    await writeFile(join(repo, ".fragua", "config.yaml"), "id: x\n");
+    const res = expectSnapshot(
+      await captureSnapshot({
+        worktree: repo,
+        runId: "c4",
+        baseGitSha: base,
+        parentSnap: base,
+        boundary: "terminal",
+        mode: "checkout",
+        excludes: fraguaStateExcludes(""),
+      }),
+    );
+    const files = g(repo, "ls-tree", "-r", "--name-only", res.treeSha).split("\n");
+    expect(files).toContain(".fragua/config.yaml");
+    expect(files).not.toContain(".fragua/runs/state.json");
   });
 });

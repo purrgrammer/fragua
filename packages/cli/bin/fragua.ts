@@ -62,6 +62,7 @@ import {
   providersTestCommand,
 } from "../src/commands/providers.ts";
 import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
+import { releaseCommand } from "../src/commands/release.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import {
@@ -563,6 +564,10 @@ cli
     "--dirty",
     "Base the run on your uncommitted working tree (captured now into a synthetic commit; untracked files included, ignored files excluded). Cannot combine with --base.",
   )
+  .option(
+    "--checkout <path>",
+    "Run inside this existing checkout of the repository (no per-run worktree; the run's changes land directly in it). Use . for the current one.",
+  )
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
   .option("--db <path>", "Store path; discovers the server via that store's server_endpoint row")
@@ -596,6 +601,7 @@ cli
       ...(pick("title") !== undefined ? { title: pick("title")! } : {}),
       ...(pick("base") !== undefined ? { base: pick("base")! } : {}),
       ...(options["dirty"] === true ? { dirty: true } : {}),
+      ...(pick("checkout") !== undefined ? { checkout: pick("checkout")! } : {}),
       ...(pick("inputJson") !== undefined ? { inputJson: pick("inputJson")! } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
@@ -688,6 +694,8 @@ function runsHelp(): void {
     accept  <id> [--autostash]        replay the run's commits onto your branch + stage the tail to commit
                                       (a --dirty run lands as unstaged changes instead; --autostash ignored)
     discard <id>                      drop the run's fragua refs
+    release <id>                      free a terminal --checkout run's hold on its checkout
+                                      (checkout runs never enter the inbox; their changes are already in the checkout)
     diff    <id> [--against <ref>] [--snap <idx>] [--path <p>]  print the snapshot diff
 
   Lifecycle (blocked runs):
@@ -834,6 +842,9 @@ cli
           break;
         case "discard":
           process.exit(await discardCommand({ runId: needId(), ...discovery(options) }));
+          break;
+        case "release":
+          process.exit(await releaseCommand({ runId: needId(), ...discovery(options) }));
           break;
         case "status":
           process.exit(

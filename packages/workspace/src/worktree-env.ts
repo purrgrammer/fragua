@@ -23,7 +23,10 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import { captureBaseOver, fraguaStateExcludes, pinDirtyBaseRef } from "./capture.ts";
+import { inspectCheckout } from "./checkout.ts";
 import { isBaselineEnvAllowed, LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
+import { defaultGitExec } from "./run-actions.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment, ScratchFile, ScratchKey } from "./types.ts";
 
 /** A shell command string, or a callback given the partially-initialized
@@ -53,6 +56,17 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
    * `bash.env-passthrough in .fragua/config.yaml`; `fragua ci` passes
    * `--allow-env`. Keeps this layer ignorant of CLI-layer config keys. */
   envPassthroughHint?: string;
+  /** `"run"` (default): fragua creates and disposes a detached worktree under
+   * `worktreesDir`. `"operator"`: the run executes in an existing operator
+   * checkout (`checkoutPath`) that fragua attaches to and never creates,
+   * bootstraps, resets or removes. */
+  ownership?: "run" | "operator";
+  /** The checkout key, required for `ownership: "operator"`. */
+  checkoutPath?: string;
+  /** `ownership: "operator"` only: the base the run already recorded at its
+   * first start (from `run_state`). When set, `init()` adopts it and captures
+   * nothing; when absent, `init()` captures the base. */
+  adoptBase?: { baseGitSha: string; baseGitRef: string | null; baseHeadSha: string | null };
 }
 
 export class WorktreeEnvironment implements ExecutionEnvironment {
@@ -71,6 +85,15 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * detached, on a tag, or an unborn branch. Distinct from the worktree
    * itself, which is always detached. */
   baseGitRef: string | null = null;
+  /** Who owns the directory — see {@link WorktreeEnvironmentOptions.ownership}. */
+  readonly ownership: "run" | "operator";
+  /** Operator ownership only: the checkout HEAD a dirty first-start base was
+   * captured over (`baseGitSha^`); `null` when the base is HEAD itself. */
+  baseHeadSha: string | null = null;
+  /** Pathspecs that keep run.cwd's fragua state out of every capture of this
+   * environment — non-empty only when run.cwd lies inside the checkout. */
+  captureExcludes: string[] = [];
+  private readonly adoptBase: WorktreeEnvironmentOptions["adoptBase"];
   private readonly baseRef: string | undefined;
   private readonly keepAfterDispose: boolean;
   private readonly bootstrap: BootstrapSpec | undefined;
@@ -85,8 +108,15 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   constructor(opts: WorktreeEnvironmentOptions) {
     this.repoRoot = resolve(opts.repoRoot ?? process.cwd());
     this.runId = opts.runId;
-    const dir = opts.worktreesDir ?? ".fragua/worktrees";
-    this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
+    this.ownership = opts.ownership ?? "run";
+    if (this.ownership === "operator") {
+      if (opts.checkoutPath == null) throw new Error("WorktreeEnvironment: ownership operator needs checkoutPath");
+      this.worktreePath = opts.checkoutPath;
+    } else {
+      const dir = opts.worktreesDir ?? ".fragua/worktrees";
+      this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
+    }
+    this.adoptBase = opts.adoptBase;
     if (opts.baseRef !== undefined) this.baseRef = opts.baseRef;
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
@@ -117,6 +147,11 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * stamp it onto `fact.run_started`. */
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (this.ownership === "operator") {
+      await this.attachCheckout();
+      this.initialized = true;
+      return;
+    }
     await mkdir(join(this.repoRoot, ".fragua", "worktrees"), { recursive: true });
 
     const alreadyProvisioned = await this.isExistingWorktree();
@@ -175,6 +210,51 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     this.initialized = true;
   }
 
+  /** Attach to the operator's checkout: re-check that it can still host the
+   * run (it may have changed since enqueue), then adopt the recorded base or —
+   * on first start — capture it. Never creates, bootstraps or resets anything.
+   * A failure throws `<code>: <detail>` with one of the fixed codes
+   * `checkout_missing` / `checkout_unregistered` / `checkout_fragua_owned` /
+   * `checkout_unborn`; the executor halts the run with `worktree_error`. */
+  private async attachCheckout(): Promise<void> {
+    const insp = await inspectCheckout(defaultGitExec, {
+      path: this.worktreePath,
+      runCwd: this.repoRoot,
+      checkIgnore: false,
+    });
+    if (!insp.ok) throw new Error(`${insp.reason}: ${insp.detail}`);
+    this.captureExcludes = insp.rel != null ? fraguaStateExcludes(insp.rel) : [];
+    const adopt = this.adoptBase;
+    if (adopt != null) {
+      this.baseGitSha = adopt.baseGitSha;
+      this.baseGitRef = adopt.baseGitRef ?? insp.ref;
+      this.baseHeadSha = adopt.baseHeadSha;
+      if (adopt.baseHeadSha != null) {
+        const r = await defaultGitExec(insp.key, ["cat-file", "-e", `${adopt.baseGitSha}^{commit}`]);
+        if (r.exitCode !== 0) {
+          throw new Error(`checkout base ${adopt.baseGitSha} is missing from ${insp.key}`);
+        }
+        await pinDirtyBaseRef(insp.key, this.runId, adopt.baseGitSha);
+      }
+      return;
+    }
+    const base = await captureBaseOver({
+      top: insp.key,
+      head: insp.head,
+      label: this.runId,
+      excludes: this.captureExcludes,
+    });
+    this.baseGitRef = insp.ref;
+    if (base.clean) {
+      this.baseGitSha = insp.head;
+      this.baseHeadSha = null;
+    } else {
+      await pinDirtyBaseRef(insp.key, this.runId, base.s);
+      this.baseGitSha = base.s;
+      this.baseHeadSha = insp.head;
+    }
+  }
+
   /** Detect a pre-existing worktree for this run. Checks:
    *   1. The target directory exists (cheap).
    *   2. `git worktree list --porcelain` from the repo root lists it.
@@ -224,6 +304,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
    * No-op if `keepAfterDispose` is true or `dispose()` already ran. Tolerates
    * an already-removed worktree. */
   async dispose(): Promise<void> {
+    // An operator checkout is never removed; the run owns only its refs.
+    if (this.ownership === "operator") return;
     if (this.disposed || this.keepAfterDispose) return;
     this.disposed = true;
     try {

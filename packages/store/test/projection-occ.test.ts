@@ -59,6 +59,8 @@ function projectionArgs(runId: string, version: number, expectedVersion: number)
     updatedAt: 2000,
     baseGitSha: null,
     baseGitRef: null,
+    baseHeadSha: null,
+    checkoutReleased: false,
     finalGitSha: null,
     finalHeadRef: null,
     diffBaseSha: null,

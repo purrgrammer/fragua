@@ -10,7 +10,7 @@
 // short-circuits before opening the store.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
@@ -1021,5 +1021,179 @@ describe("fragua doctor", () => {
     const out = logs.join("\n");
     expect(out).toContain(r.dbPath);
     expect(out).toContain("no daemon");
+  });
+});
+
+// ─── checkout runs (`fragua run --checkout`)
+
+describe("fragua operator verbs — checkout runs", () => {
+  let r: Rig;
+  let logs: string[];
+  let errs: string[];
+  beforeEach(() => {
+    r = rig();
+    logs = [];
+    errs = [];
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.join(" "));
+    });
+  });
+  afterEach(async () => {
+    await r.close();
+  });
+
+  /** A checkout run driven to `terminal` with a recorded terminal snapshot when
+   * `snapshot` (which auto-releases a completed run). */
+  function seedCheckout(
+    runId: string,
+    opts: { checkoutPath?: string; cwd?: string; status?: "completed" | "halted"; snapshot?: boolean } = {},
+  ): void {
+    const s = r.store;
+    s.enqueueRun({
+      runId,
+      workflowSha: "wf",
+      cwd: opts.cwd ?? "/tmp/repo",
+      inCheckout: true,
+      checkoutPath: opts.checkoutPath ?? "/tmp/co",
+    });
+    const append = (f: Parameters<IEventStore["appendFact"]>[1][number]) =>
+      s.appendFact(runId, [f], s.getState(runId)!.version);
+    append({
+      type: "fact.run_started",
+      payload: {
+        workflowSha: "wf",
+        contractVersion: s.getState(runId)!.contractVersion,
+        startNode: "n1",
+        baseGitSha: BASE,
+      },
+    });
+    append(
+      opts.status === "halted"
+        ? { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } }
+        : { type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } },
+    );
+    if (opts.snapshot !== false) {
+      append({
+        type: "fact.snapshot_recorded",
+        payload: {
+          eventIdx: 3,
+          treeSha: "t".repeat(40),
+          commitSha: "s".repeat(40),
+          parentSnap: BASE,
+          headSha: BASE,
+          headRef: null,
+          diffBaseSha: BASE,
+          committed: null,
+          uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 },
+        },
+      });
+    }
+  }
+
+  test("accept refuses checkout_busy when run.cwd's checkout is held", async () => {
+    const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "fragua-op-busy-")));
+    try {
+      Bun.spawnSync({ cmd: ["git", "init", "-q", repo] });
+      r.store.enqueueRun({ runId: "holder", workflowSha: "wf", cwd: repo, inCheckout: true, checkoutPath: repo });
+      r.store.enqueueRun({ runId: "acc", workflowSha: "wf", cwd: repo });
+      const st = r.store.getState("acc")!;
+      r.store.appendFact(
+        "acc",
+        [
+          {
+            type: "fact.run_started",
+            payload: { workflowSha: "wf", contractVersion: st.contractVersion, startNode: "n1", baseGitSha: BASE },
+          },
+        ],
+        st.version,
+      );
+      r.store.appendFact(
+        "acc",
+        [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+        r.store.getState("acc")!.version,
+      );
+      r.store.appendFact(
+        "acc",
+        [
+          {
+            type: "fact.snapshot_recorded",
+            payload: {
+              eventIdx: 3,
+              treeSha: "t".repeat(40),
+              commitSha: "s".repeat(40),
+              parentSnap: BASE,
+              headSha: BASE,
+              headRef: null,
+              diffBaseSha: BASE,
+              committed: null,
+              uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 },
+            },
+          },
+        ],
+        r.store.getState("acc")!.version,
+      );
+      expect(r.store.getState("acc")!.inboxStatus).toBe("pending");
+      const code = await acceptCommand({ runId: "acc", dbPath: r.dbPath });
+      expect(code).toBe(1);
+      expect(errs.join("\n")).toContain(
+        `checkout ${repo} is held by run holder (queued); wait for it to finish, or run \`fragua runs release holder\` once it is terminal`,
+      );
+      expect(errs.join("\n")).toContain("[checkout_busy]");
+      expect(lastIntent(r.store, "acc")).not.toBe("intent.accept_run");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("accept and discard on a checkout run refuse not_in_inbox naming the path and the undo", async () => {
+    seedCheckout("rco");
+    expect(await acceptCommand({ runId: "rco", dbPath: r.dbPath })).toBe(1);
+    expect(await discardCommand({ runId: "rco", dbPath: r.dbPath })).toBe(1);
+    const out = errs.join("\n");
+    expect(out).toContain("run executed in checkout /tmp/co");
+    expect(out).toContain(`git restore --source=${BASE} --worktree -- :/`);
+    expect(out).toContain("[not_in_inbox]");
+  });
+
+  test("unquarantine --resolution retry on an in-checkout run prints [checkout_replay] and exits non-zero", async () => {
+    r.store.enqueueRun({
+      runId: "rqc",
+      workflowSha: "wf",
+      cwd: "/tmp/repo",
+      inCheckout: true,
+      checkoutPath: "/tmp/co",
+    });
+    for (const resolution of ["retry", "treat_as_done"]) {
+      const code = await unquarantineCommand({ runId: "rqc", resolution, dbPath: r.dbPath });
+      expect(code).toBe(1);
+    }
+    expect(errs.join("\n")).toContain("[checkout_replay]");
+    expect(lastIntent(r.store, "rqc")).toBe("intent.run_enqueued");
+    expect(await unquarantineCommand({ runId: "rqc", resolution: "cancel", dbPath: r.dbPath })).toBe(0);
+    expect(lastIntent(r.store, "rqc")).toBe("intent.unquarantine");
+  });
+
+  test("status shows 'in checkout <path>' and 'held — release with fragua runs release <id>' on a terminal unreleased run", async () => {
+    seedCheckout("rhd", { status: "halted" });
+    expect(await statusCommand({ runId: "rhd", dbPath: r.dbPath })).toBe(0);
+    expect(logs.join("\n")).toContain("in checkout /tmp/co — held — release with fragua runs release rhd");
+    logs.length = 0;
+    seedCheckout("rok", { checkoutPath: "/tmp/co2" });
+    expect(await statusCommand({ runId: "rok", dbPath: r.dbPath })).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("in checkout /tmp/co2");
+    expect(out).not.toContain("held");
+  });
+
+  test("inbox never lists a checkout run", async () => {
+    seedCheckout("co-run-xyz");
+    seedCommitted(r.store, "in-plain");
+    expect(await inboxCommand({ dbPath: r.dbPath, cwd: "/tmp/repo" })).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("in-plain");
+    expect(out).not.toContain("co-run-xyz");
   });
 });

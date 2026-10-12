@@ -76,6 +76,18 @@ describe("RunQuarantinedNotice", () => {
     }
   });
 
+  it("hides treat-as-done and retry when inCheckout", async () => {
+    const { restore } = installFetchMock({ [EVENTS_URL]: () => json(ORPHAN_EVENTS) });
+    try {
+      const { findByTestId, queryByTestId } = renderWithClient(<RunQuarantinedNotice runId="run-1" inCheckout />);
+      expect(await findByTestId("run-quarantined-cancel")).toBeDefined();
+      expect(queryByTestId("run-quarantined-treat_as_done")).toBeNull();
+      expect(queryByTestId("run-quarantined-retry")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   it("hides itself once a later run-state fact (resume / terminate) supersedes the quarantine", async () => {
     const { restore } = installFetchMock({
       [EVENTS_URL]: () =>

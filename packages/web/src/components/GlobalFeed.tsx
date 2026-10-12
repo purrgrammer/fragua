@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   Check,
   Clock,
+  LockOpen,
   Pause,
   Play,
   RotateCcw,
@@ -146,6 +147,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   // Verb is payload-aware: see metaForEvent below.
   "fact.run_accepted": { Icon: Check, verb: "accepted", iconClass: "text-sw-accent-success" },
   "fact.run_discarded": { Icon: Trash2, verb: "discarded", iconClass: "text-sw-accent-error" },
+  "fact.checkout_released": { Icon: LockOpen, verb: "released" },
 };
 
 /** Resolve the row's icon + verb. Returns `null` for event types

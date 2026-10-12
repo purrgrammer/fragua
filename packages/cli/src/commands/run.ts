@@ -16,9 +16,19 @@
 //      with the run's terminal status. A daemon must be running for the run to
 //      execute; with none, the run sits queued and the tail waits.
 
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { defaultGitExec, pinDirtyBaseRef, prepareDirtyBase, resolveBaseRef } from "@fragua/workspace";
+import { basename, join, resolve } from "node:path";
+import { CheckoutBusyError } from "@fragua/store";
+import {
+  checkoutBusyDetail,
+  defaultGitExec,
+  inspectCheckout,
+  pinDirtyBaseRef,
+  prepareDirtyBase,
+  resolveBaseRef,
+  resolveCheckoutKey,
+} from "@fragua/workspace";
 import chalk from "chalk";
 import { coerceInputs } from "../input-coerce.ts";
 import { resolveProject } from "../project.ts";
@@ -51,6 +61,10 @@ export interface RunCommandOptions {
    * anchored at `refs/fragua/bases/<runId>`. A clean tree falls back to HEAD.
    * Cannot combine with `base`. */
   dirty?: boolean;
+  /** `--checkout <path>`: execute inside this existing checkout of the same
+   * repository (resolved to its key) instead of a fresh per-run worktree; the
+   * run's changes land directly in it. Cannot combine with `base` or `dirty`. */
+  checkout?: string;
   /** Exit after the run enters a terminal state. Default true. */
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
@@ -63,6 +77,22 @@ export interface RunCommandOptions {
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
   if (opts.dirty === true && opts.base !== undefined) {
     console.error(chalk.red("run: --dirty cannot combine with --base: the dirt is relative to HEAD"));
+    return 1;
+  }
+  if (opts.checkout !== undefined && opts.base !== undefined) {
+    console.error(
+      chalk.red(
+        "run: --checkout cannot combine with --base: honouring it would require checking out the ref in a checkout fragua does not own",
+      ),
+    );
+    return 1;
+  }
+  if (opts.checkout !== undefined && opts.dirty === true) {
+    console.error(
+      chalk.red(
+        "run: --checkout cannot combine with --dirty: --dirty asks for a fresh per-run worktree and --checkout asks for none",
+      ),
+    );
     return 1;
   }
   const invocationCwd = opts.cwd ?? process.cwd();
@@ -115,6 +145,42 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       console.error(chalk.red(`run: ${opts.workflow} ${verb}: ${mint.detail}`));
       return 1;
     }
+    // Validate a --checkout target before any write, so a refusal leaves no
+    // workflow row, run, or event behind.
+    let checkoutKey: string | undefined;
+    if (opts.checkout !== undefined) {
+      if ((await resolveCheckoutKey(defaultGitExec, cwd)) == null) {
+        console.error(chalk.red(`run: --checkout needs a git checkout: ${cwd} is not inside one`));
+        return 1;
+      }
+      const insp = await inspectCheckout(defaultGitExec, {
+        path: resolve(invocationCwd, opts.checkout),
+        runCwd: cwd,
+        checkIgnore: true,
+        isRunWorktree: (key) => isRunWorktree(client.store, key),
+      });
+      if (!insp.ok) {
+        console.error(chalk.red(`run: ${insp.detail}`) + chalk.dim(` [${insp.reason}]`));
+        return 1;
+      }
+      const holder = client.readPlane.checkoutHeld(insp.key);
+      if (holder != null) {
+        console.error(chalk.red(`run: ${checkoutBusyDetail(insp.key, holder.runId, holder.status)}`));
+        return 1;
+      }
+      checkoutKey = insp.key;
+    }
+
+    // A --dirty capture would freeze a checkout run's half-finished tree.
+    if (opts.dirty === true) {
+      const key = await resolveCheckoutKey(defaultGitExec, cwd);
+      const holder = key != null ? client.readPlane.checkoutHeld(key) : null;
+      if (key != null && holder != null) {
+        console.error(chalk.red(`run: ${checkoutBusyDetail(key, holder.runId, holder.status)}`));
+        return 1;
+      }
+    }
+
     // Capture the dirty base before any write, so a refusal leaves no
     // workflow row, run, event, or ref behind.
     let dirty: { s: string; head: string; ref: string | null; top: string } | undefined;
@@ -175,13 +241,25 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(dirty !== undefined
         ? { baseGitSha: dirty.s, baseHeadSha: dirty.head, ...(dirty.ref != null ? { baseGitRef: dirty.ref } : {}) }
         : {}),
+      ...(checkoutKey !== undefined ? { checkoutPath: checkoutKey } : {}),
     });
     if (!enq.ok) {
       console.error(chalk.red(`run: ${enq.error}`));
       return 1;
     }
-    client.plane.commitEnqueue(enq.params);
+    try {
+      client.plane.commitEnqueue(enq.params);
+    } catch (err) {
+      if (err instanceof CheckoutBusyError) {
+        console.error(chalk.red(`run: ${checkoutBusyDetail(err.checkoutPath, err.holder.runId, err.holder.status)}`));
+        return 1;
+      }
+      throw err;
+    }
     console.log(chalk.green(`run queued: ${enq.runId}`));
+    if (checkoutKey !== undefined) {
+      console.log(chalk.dim(`in checkout ${checkoutKey} — the run's changes land directly in it`));
+    }
     if (base !== undefined) {
       console.log(chalk.dim(`base ${base.ref} -> ${base.sha.slice(0, 12)}`));
     }
@@ -202,4 +280,19 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     if (opts.follow === false) return 0;
     return followRun(client, enq.runId);
   });
+}
+
+/** True when `key` is some non-imported run's own fragua worktree
+ * (`<r.cwd>/.fragua/worktrees/<r.run_id>`), checked by realpath. */
+function isRunWorktree(
+  store: { getState(runId: string): { cwd: string | null; imported?: boolean } | null },
+  key: string,
+): boolean {
+  const state = store.getState(basename(key));
+  if (state == null || state.imported === true || state.cwd == null) return false;
+  try {
+    return realpathSync.native(join(state.cwd, ".fragua", "worktrees", basename(key))) === key;
+  } catch {
+    return false;
+  }
 }

@@ -18,6 +18,10 @@
 //     branch/commit/merge can still compose; `discarded` runs already had
 //     their refs deleted (a no-op here); clean (`NULL`) runs lose only their
 //     reclaimable git objects — the run row + event log stay queryable.
+//   - a `--checkout` run is settled once its checkout is released; an
+//     unreleased holder's refs are kept (they are the operator's restore
+//     source). `--worktrees` never touches a checkout — it is not under
+//     `.fragua/worktrees/`.
 //
 // "How old" is `run_state.updated_at`, frozen once the terminal fact lands.
 

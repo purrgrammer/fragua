@@ -22,6 +22,7 @@ import {
 } from "./event-queries.ts";
 import { selectActiveThreads, selectMessages, selectMessagesNarrow } from "./message-queries.ts";
 import {
+  type CheckoutHolderRow,
   type CwdSummaryRow,
   countQueuedRuns,
   countRunningRuns,
@@ -36,6 +37,7 @@ import {
   type RunCostTotalsRow,
   type RunSummaryRow,
   type StepAggregateRow,
+  selectCheckoutHolder,
   selectCwds,
   selectFleetSummary,
   selectGcEligibleSnapshotRuns,
@@ -162,6 +164,10 @@ export function getInboxActionCandidates(ctx: StoreCtx): WakeCandidateRow[] {
 
 export function getGcEligibleSnapshotRuns(ctx: StoreCtx, opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
   return selectGcEligibleSnapshotRuns(ctx.db, opts);
+}
+
+export function getCheckoutHolder(ctx: StoreCtx, key: string): CheckoutHolderRow | null {
+  return selectCheckoutHolder(ctx.db, key);
 }
 
 export function getNextPendingIntent(

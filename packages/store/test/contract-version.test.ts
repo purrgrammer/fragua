@@ -40,6 +40,9 @@ const SURFACE_DECLS = [
   "HALT_REASONS",
   "HaltReason",
   "QuarantineReason",
+  // contract: no-bump — `inCheckout`, `fact.run_started.baseHeadSha` and the
+  // checkout-release pair join the still-unreleased v7 cut (`--dirty`), so the
+  // version stays 7 and the hash is re-snapshotted.
   "RunEnqueuedPayload",
   "IntentEvent",
   // contract: no-bump — re-added the LEGACY (≤v3) terminal/pause fact types

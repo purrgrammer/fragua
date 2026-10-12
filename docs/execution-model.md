@@ -18,6 +18,8 @@ When fragua starts a run against a git repository it provisions a **git linked w
 
 **Basing the run on your uncommitted tree with `--dirty`.** `fragua run <workflow> --dirty` captures the operator's working tree at enqueue — the index plus every untracked, non-ignored file; ignored files and run.cwd's own `.fragua/` state are left out — into a tree T, using a throwaway index so the real index and HEAD are never touched. If T equals `tree(HEAD)` the tree is clean and the run is simply pinned to HEAD (`--dirty: working tree is clean, using HEAD`). Otherwise the CLI creates a synthetic commit **S** = `commit-tree T -p HEAD` (authored `fragua <fragua@localhost>`), pins it as the base (`run_state.base_git_sha = S`, `base_head_sha = HEAD`), and anchors it at **`refs/fragua/bases/<run_id>`** in the repo; the provisioner re-writes that ref before `worktree add` and halts the run with `worktree_error` if S is missing. S is an ordinary commit, so inside the worktree the agent sees the operator's WIP as **committed content at HEAD**: `git status` is clean, `HEAD^` is the operator's HEAD, and files that were untracked are tracked. Snapshots, `runs diff --against base` and the inbox stats all measure from S, so they show only the run's work, never the captured WIP. A branch the run creates descends from S — pushing it publishes the captured WIP, untracked files included. `--dirty` cannot combine with `--base`, and is refused on a non-git cwd, an unborn HEAD, or a checkout whose `.gitignore` lacks the fragua state block (`fragua init` writes it).
 
+**Running in a checkout you name with `--checkout`.** `fragua run <workflow> --checkout <path>` gives the run **no** per-run worktree: it executes inside an existing checkout of the same repository — `--checkout .` for the current one, or a linked worktree such as `../feature-wt`. Everything that follows about "the worktree" then means that checkout: tools execute in it, snapshots capture it, and the run's changes land directly in it. See [Checkout runs](#checkout-runs) below for what such a run owns and what it never touches.
+
 **All step execution is rooted at this worktree path.** There is no separate "agent sandbox" or "tool directory" — the three execution surfaces a workflow author touches all resolve to the same cwd:
 
 | Surface | How cwd is set | Source |
@@ -37,6 +39,16 @@ The `cwd()` method on `WorktreeEnvironment` returns `this.worktreePath` — the 
 3. **Daemon crash.** A run interrupted by a crash is quarantined by the startup sweep; its worktree survives for a later `unquarantine`.
 
 `fragua gc --worktrees` reclaims category 2 (and any category-1 leftover whose run has since settled): it removes the worktree directory **and its git registration** for every *settled* run — `completed` / `halted` / `cancelled`, not awaiting an inbox decision — older than the retention window (default 30d). `quarantined` and `paused*` runs are left alone, so in-flight and resumable work is never destroyed. The age window is what distinguishes a retained-for-recovery worktree from a genuine leak.
+
+<a id="checkout-runs"></a>**Checkout runs.** A run enqueued with `--checkout <path>` executes in an operator checkout that fragua did not create (keyed on the realpath of its toplevel, recorded as the local binding `run_state.checkout_path`; the portable genesis marker is `inCheckout`).
+
+*Ownership.* The run owns its refs — `refs/fragua/snapshots/<run_id>`, `refs/fragua/heads/<run_id>` (written only when the checkout's HEAD moved, informational) and `refs/fragua/bases/<run_id>` (when its base was dirty) — the throwaway `fragua-index-<run_id>-<nonce>` capture indexes, and exclusive use of the checkout until it is released. It never owns the directory or its worktree registration, HEAD, the checked-out branch, the real index, or the files that were there before it started. No step of its lifecycle runs `reset`, `clean`, `checkout`, `stash` or `worktree remove` against the checkout; there is no bootstrap, and dispose is a no-op. At every (re-)attach the provisioner re-checks that the checkout still exists, is a registered checkout of the same repository, is not a fragua run worktree and has a commit; a failure halts the run with `worktree_error` and one of `checkout_missing`, `checkout_unregistered`, `checkout_fragua_owned`, `checkout_unborn`. The agent itself may commit or switch branches there, as any workflow could.
+
+*Base.* The base is captured when the run **first starts**, not at enqueue: HEAD when the checkout is clean, otherwise a synthetic commit S over HEAD (as `--dirty` builds one) kept at `refs/fragua/bases/<run_id>`. A resumed or crash-requeued run adopts the recorded base and captures nothing.
+
+*Attribution.* Everything that changes in the checkout between the base capture and the terminal snapshot is attributed to the run — including edits **you** make while the run is paused, and edits made while a crashed daemon was down. Don't `--checkout .` the checkout you are editing in unless you mean that.
+
+*One run per checkout.* A checkout is held from enqueue until release; a second `--checkout` run on it, a `--dirty` run over it, and an `accept` into it refuse `checkout_busy`. It releases on its own when the run completes and its terminal snapshot is recorded, or when the run ends without ever starting; otherwise run `fragua runs release <id>` once it is terminal. A quarantined checkout run can only be cancelled (`retry` / `treat_as_done` are refused with `checkout_replay`, because they would replay from the start over your tree).
 
 The sweep always finishes with `git worktree prune`, which clears any *registration* whose directory is already gone. This matters because a stale registration outlives an `rm -rf` of the directory and makes git refuse `git checkout <branch>`, `git branch -D <branch>`, and non-detached `git worktree add … <branch>` with *"already checked out at `<path>`"* — a workflow that manages its own branches would otherwise hit it. See [`docs/cli.md`](cli.md) § maintenance.
 
@@ -164,6 +176,7 @@ snapshot.
 | **Run** | All nodes execute. The worktree persists across HITL pauses and daemon restarts — a resumed run reuses the same worktree. |
 | **Terminal snapshot** | When the run reaches a terminal status, fragua captures the worktree's full state (committed + uncommitted) into `refs/fragua/snapshots/<run_id>` before removing the worktree directory. |
 | **Dispose** | `git worktree remove --force <worktreePath>`. Dispose only runs after the terminal snapshot fact lands successfully — work is never discarded silently. |
+| **Checkout run** (`--checkout`) | Provision *attaches* to the named checkout (never `worktree add`), re-checks it, and on first start captures the base; no bootstrap. The terminal snapshot is taken as usual. Dispose is a no-op — the checkout stays exactly as the run left it. |
 
 Implementation: `packages/daemon/src/worktree-provisioner.ts`, `packages/workspace/src/worktree-env.ts`.
 
@@ -196,7 +209,7 @@ This is precisely why `fragua runs diff` shows "no changes" for a step that read
 
 ### What `fragua runs diff` shows
 
-`fragua runs diff` computes `git diff <baseSha>..<snapshotCommitSha>` over the stored snapshot refs. The base is `baseGitSha` — the HEAD SHA of the worktree at provision time (for a `--dirty` run, the synthetic commit S, so the diff never includes the captured WIP). If a step produced no snapshot event (delta-suppressed), that step will not appear as a selectable diff point.
+`fragua runs diff` computes `git diff <baseSha>..<snapshotCommitSha>` over the stored snapshot refs. The base is `baseGitSha` — the HEAD SHA of the worktree at provision time (for a `--dirty` run, the synthetic commit S, so the diff never includes the captured WIP). For a checkout run the diff base is always the base captured at first start, whether the run committed, switched branches or left everything uncommitted: the diff is exactly what the run did to the checkout, and the whole effect counts as uncommitted in the change stats. If a step produced no snapshot event (delta-suppressed), that step will not appear as a selectable diff point.
 
 Implementation: `packages/daemon/src/snapshotter.ts` (`captureSnapshot`), `packages/daemon/src/snapshot-service.ts` (`captureBoundarySnapshot`, `disposeTerminalWorktree`).
 
@@ -255,7 +268,11 @@ Deletes `refs/fragua/snapshots/<run_id>` and `refs/fragua/heads/<run_id>`. The r
 
 Implementation: `packages/workspace/src/run-actions.ts` (`applyDiscard`).
 
-Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required to `accept` a commit-base run (one not started with `--dirty`).
+Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required to `accept` a commit-base run (one not started with `--dirty`). Every accept also refuses `checkout_busy` while a checkout run holds `run.cwd`'s checkout.
+
+### Checkout runs are not landed
+
+A `--checkout` run never enters the inbox: its work is not held aside, it is already in your checkout, so review happens after it has landed. `accept` and `discard` refuse `not_in_inbox` and print the undo — `git restore --source=<base_git_sha> --worktree -- :/` restores the checkout's files to the run's base. Commit the changes, or restore them. `fragua runs release <id>` frees a terminal checkout run's hold on the checkout; `fragua gc --snapshots` keeps an unreleased run's refs (your restore source) and reclaims them once it is released.
 
 ### Per-run branches
 

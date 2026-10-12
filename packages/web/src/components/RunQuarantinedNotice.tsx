@@ -27,6 +27,10 @@ export interface RunQuarantinedNoticeProps {
   /** When true the run was brought in via `fragua import` — render in
    * strictly-informational mode (reason + orphans only, no action buttons). */
   imported?: boolean;
+  /** When true the run executed in an operator checkout: `retry` and
+   * `treat_as_done` would replay from the start over the operator's tree and
+   * the server refuses them (409 `checkout_replay`), so only cancel is offered. */
+  inCheckout?: boolean;
 }
 
 const REASON_LABELS: Record<QuarantineReason, string> = {
@@ -100,6 +104,7 @@ export function RunQuarantinedNotice({
   runId,
   eventEpoch = 0,
   imported = false,
+  inCheckout = false,
 }: RunQuarantinedNoticeProps): JSX.Element | null {
   const qc = useQueryClient();
   const eventsQuery = useQuery({
@@ -149,7 +154,7 @@ export function RunQuarantinedNotice({
         ) : null}
         {!imported ? (
           <span className="mt-3 flex flex-wrap items-center gap-2">
-            {RESOLUTIONS.map((r) => (
+            {RESOLUTIONS.filter((r) => !inCheckout || r.resolution === "cancel").map((r) => (
               <Button
                 key={r.resolution}
                 variant={r.variant}

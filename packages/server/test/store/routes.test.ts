@@ -303,6 +303,15 @@ describe("POST /runs — enqueue", () => {
     expect(state!.priority).toBe(3);
   });
 
+  test("POST /runs ignores a checkout field", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", checkout: "/tmp/co", checkoutPath: "/tmp/co" });
+    expect(res.status).toBe(200);
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId)!;
+    expect(state.inCheckout).toBe(false);
+    expect(state.checkoutPath).toBeNull();
+  });
+
   test("rejects an empty body", async () => {
     const res = await req("POST", "/runs");
     expect(res.status).toBe(400);

@@ -45,6 +45,9 @@ function makeRepoWithSnapshotRun(opts: {
   pending?: boolean;
   status?: "completed" | "paused_human";
   worktree?: boolean;
+  /** Make it a `--checkout` run: `held` stays unreleased, `released` folds
+   * `fact.checkout_released`. */
+  checkout?: "held" | "released";
 }): string {
   const cwd = mkdtempSync(join(tmpdir(), "fragua-gc-"));
   workdirs.push(cwd);
@@ -73,7 +76,12 @@ function makeRepoWithSnapshotRun(opts: {
     serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
     CURRENT_IR_VERSION,
   );
-  store.enqueueRun({ runId: opts.runId, workflowSha: "sha", cwd });
+  store.enqueueRun({
+    runId: opts.runId,
+    workflowSha: "sha",
+    cwd,
+    ...(opts.checkout !== undefined ? { inCheckout: true as const, checkoutPath: cwd } : {}),
+  });
   const s0 = store.getState(opts.runId)!;
   store.appendFact(
     opts.runId,
@@ -128,6 +136,10 @@ function makeRepoWithSnapshotRun(opts: {
       s2.version,
     );
   }
+  if (opts.checkout === "released") {
+    const s3 = store.getState(opts.runId)!;
+    store.appendFact(opts.runId, [{ type: "fact.checkout_released", payload: {} }], s3.version);
+  }
   store.close();
 
   const db = new Database(dbPath);
@@ -178,6 +190,26 @@ describe("fragua gc --snapshots", () => {
     expect(code).toBe(0);
     expect(refExists(cwd, "refs/fragua/snapshots/pending-run")).toBe(true);
     expect(refExists(cwd, "refs/fragua/heads/pending-run")).toBe(true);
+  });
+
+  test("keeps an unreleased checkout holder's refs past the cutoff", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "co-held", ageMs: 60 * 24 * 60 * 60 * 1000, checkout: "held" });
+    git(cwd, "update-ref", "refs/fragua/bases/co-held", git(cwd, "rev-parse", "HEAD"));
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(refExists(cwd, "refs/fragua/snapshots/co-held")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/heads/co-held")).toBe(true);
+    expect(refExists(cwd, "refs/fragua/bases/co-held")).toBe(true);
+  });
+
+  test("reclaims a released checkout run's snapshots/heads/bases refs", async () => {
+    const cwd = makeRepoWithSnapshotRun({ runId: "co-rel", ageMs: 60 * 24 * 60 * 60 * 1000, checkout: "released" });
+    git(cwd, "update-ref", "refs/fragua/bases/co-rel", git(cwd, "rev-parse", "HEAD"));
+    const code = await gcCommand({ snapshots: true, cwd, olderThanMs: MONTH });
+    expect(code).toBe(0);
+    expect(refExists(cwd, "refs/fragua/snapshots/co-rel")).toBe(false);
+    expect(refExists(cwd, "refs/fragua/heads/co-rel")).toBe(false);
+    expect(refExists(cwd, "refs/fragua/bases/co-rel")).toBe(false);
   });
 
   test("requires at least one target", async () => {

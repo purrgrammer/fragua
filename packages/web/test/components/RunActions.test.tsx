@@ -184,6 +184,28 @@ describe("RunActions", () => {
     });
   });
 
+  describe("accept — checkout_busy", () => {
+    test("shows the checkout_busy accept refusal text verbatim", async () => {
+      const text =
+        "checkout /home/dev/repo is held by run run-h (halted); wait for it to finish, or run `fragua runs release run-h` once it is terminal";
+      const mocks: Record<string, () => Response | Promise<Response>> = {
+        [ACCEPT_URL]: () =>
+          new Response(JSON.stringify({ error: text, code: "checkout_busy" }), {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          }),
+      };
+      const { restore } = renderActions(RUN_PENDING, mocks, "accept");
+      try {
+        fireEvent.click(await findInBody<HTMLButtonElement>("accept-confirm-btn-run-1"));
+        const errorEl = await findInBody("worktree-action-error");
+        expect(errorEl.textContent).toContain(text);
+      } finally {
+        restore();
+      }
+    });
+  });
+
   describe("discard", () => {
     test("success fires a discard-confirmation toast and closes the dialog", async () => {
       const { restore } = renderActions(RUN_PENDING, { [DISCARD_URL]: () => json({ seq: 1 }) }, "discard");

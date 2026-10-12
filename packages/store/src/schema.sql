@@ -109,8 +109,16 @@ CREATE TABLE IF NOT EXISTS run_state (
   inbox_status TEXT CHECK (inbox_status IS NULL OR inbox_status IN ('pending','acted','discarded')),
   -- Tip of the operator's branch after the last `accept` (run → commit
   -- traceability). Set by `fact.run_accepted`, folded from `intent.accept_run`.
-  accepted_sha TEXT
+  accepted_sha TEXT,
+  in_checkout INTEGER NOT NULL DEFAULT 0,
+  checkout_path TEXT,
+  checkout_released INTEGER NOT NULL DEFAULT 0
 ) STRICT;
+-- Checkout runs (`fragua run --checkout`): `in_checkout` is folded from the
+-- portable genesis marker; `checkout_path` is the checkout key, a LOCAL binding
+-- like `cwd` (null on import); `checkout_released` frees the checkout for the
+-- next run (fold-written). No comment sits between these trailing columns:
+-- SQLite's DROP COLUMN text rewrite (the v7 `down`) breaks on one.
 
 CREATE INDEX IF NOT EXISTS idx_run_state_queue
   ON run_state(priority DESC, ready_at ASC)
@@ -124,6 +132,9 @@ CREATE INDEX IF NOT EXISTS idx_run_state_project_id ON run_state(project_id);
 CREATE INDEX IF NOT EXISTS idx_run_state_inbox
   ON run_state(updated_at DESC)
   WHERE inbox_status = 'pending';
+-- `idx_run_state_checkout` (the held-checkout lookup) is created by
+-- migrations.ts, not here: this file re-runs BEFORE the walk-forward steps,
+-- when a v6 store has no `checkout_path` column yet.
 CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;

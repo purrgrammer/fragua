@@ -414,6 +414,12 @@ export interface RunEnqueuedPayload {
    * `--dirty` run over a clean tree. Seeded onto `run_state.base_head_sha` by
    * `genesisToInitialState`; carried since contract v7. */
   baseHeadSha?: string;
+  /** `fragua run --checkout <path>`: the run executes inside an existing
+   * operator checkout instead of a fresh per-run worktree. Portable — an
+   * imported checkout run stays out of the inbox. The checkout path itself is
+   * a local binding (`run_state.checkout_path`) and never rides the log.
+   * Carried since contract v7. */
+  inCheckout?: true;
 }
 
 export type IntentEvent =
@@ -490,6 +496,13 @@ export type IntentEvent =
        * `pending → discarded` (terminal-terminal). */
       type: "intent.discard_run";
       payload: { refs: string[] };
+    }
+  | {
+      /** Operator released a terminal checkout run's hold on its checkout
+       * (`fragua runs release`). Committed with `fact.checkout_released` in one
+       * store transaction by the CLI. */
+      type: "intent.checkout_release";
+      payload: Record<string, never>;
     };
 
 export type IntentType = IntentEvent["type"];
@@ -575,6 +588,9 @@ export type FactEvent =
          * post-run merge/commit target default.
          * Absent when detached / tag / unborn or no provisioner. */
         baseGitRef?: string;
+        /** A checkout run's base captured dirty at first start: the checkout
+         * HEAD its synthetic `baseGitSha` was captured over. Since v7. */
+        baseHeadSha?: string;
       };
     }
   | {
@@ -1139,6 +1155,13 @@ export type FactEvent =
       payload: { refs: string[] };
     }
   | {
+      /** A checkout run's hold on its checkout ended by operator release
+       * (`intent.checkout_release`). Sets `run_state.checkout_released`. The
+       * only fact the CLI writes — in the same transaction as its intent. */
+      type: "fact.checkout_released";
+      payload: Record<string, never>;
+    }
+  | {
       /** A `type: parallel` fan-out opened (Model A,
        * docs/proposals/fan-out-nodes.md). Seeds the active-set frontier with
        * the branch ENTRY node ids; `nodeId` is the parallel node, which stays
@@ -1463,6 +1486,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Post-terminal operator actions (accept / discard)
   "fact.run_discarded",
   "fact.run_accepted",
+  "fact.checkout_released",
   // Terminal worktree snapshot: written AFTER fact.run_terminated in the
   // executor's finally-block dispose path. It sets inbox_status=pending on
   // run_state, so the client's inbox=pending list query must refetch when

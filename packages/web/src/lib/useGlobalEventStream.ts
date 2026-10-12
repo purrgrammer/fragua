@@ -36,6 +36,8 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   // must clear the WorktreeInbox row in any open tab, not just the tab that fired the action.
   "fact.run_accepted",
   "fact.run_discarded",
+  // A checkout run's release flips the run-detail `held` badge.
+  "fact.checkout_released",
   // Terminal worktree snapshot: written AFTER fact.run_terminated in the executor's
   // finally-block dispose path. It sets inbox_status=pending on run_state, so the
   // inbox=pending list query must refetch when this fact arrives — fact.run_terminated

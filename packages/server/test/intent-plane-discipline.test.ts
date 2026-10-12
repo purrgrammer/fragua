@@ -30,6 +30,8 @@ import ts from "typescript";
 // writes before they were folded into the plane's atomic commits.
 const WRITE_METHODS = new Set<string>([
   "appendIntent",
+  // The checkout-release intent+fact commit: only `plane.commitCheckoutRelease`.
+  "appendIntentWithFact",
   "enqueueRun",
   "saveWorkflow",
   "setRunTitle",

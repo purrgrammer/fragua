@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -399,5 +399,102 @@ describe("WorktreeEnvironment", () => {
       await scratch.dispose();
       await env.dispose();
     }
+  });
+});
+
+describe("WorktreeEnvironment ownership: operator", () => {
+  let repo: string;
+  const git = (...args: string[]) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" }).stdout.trim();
+  const worktreeCount = () =>
+    git("worktree", "list", "--porcelain")
+      .split("\n")
+      .filter((l) => l.startsWith("worktree ")).length;
+  const op = (runId: string, extra: Partial<ConstructorParameters<typeof WorktreeEnvironment>[0]> = {}) =>
+    new WorktreeEnvironment({ repoRoot: repo, runId, ownership: "operator", checkoutPath: repo, ...extra });
+
+  beforeEach(async () => {
+    repo = realpathSync.native(await mkdtemp(join(tmpdir(), "fragua-op-")));
+    gitInitRepo(repo);
+    await writeFile(
+      join(repo, ".gitignore"),
+      ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n",
+    );
+    await writeFile(join(repo, "README.md"), "# test\n");
+    gitCommit(repo, "init");
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  test("init attaches and never creates", async () => {
+    const before = worktreeCount();
+    const env = op("op1");
+    await env.init();
+    expect(worktreeCount()).toBe(before);
+    expect(env.cwd()).toBe(repo);
+    expect(env.projectCwd()).toBe(repo);
+    expect(existsSync(join(repo, ".fragua", "worktrees", "op1"))).toBe(false);
+  });
+
+  test("init re-checks and fails with checkout_missing when the checkout was removed", async () => {
+    const gone = join(repo, "..", `gone-${Date.now()}`);
+    const env = op("op2", { checkoutPath: gone });
+    await expect(env.init()).rejects.toThrow(/^checkout_missing: /);
+    expect(existsSync(gone)).toBe(false);
+  });
+
+  test("first init on a clean checkout captures baseGitSha = HEAD, baseHeadSha null", async () => {
+    const env = op("op3");
+    await env.init();
+    expect(env.baseGitSha).toBe(git("rev-parse", "HEAD"));
+    expect(env.baseHeadSha).toBeNull();
+    expect(env.baseGitRef).toBe("main");
+    expect(git("rev-parse", "--verify", "--quiet", "refs/fragua/bases/op3")).toBe("");
+  });
+
+  test("first init on a dirty checkout captures S with parent HEAD and pins refs/fragua/bases/<id>", async () => {
+    await writeFile(join(repo, "README.md"), "# wip\n");
+    const head = git("rev-parse", "HEAD");
+    const env = op("op4");
+    await env.init();
+    expect(env.baseHeadSha).toBe(head);
+    expect(env.baseGitSha).not.toBe(head);
+    expect(git("rev-parse", `${env.baseGitSha}^`)).toBe(head);
+    expect(git("rev-parse", "refs/fragua/bases/op4")).toBe(env.baseGitSha!);
+    // the operator's index and HEAD are untouched
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(git("diff", "--cached", "--name-only")).toBe("");
+  });
+
+  test("init with adoptBase captures nothing", async () => {
+    await writeFile(join(repo, "README.md"), "# wip\n");
+    const first = op("op5");
+    await first.init();
+    const s = first.baseGitSha!;
+    const head = first.baseHeadSha!;
+    await writeFile(join(repo, "README.md"), "# more edits after the start\n");
+    const again = op("op5", { adoptBase: { baseGitSha: s, baseGitRef: "main", baseHeadSha: head } });
+    await again.init();
+    expect(again.baseGitSha).toBe(s);
+    expect(again.baseHeadSha).toBe(head);
+    expect(git("rev-parse", "refs/fragua/bases/op5")).toBe(s);
+  });
+
+  test("dispose is a no-op", async () => {
+    const before = worktreeCount();
+    const env = op("op6");
+    await env.init();
+    await env.dispose();
+    expect(existsSync(repo)).toBe(true);
+    expect(existsSync(join(repo, "README.md"))).toBe(true);
+    expect(worktreeCount()).toBe(before);
+  });
+
+  test("bootstrap never runs for operator ownership", async () => {
+    const env = op("op7", { bootstrap: "touch BOOTSTRAPPED" });
+    await env.init();
+    expect(env.bootstrapRan).toBe(false);
+    expect(existsSync(join(repo, "BOOTSTRAPPED"))).toBe(false);
   });
 });

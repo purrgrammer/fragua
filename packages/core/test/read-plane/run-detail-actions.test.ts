@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { RunState, StoredEvent } from "@fragua/store";
+import type { IEventReader, RunState, StoredEvent } from "@fragua/store";
+import { makeReadPlane } from "../../src/read-plane/plane.ts";
 import { runStateToDetail } from "../../src/read-plane/projections.ts";
 
 function baseState(overrides: Partial<RunState> = {}): RunState {
@@ -34,6 +35,9 @@ function baseState(overrides: Partial<RunState> = {}): RunState {
     baseGitSha: null,
     baseGitRef: null,
     baseHeadSha: null,
+    inCheckout: false,
+    checkoutPath: null,
+    checkoutReleased: false,
     inboxStatus: null,
     changeStat: null,
     acceptedSha: null,
@@ -59,5 +63,35 @@ describe("runStateToDetail — inbox + priority projection", () => {
   test("omits inboxStatus when the run is not in the inbox", () => {
     const detail = runStateToDetail(baseState({ inboxStatus: null }), [ev(1, 1_000_500)], undefined, undefined);
     expect(detail.inboxStatus).toBeUndefined();
+  });
+});
+
+describe("checkout fields on the read plane", () => {
+  test("runDetail and controlState carry inCheckout, checkoutPath and checkoutReleased", () => {
+    const state = baseState({ status: "halted", inCheckout: true, checkoutPath: "/co", checkoutReleased: false });
+    const detail = runStateToDetail(state, [ev(1, 1_000_500)], undefined, undefined);
+    expect(detail.inCheckout).toBe(true);
+    expect(detail.checkoutPath).toBe("/co");
+    expect(detail.checkoutReleased).toBe(false);
+    const plain = runStateToDetail(baseState(), [ev(1, 1_000_500)], undefined, undefined);
+    expect(plain.inCheckout).toBeUndefined();
+
+    const rp = makeReadPlane({ store: { getState: () => state } as unknown as IEventReader });
+    expect(rp.controlState("run-1")).toMatchObject({ inCheckout: true, checkoutPath: "/co", checkoutReleased: false });
+  });
+
+  test("checkoutHeld returns the holder", () => {
+    const seen: string[] = [];
+    const rp = makeReadPlane({
+      store: {
+        getCheckoutHolder: (key: string) => {
+          seen.push(key);
+          return key === "/co" ? { runId: "r1", status: "running" } : null;
+        },
+      } as unknown as IEventReader,
+    });
+    expect(rp.checkoutHeld("/co")).toEqual({ runId: "r1", status: "running" });
+    expect(rp.checkoutHeld("/free")).toBeNull();
+    expect(seen).toEqual(["/co", "/free"]);
   });
 });

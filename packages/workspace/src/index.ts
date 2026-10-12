@@ -1,6 +1,7 @@
 export * from "./abort-tool.ts";
 export * from "./blocklist.ts";
 export * from "./capture.ts";
+export * from "./checkout.ts";
 export * from "./edit-diff.ts";
 export * from "./find.ts";
 export * from "./grep.ts";

@@ -14,6 +14,7 @@
 import type {
   ArtifactListRow,
   ArtifactScope,
+  CheckoutHolderRow,
   FleetSummary,
   FleetSummaryOpts,
   GetEventsTailOpts,
@@ -67,6 +68,11 @@ export interface RunControlState {
   /** Non-null marks a dirty-base run (accept lands it unstaged). */
   baseHeadSha: string | null;
   diffBaseSha: string | null;
+  /** The run executes in an operator checkout (never in the inbox). */
+  inCheckout: boolean;
+  /** The checkout key — a local binding, `null` on import. */
+  checkoutPath: string | null;
+  checkoutReleased: boolean;
 }
 
 /** The run's diff baseline: the resolved project root and the honest diff
@@ -169,6 +175,9 @@ export interface ReadPlane {
    *  Backs the accept/discard gate, the SSE close-check, and the HITL
    *  status precheck. */
   controlState(runId: string): RunControlState | null;
+  /** The run holding checkout `key` (CHECKOUT_HELD_SQL), or `null` when the
+   *  checkout is free. Backs `checkout_busy` at enqueue and at accept. */
+  checkoutHeld(key: string): CheckoutHolderRow | null;
   /** The run's diff baseline — resolved project root plus the honest diff
    *  base commit (`diffBaseSha` ⊕ `baseGitSha` ⊕ the `fact.run_started`
    *  payload's `baseGitSha`), or `null` when the run is absent. Backs the
@@ -389,7 +398,13 @@ export function makeReadPlane(deps: ReadPlaneDeps): ReadPlane {
         baseGitSha: state.baseGitSha,
         baseHeadSha: state.baseHeadSha,
         diffBaseSha: state.diffBaseSha,
+        inCheckout: state.inCheckout,
+        checkoutPath: state.checkoutPath,
+        checkoutReleased: state.checkoutReleased,
       };
+    },
+    checkoutHeld(key) {
+      return store.getCheckoutHolder(key);
     },
     diffContext(runId) {
       const state = store.getState(runId);

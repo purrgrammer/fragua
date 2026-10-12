@@ -231,6 +231,86 @@ describe("P4 — genesis baseHeadSha: projection equals derivation", () => {
   });
 });
 
+describe("P4 — checkout genesis + release facts: projection equals derivation", () => {
+  test("a checkout run's release folds identically in the projection and the log-derived state", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.boolean(),
+        fc.constantFrom("completed" as const, "errored" as const, "aborted" as const),
+        fc.boolean(),
+        fc.boolean(),
+        fc.option(fc.stringMatching(/^[0-9a-f]{40}$/), { nil: undefined }),
+        async (started, terminal, snapshot, release, baseHeadSha) => {
+          const store = freshStore();
+          const sha = await seedWorkflow(store);
+          const runId = nextId();
+          store.enqueueRun({ runId, workflowSha: sha, inCheckout: true, checkoutPath: "/co" });
+          const append = (f: FactEvent) => store.appendFact(runId, [f], store.getState(runId)!.version);
+          const base = "5".repeat(40);
+          if (started) {
+            append({
+              type: "fact.run_started",
+              payload: {
+                workflowSha: sha,
+                contractVersion: store.getState(runId)!.contractVersion,
+                startNode: "a",
+                baseGitSha: base,
+                ...(baseHeadSha !== undefined ? { baseHeadSha } : {}),
+              },
+            });
+          }
+          append({
+            type: "fact.run_terminated",
+            payload:
+              terminal === "completed"
+                ? { status: "completed", finalNode: "a" }
+                : terminal === "aborted"
+                  ? { status: "aborted", intentSeq: 0 }
+                  : { status: "errored", reason: "error" },
+          } as FactEvent);
+          if (started && snapshot) {
+            append({
+              type: "fact.snapshot_recorded",
+              payload: {
+                eventIdx: 3,
+                treeSha: "t".repeat(40),
+                commitSha: "p".repeat(40),
+                parentSnap: base,
+                headSha: base,
+                headRef: null,
+                diffBaseSha: base,
+                committed: null,
+                uncommitted: { filesChanged: 1, insertions: 1, deletions: 0 },
+              },
+            });
+          }
+          if (release && !store.getState(runId)!.checkoutReleased) {
+            append({ type: "fact.checkout_released", payload: {} });
+          }
+          const live = store.getState(runId)!;
+          const derived = deriveRunState(runId, store.getEvents(runId));
+          const pick = (st: RunState) => ({
+            inCheckout: st.inCheckout,
+            checkoutReleased: st.checkoutReleased,
+            inboxStatus: st.inboxStatus,
+            baseGitSha: st.baseGitSha,
+            baseHeadSha: st.baseHeadSha,
+            status: st.status,
+          });
+          expect(pick(derived)).toEqual(pick(live));
+          expect(live.inboxStatus).toBeNull();
+          const expectReleased = !started || (snapshot && terminal === "completed") || release;
+          expect(live.checkoutReleased).toBe(expectReleased);
+          expect(live.checkoutPath).toBe("/co");
+          expect(derived.checkoutPath).toBeNull();
+          store.close();
+        },
+      ),
+      { numRuns: pbtRuns(30) },
+    );
+  });
+});
+
 // invariant: P12 — event payloads are capped at MAX_EVENT_PAYLOAD_BYTES.
 // Load-bearing sentinel for daemon/test/invariant-coverage.test.ts.
 describe("P12 — event payload bound", () => {
@@ -515,6 +595,7 @@ const NON_MUTATOR_BUILDERS: {
   "fact.daemon_takeover": () => ({ type: "fact.daemon_takeover", payload: { reclaimedFrom: 1, at: 1_500 } }),
   "fact.run_accepted": () => ({ type: "fact.run_accepted", payload: { sha: "s", replayed: 1, tailStaged: false } }),
   "fact.run_discarded": () => ({ type: "fact.run_discarded", payload: { refs: [] } }),
+  "fact.checkout_released": () => ({ type: "fact.checkout_released", payload: {} }),
   // LEGACY (≤v3) read-only fold paths — never touch the frontier.
   "fact.run_completed": (n) => ({ type: "fact.run_completed", payload: { finalNode: n } }),
   "fact.run_halted": () => ({ type: "fact.run_halted", payload: { reason: "error" } }),

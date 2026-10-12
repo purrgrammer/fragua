@@ -14,7 +14,7 @@
 // a run's essentials: status, duration, cost, tokens, current node.
 
 import { parseWorkflow } from "@fragua/core";
-import { SETTLED_STATUSES } from "@fragua/types";
+import { isTerminal as isTerminalStatus, SETTLED_STATUSES } from "@fragua/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -221,7 +221,12 @@ export function RunDetail(): JSX.Element {
         />
       )}
       {detail?.runStatus === "quarantined" && (
-        <RunQuarantinedNotice runId={id} eventEpoch={totalEvents} imported={detail.imported} />
+        <RunQuarantinedNotice
+          runId={id}
+          eventEpoch={totalEvents}
+          imported={detail.imported}
+          inCheckout={detail.inCheckout === true}
+        />
       )}
       {detail?.crashRequeues != null && detail.crashRequeues.length > 0 && (
         <CrashRequeueNotice crashRequeues={detail.crashRequeues} />
@@ -424,6 +429,21 @@ const DetailHeader = memo(function DetailHeader({
               title={`synthetic base captured from your uncommitted tree over ${detail.baseHeadSha}`}
             >
               dirty base over {detail.baseHeadSha.slice(0, 7)}
+            </span>
+          </>
+        )}
+        {detail?.inCheckout === true && (
+          <>
+            <span className="text-xs text-sw-muted/40">·</span>
+            <span
+              data-testid="detail-in-checkout"
+              className="font-mono text-xs text-sw-muted"
+              title="this run executes in an operator checkout; its changes land directly in it"
+            >
+              in checkout {detail.checkoutPath ?? "(unbound)"}
+              {detail.runStatus != null && isTerminalStatus(detail.runStatus) && detail.checkoutReleased === false
+                ? ` — held — release with fragua runs release ${detail.runId}`
+                : ""}
             </span>
           </>
         )}

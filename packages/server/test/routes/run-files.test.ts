@@ -106,6 +106,41 @@ describe("GET /runs/:runId/tree", () => {
   });
 });
 
+describe("GET /runs/:runId/tree — checkout runs", () => {
+  test("an in-checkout run's live files resolve from checkout_path", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fragua-run-files-co-"));
+    const checkout = await mkdtemp(join(tmpdir(), "fragua-run-files-co-wt-"));
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "wf_run_files",
+      "noop",
+      "name: t\nsteps:\n  work: {type: llm, prompt: x}\n",
+      serializeGraph(parseWorkflow("name: t\nsteps:\n  work: {type: llm, prompt: x}\n")),
+      CURRENT_IR_VERSION,
+    );
+    store.enqueueRun({ runId: "r-co", workflowSha: "wf_run_files", cwd, inCheckout: true, checkoutPath: checkout });
+    const roots: string[] = [];
+    const reader: ProjectTreeReader = {
+      async list(root: string) {
+        roots.push(root);
+        return STUB_ENTRIES;
+      },
+      async readBlob() {
+        return { kind: "not_found" };
+      },
+    };
+    const app = runFilesRoutes({ readPlane: makeReadPlane({ store }), reader });
+    fx = { store, cwd, runId: "r-co", app, reader };
+    try {
+      const res = await get("/runs/r-co/tree");
+      expect(res.status).toBe(200);
+      expect(roots).toEqual([checkout]);
+    } finally {
+      await rm(checkout, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("GET /runs/:runId/blob", () => {
   beforeEach(async () => {
     fx = await setup();

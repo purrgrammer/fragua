@@ -106,6 +106,9 @@ const gate = (cwd: string, baseGitSha: string): RunActionGate => ({
   baseGitSha,
   baseHeadSha: null,
   diffBaseSha: baseGitSha,
+  inCheckout: false,
+  checkoutPath: null,
+  checkoutBusy: null,
 });
 
 describe("applyAccept", () => {
@@ -658,6 +661,46 @@ describe("run-action gate (folded into accept/discard)", () => {
     const r = await applyDiscard(git, { ...gate(cwd, base), status: "running" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("not_terminal");
+  });
+});
+
+describe("checkout runs at the gate", () => {
+  test("accept on an in-checkout run refuses not_in_inbox naming the path and the git restore undo", async () => {
+    const { cwd, base } = await setupRepo();
+    const r = await applyAccept(git, { ...gate(cwd, base), inboxStatus: null, inCheckout: true, checkoutPath: cwd });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("not_in_inbox");
+    expect(r.detail).toContain(`run executed in checkout ${cwd}`);
+    expect(r.detail).toContain(`git restore --source=${base} --worktree -- :/`);
+  });
+
+  test("discard on an in-checkout run refuses not_in_inbox", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 0, true);
+    const r = await applyDiscard(git, { ...gate(cwd, base), inCheckout: true, checkoutPath: cwd });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("not_in_inbox");
+    expect((await git(cwd, ["rev-parse", "--verify", "--quiet", `refs/fragua/snapshots/${RUN}`])).exitCode).toBe(0);
+  });
+
+  test("accept refuses checkout_busy after checkGate passes; discard ignores checkoutBusy", async () => {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, true);
+    const busy = { runId: "holder", status: "halted", path: cwd };
+    const r = await applyAccept(git, { ...gate(cwd, base), checkoutBusy: busy });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("checkout_busy");
+    expect(r.detail).toBe(
+      `checkout ${cwd} is held by run holder (halted); wait for it to finish, or run \`fragua runs release holder\` once it is terminal`,
+    );
+    expect(await clean(cwd)).toBe(true);
+    // checkGate refusals still come first
+    const first = await applyAccept(git, { ...gate(cwd, base), status: "running", checkoutBusy: busy });
+    if (!first.ok) expect(first.reason).toBe("not_terminal");
+    const d = await applyDiscard(git, { ...gate(cwd, base), checkoutBusy: busy });
+    expect(d.ok).toBe(true);
   });
 });
 

@@ -68,8 +68,15 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // HTTP boundary rather than in the pure read-plane projection. The path is
     // deterministic (`<cwd>/.fragua/worktrees/<runId>`); surface it only when
     // the directory actually exists (a disposed run's is gone).
-    if (detail.cwd != null) {
-      const candidate = join(detail.cwd, ".fragua", "worktrees", runId);
+    // A checkout run's live tree is the operator checkout it executes in.
+    const live =
+      detail.inCheckout === true
+        ? (detail.checkoutPath ?? null)
+        : detail.cwd != null
+          ? join(detail.cwd, ".fragua", "worktrees", runId)
+          : null;
+    if (live != null) {
+      const candidate = live;
       try {
         await access(candidate);
         detail.worktreePath = candidate;

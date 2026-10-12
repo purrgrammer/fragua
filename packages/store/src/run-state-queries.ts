@@ -70,6 +70,9 @@ export interface RunStateRow {
   inbox_status: string | null;
   accepted_sha: string | null;
   schedule_id: string | null;
+  in_checkout: number;
+  checkout_path: string | null;
+  checkout_released: number;
   /** 1 when the run carries the `imported_runs` inert marker, else 0. Computed
    * by the SELECT (not a `run_state` column). */
   imported: number;
@@ -110,6 +113,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          base_git_sha, base_git_ref, base_head_sha,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
          inbox_status, accepted_sha, schedule_id,
+         in_checkout, checkout_path, checkout_released,
          ${importedSql("run_state")} AS imported
     FROM run_state
    WHERE run_id = ?
@@ -474,16 +478,44 @@ const SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL = `
      AND status IN ('completed', 'halted', 'cancelled')
      AND updated_at < ?
      AND (inbox_status IS NULL OR inbox_status <> 'pending')
+     AND (in_checkout = 0 OR checkout_released = 1)
    ORDER BY updated_at ASC
 `;
 
 /** Terminal runs in `cwd` whose snapshot refs are eligible for GC: settled
  *  (not `running`/`queued`/`paused`), older than `cutoff` (ms epoch), and
- *  not awaiting an operator decision (`inbox_status` not `pending`). The
+ *  not awaiting an operator decision (`inbox_status` not `pending`). A
+ *  checkout run counts as settled only once released — an unreleased holder's
+ *  refs are the operator's restore source. The
  *  caller deletes each run's `refs/fragua/{snapshots,heads,bases}/<runId>`; runs
  *  that never used a worktree simply have no such refs (a no-op delete). */
 export function selectGcEligibleSnapshotRuns(db: Database, opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
   return db.query<GcSnapshotRunRow, [string, number]>(SELECT_GC_ELIGIBLE_SNAPSHOT_RUNS_SQL).all(opts.cwd, opts.cutoff);
+}
+
+/** The run holding a checkout — see {@link selectCheckoutHolder}. */
+export interface CheckoutHolderRow {
+  runId: string;
+  status: RunStatus;
+}
+
+/** CHECKOUT_HELD_SQL(key): is checkout `key` held? True iff a non-imported run
+ *  with that `checkout_path` is not yet released — queued, running, paused and
+ *  quarantined runs, plus terminal runs awaiting `fragua runs release`. The one
+ *  held predicate behind `checkout_busy` at enqueue, before a `--dirty`
+ *  capture, and at accept. Served by `idx_run_state_checkout`. */
+const CHECKOUT_HELD_SQL = `
+  SELECT o.run_id AS runId, o.status AS status
+    FROM run_state o
+   WHERE o.checkout_path = ?
+     AND o.checkout_released = 0
+     AND ${notImportedSql("o")}
+   ORDER BY o.enqueued_at ASC, o.run_id ASC
+   LIMIT 1
+`;
+
+export function selectCheckoutHolder(db: Database, key: string): CheckoutHolderRow | null {
+  return db.query<CheckoutHolderRow, [string]>(CHECKOUT_HELD_SQL).get(key) ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -496,8 +528,8 @@ const INSERT_RUN_STATE_SQL = `
     contract_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at, title,
     cwd, project_id, project_name, workflow_name, workflow_scope, workflow_path, schedule_id,
-    base_git_sha, base_git_ref, base_head_sha
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    base_git_sha, base_git_ref, base_head_sha, in_checkout, checkout_path
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -523,6 +555,8 @@ export function insertRunState(
     baseGitSha?: string | null;
     baseGitRef?: string | null;
     baseHeadSha?: string | null;
+    inCheckout?: boolean;
+    checkoutPath?: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -546,6 +580,8 @@ export function insertRunState(
     args.baseGitSha ?? null,
     args.baseGitRef ?? null,
     args.baseHeadSha ?? null,
+    args.inCheckout === true ? 1 : 0,
+    args.checkoutPath ?? null,
   );
 }
 
@@ -708,6 +744,8 @@ const WRITE_PROJECTION_SQL = `
     updated_at          = ?,
     base_git_sha        = ?,
     base_git_ref        = ?,
+    base_head_sha       = ?,
+    checkout_released   = ?,
     final_git_sha       = ?,
     final_head_ref      = ?,
     diff_base_sha       = ?,
@@ -753,6 +791,8 @@ export function writeRunStateProjection(
     updatedAt: number;
     baseGitSha: string | null;
     baseGitRef: string | null;
+    baseHeadSha: string | null;
+    checkoutReleased: boolean;
     finalGitSha: string | null;
     finalHeadRef: string | null;
     diffBaseSha: string | null;
@@ -777,6 +817,8 @@ export function writeRunStateProjection(
       args.updatedAt,
       args.baseGitSha,
       args.baseGitRef,
+      args.baseHeadSha,
+      args.checkoutReleased ? 1 : 0,
       args.finalGitSha,
       args.finalHeadRef,
       args.diffBaseSha,

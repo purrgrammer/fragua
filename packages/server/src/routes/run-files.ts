@@ -146,7 +146,11 @@ async function resolveRunWorktree(readPlane: Pick<ReadPlane, "controlState">, ru
   const state = readPlane.controlState(runId);
   if (state == null) return { kind: "not_found" };
   if (state.cwd == null) return { kind: "disposed" };
-  const worktreePath = join(state.cwd, ".fragua", "worktrees", runId);
+  // A checkout run's live tree is the operator checkout it executes in.
+  const worktreePath =
+    state.inCheckout && state.checkoutPath != null
+      ? state.checkoutPath
+      : join(state.cwd, ".fragua", "worktrees", runId);
   try {
     await access(worktreePath);
   } catch {

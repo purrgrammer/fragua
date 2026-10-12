@@ -54,6 +54,7 @@ import { cancelToFacts } from "./result-to-facts.ts";
 import { countDispatch, type RunTurnState, recordAbort, resetAborts } from "./run-turn-state.ts";
 import { captureBoundarySnapshot } from "./snapshot-service.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
+import type { ProvisionOpts } from "./worktree-provisioner.ts";
 
 type HandlerResult = core.HandlerResult;
 type ProceedDecision = Extract<core.IntentDecision, { kind: "proceed" }>;
@@ -225,10 +226,17 @@ async function ensureRunEnv(deps: RunDeps, ts: RunTurnState, runState: RunState)
   const opts = deps.opts;
   if (!(opts.provisioner && ts.runEnv === undefined)) return undefined;
   try {
-    const provisionOpts: { cwd?: string; baseRef?: string; dirtyBase?: boolean } = {};
+    const provisionOpts: ProvisionOpts = {};
     if (runState.cwd != null) provisionOpts.cwd = runState.cwd;
     if (runState.baseGitSha != null) provisionOpts.baseRef = runState.baseGitSha;
-    if (runState.baseHeadSha != null) provisionOpts.dirtyBase = true;
+    if (runState.inCheckout && runState.checkoutPath != null) {
+      // A checkout run's base is captured at first start; on re-attach the
+      // recorded one is adopted (never the fresh-worktree dirty-base pin).
+      provisionOpts.checkoutPath = runState.checkoutPath;
+      if (runState.baseHeadSha != null) provisionOpts.baseHeadSha = runState.baseHeadSha;
+    } else if (runState.baseHeadSha != null) {
+      provisionOpts.dirtyBase = true;
+    }
     const alreadyProvisioned = opts.provisioner.envFor(deps.runId) !== undefined;
     ts.runEnv = await opts.provisioner.ensure(deps.runId, provisionOpts);
     if (!alreadyProvisioned) {
@@ -279,12 +287,17 @@ async function startRun(
   const start = routingString(runState.routing, "start_node") ?? "start";
   const baseGitSha = runState.baseGitSha ?? opts.provisioner?.baseGitSha(deps.runId) ?? undefined;
   const baseGitRef = runState.baseGitRef ?? opts.provisioner?.baseGitRef(deps.runId) ?? undefined;
+  // A checkout run's first-start capture: stamped only when this start is the
+  // one that captured (no base recorded yet).
+  const baseHeadSha =
+    runState.baseGitSha == null ? (opts.provisioner?.baseHeadSha?.(deps.runId) ?? undefined) : undefined;
   const startFacts: FactEvent[] = planRunStarted({
     workflowSha: runState.workflowSha,
     contractVersion: runState.contractVersion,
     startNode: start,
     ...(baseGitSha != null ? { baseGitSha } : {}),
     ...(baseGitRef != null ? { baseGitRef } : {}),
+    ...(baseHeadSha != null ? { baseHeadSha } : {}),
   }).facts;
   const startGraph = graphFor(deps, ts, runState.workflowSha);
   const startRoutingPatch: Record<string, unknown> = { ...decision.routingDelta };

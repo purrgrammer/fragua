@@ -60,12 +60,14 @@ export function humanizeNodeCompletedSuffix(payload: { route?: string; outcomeSt
 /** Single-word verb for the four post-terminal operator-action facts.
  *  Used by the git-centric feed rows that render just the verb.
  *  Returns `null` for any other event type. */
-export function humanizeOperatorActionShortVerb(type: string): "accepted" | "discarded" | null {
+export function humanizeOperatorActionShortVerb(type: string): "accepted" | "discarded" | "released" | null {
   switch (type) {
     case "fact.run_accepted":
       return "accepted";
     case "fact.run_discarded":
       return "discarded";
+    case "fact.checkout_released":
+      return "released";
     default:
       return null;
   }
@@ -77,6 +79,7 @@ export function humanizeOperatorActionShortVerb(type: string): "accepted" | "dis
  *  - fact.run_accepted  → "accepted (replayed N)", or "landed as unstaged
  *    changes" for a dirty-base land
  *  - fact.run_discarded → "discarded"
+ *  - fact.checkout_released → "released"
  */
 export function humanizeOperatorActionVerb(type: string, payload: Record<string, unknown>): string | null {
   switch (type) {
@@ -87,6 +90,8 @@ export function humanizeOperatorActionVerb(type: string, payload: Record<string,
     }
     case "fact.run_discarded":
       return "discarded";
+    case "fact.checkout_released":
+      return "released";
     default:
       return null;
   }

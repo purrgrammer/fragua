@@ -457,3 +457,106 @@ describe("executor + worktree provisioner", () => {
     r.store.close();
   });
 });
+
+describe("executor + checkout runs", () => {
+  const BASE = "b".repeat(40);
+  const HEAD = "h".repeat(40);
+
+  class CheckoutProvisioner extends RecordingProvisioner {
+    ensureOpts: unknown[] = [];
+    constructor(snapshotResult: SnapshotResult | null) {
+      super((id) => stubEnv(`/co/${id}`), { baseGitSha: BASE, baseGitRef: "feature", snapshotResult });
+    }
+    override async ensure(runId: string, opts?: unknown): Promise<ExecutionEnvironment> {
+      this.ensureOpts.push(opts);
+      return super.ensure(runId);
+    }
+    baseHeadSha(_runId: string): string | null {
+      return HEAD;
+    }
+  }
+
+  const deps = (r: TestRig, provisioner: Provisioner) => ({
+    store: r.store,
+    dispatcher: r.dispatcher,
+    registry: new AbortRegistry(),
+    tools: r.tools,
+    llmCall: r.llmCall,
+    maxConcurrentRuns: 4,
+    shutdownSignal: new AbortController().signal,
+    maxTurnsForTesting: 20,
+    provisioner,
+  });
+
+  test("checkout run: run_started carries the first-start base; the terminal snapshot releases; inbox stays null", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    r.store.enqueueRun({
+      runId: "run-co",
+      workflowSha: r.workflowSha,
+      cwd: "/proj",
+      initialRouting: { start_node: "start" },
+      inCheckout: true,
+      checkoutPath: "/co/run-co",
+    });
+    r.store.claimNextRun(4);
+    const provisioner = new CheckoutProvisioner({
+      treeSha: "tree1",
+      commitSha: "commit1",
+      parentSnap: BASE,
+      headSha: HEAD,
+      headRef: "feature",
+      diffBaseSha: BASE,
+      committed: null,
+      uncommitted: { filesChanged: 1, insertions: 2, deletions: 0 },
+    });
+    await runOne("run-co", deps(r, provisioner));
+
+    expect(provisioner.ensureOpts[0]).toEqual({ cwd: "/proj", checkoutPath: "/co/run-co" });
+    const started = r.store.getEvents("run-co").find((e) => e.type === "fact.run_started");
+    expect(started?.payload).toMatchObject({ baseGitSha: BASE, baseGitRef: "feature", baseHeadSha: HEAD });
+    const state = r.store.getState("run-co")!;
+    expect(state.status).toBe("completed");
+    expect(state.baseHeadSha).toBe(HEAD);
+    expect(state.inboxStatus).toBeNull();
+    expect(state.changeStat?.uncommitted?.filesChanged).toBe(1);
+    expect(state.checkoutReleased).toBe(true);
+    expect(r.store.getCheckoutHolder("/co/run-co")).toBeNull();
+    r.store.close();
+  });
+
+  test("first-attach worktree_error halts and auto-releases the checkout", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    r.store.enqueueRun({
+      runId: "run-co-fail",
+      workflowSha: r.workflowSha,
+      cwd: "/proj",
+      initialRouting: { start_node: "start" },
+      inCheckout: true,
+      checkoutPath: "/co/gone",
+    });
+    r.store.claimNextRun(4);
+    const provisioner: Provisioner = {
+      async ensure() {
+        throw new Error("checkout_missing: checkout /co/gone does not exist");
+      },
+      async dispose() {},
+      envFor: () => undefined,
+      baseGitSha: () => null,
+      baseGitRef: () => null,
+      async snapshot() {
+        return null;
+      },
+    };
+    await runOne("run-co-fail", deps(r, provisioner));
+    const state = r.store.getState("run-co-fail")!;
+    expect(state.status).toBe("halted");
+    const halt = r.store.getEvents("run-co-fail").find((e) => e.type === "fact.run_terminated");
+    expect((halt?.payload as { reason?: string; detail?: string }).reason).toBe("worktree_error");
+    expect((halt?.payload as { detail?: string }).detail).toContain("checkout_missing");
+    expect(state.checkoutReleased).toBe(true);
+    expect(r.store.getCheckoutHolder("/co/gone")).toBeNull();
+    r.store.close();
+  });
+});

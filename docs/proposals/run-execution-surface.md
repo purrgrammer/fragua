@@ -12,8 +12,19 @@ maturity: draft
 >
 > **Landed: deliverable 2 (`--dirty`, §3).** `captureTree`, `fragua run --dirty`,
 > `run_state.base_head_sha` (contract v7, schema v6) and the reduced dirty-base
-> accept are implemented. The checkout mode (§4) is next; this proposal stays open
-> until it lands.
+> accept are implemented.
+>
+> **Landed: deliverable 3 (`--checkout`, §4, v1 cut).** `fragua run --checkout <path>`,
+> `fragua runs release`, `run_state.in_checkout` / `checkout_path` / `checkout_released`
+> (contract v7 — folded into the unreleased `--dirty` cut — schema v7),
+> `CHECKOUT_HELD_SQL` / `checkoutHeld`, the operator-ownership provisioner and the
+> snapshotter's checkout arm. Implementation notes against this text: the
+> release pair is named `intent.checkout_release` / `fact.checkout_released` and is
+> committed by the CLI in one store transaction (`appendIntentWithFact`) — no daemon
+> fold, no live-fiber set; the enqueue re-reads the held predicate inside its
+> write transaction; `idx_run_state_checkout` is a partial index on `checkout_path`
+> (no `checkout_seq`). The lane, `waitingOn`, the bounded git runner and the
+> `core.fsmonitor` hardening remain Doors.
 >
 > **v1 cut.** Build §2, §3 and §4 with three reductions, and §5 as-is: (1) no lane —
 > a second checkout or dirty run on a held checkout is refused at enqueue with

@@ -13,9 +13,17 @@
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BuildResult, IntentPlane } from "@fragua/core/intent-plane";
-import type { DiffRange, FleetSummary, RunDetail, RunExplanation, StepSnapshot } from "@fragua/core/read-plane";
+import type {
+  DiffRange,
+  FleetSummary,
+  ReadPlane,
+  RunDetail,
+  RunExplanation,
+  StepSnapshot,
+} from "@fragua/core/read-plane";
 import {
   type ArtifactScope,
+  isTerminal,
   type NarrowMessage,
   RUN_STATUSES,
   type RunStatus,
@@ -29,6 +37,7 @@ import {
   defaultGitExec,
   gitDiff,
   type RunActionGate,
+  resolveCheckoutKey,
 } from "@fragua/workspace";
 import chalk from "chalk";
 import { pickRoute } from "../route-picker.ts";
@@ -66,17 +75,18 @@ function writeIntent(
   opts: DiscoveryOpts,
   runId: string,
   verb: string,
-  build: (plane: IntentPlane) => BuildResult,
+  build: (plane: IntentPlane, state: { inCheckout: boolean }) => BuildResult,
   resumeAfter = false,
 ): Promise<number> {
   return withStoreClient(opts, ({ store, plane }) => {
-    if (store.getState(runId) == null) {
+    const state = store.getState(runId);
+    if (state == null) {
       console.error(chalk.red(`${verb}: run not found`) + chalk.dim(` (${runId})`));
       return 1;
     }
-    const built = build(plane);
+    const built = build(plane, state);
     if (!built.ok) {
-      console.error(chalk.red(`${verb}: ${built.error}`));
+      console.error(chalk.red(`${verb}: ${built.error}`) + (built.code != null ? chalk.dim(` [${built.code}]`) : ""));
       return 1;
     }
     try {
@@ -114,8 +124,8 @@ export interface DiscardOptions extends DiscoveryOpts {
 }
 
 export function discardCommand(opts: DiscardOptions): Promise<number> {
-  return withStoreClient(opts, async ({ store, plane }) => {
-    const gate = readGate(store, opts.runId);
+  return withStoreClient(opts, async ({ store, plane, readPlane }) => {
+    const gate = await readGate(store, readPlane, opts.runId, { forAccept: false });
     if (gate == null) {
       console.error(chalk.red("discard: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
@@ -137,8 +147,8 @@ export interface AcceptOptions extends DiscoveryOpts {
 }
 
 export function acceptCommand(opts: AcceptOptions): Promise<number> {
-  return withStoreClient(opts, async ({ store, plane }) => {
-    const gate = readGate(store, opts.runId);
+  return withStoreClient(opts, async ({ store, plane, readPlane }) => {
+    const gate = await readGate(store, readPlane, opts.runId, { forAccept: true });
     if (gate == null) {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
@@ -173,10 +183,24 @@ export function acceptCommand(opts: AcceptOptions): Promise<number> {
 
 /** Build the run-action gate from run_state, or null if the run doesn't exist.
  * The state preconditions (terminal / inbox / worktree) are checked inside the
- * workspace action — this only assembles the inputs (§3.7). */
-function readGate(store: SqliteStore, runId: string): RunActionGate | null {
+ * workspace action — this only assembles the inputs (§3.7). `checkoutBusy`
+ * (accept-only) is the held read on run.cwd's checkout. */
+async function readGate(
+  store: SqliteStore,
+  readPlane: ReadPlane,
+  runId: string,
+  opts: { forAccept: boolean },
+): Promise<RunActionGate | null> {
   const state = store.getState(runId);
   if (state == null) return null;
+  let checkoutBusy: RunActionGate["checkoutBusy"] = null;
+  if (opts.forAccept && state.cwd != null) {
+    const key = await resolveCheckoutKey(defaultGitExec, state.cwd);
+    const holder = key != null ? readPlane.checkoutHeld(key) : null;
+    if (key != null && holder != null && holder.runId !== runId) {
+      checkoutBusy = { runId: holder.runId, status: holder.status, path: key };
+    }
+  }
   return {
     runId,
     status: state.status,
@@ -185,6 +209,9 @@ function readGate(store: SqliteStore, runId: string): RunActionGate | null {
     baseGitSha: state.baseGitSha ?? "",
     baseHeadSha: state.baseHeadSha,
     diffBaseSha: state.diffBaseSha,
+    inCheckout: state.inCheckout,
+    checkoutPath: state.checkoutPath,
+    checkoutBusy,
   };
 }
 
@@ -399,6 +426,15 @@ function collectActiveBudgetWarns(
   return warns;
 }
 
+/** The `in checkout <path>` badge, with the release hint while a terminal
+ * run still holds its checkout. Shared wording with the web badge. */
+export function checkoutBadge(d: Pick<RunDetail, "runId" | "runStatus" | "checkoutPath" | "checkoutReleased">): string {
+  const base = `in checkout ${d.checkoutPath ?? "(unbound)"}`;
+  return isTerminal(d.runStatus) && d.checkoutReleased === false
+    ? `${base} — held — release with fragua runs release ${d.runId}`
+    : base;
+}
+
 function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   const statusColor = d.status === "success" ? chalk.green : d.status === "fail" ? chalk.red : chalk.yellow;
   console.log(chalk.bold(d.runId));
@@ -412,6 +448,7 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
     const dirty = d.baseHeadSha != null ? chalk.yellow(` dirty base over ${d.baseHeadSha.slice(0, 7)}`) : "";
     console.log(`  base:     ${ref}${sha}${dirty}`);
   }
+  if (d.inCheckout === true) console.log(`  checkout: ${checkoutBadge(d)}`);
   console.log(`  cost:     $${d.costUsd.toFixed(4)} ${chalk.dim(`(${d.inputTokens}+${d.outputTokens} tok)`)}`);
   if (d.durationMs != null) console.log(`  duration: ${(d.durationMs / 1000).toFixed(1)}s`);
 
@@ -681,7 +718,11 @@ export function worktreeCommand(opts: WorktreeOptions): Promise<number> {
       console.error(chalk.red("worktree: run has no worktree (bare-cwd or ephemeral)") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
-    const wt = join(detail.cwd, ".fragua", "worktrees", opts.runId);
+    // A checkout run executes in the operator checkout it names.
+    const wt =
+      detail.inCheckout === true && detail.checkoutPath != null
+        ? detail.checkoutPath
+        : join(detail.cwd, ".fragua", "worktrees", opts.runId);
     if (!existsSync(wt)) {
       console.error(
         chalk.yellow(`worktree: worktree no longer exists — likely cleaned up by GC`) + chalk.dim(` (${wt})`),
@@ -800,7 +841,7 @@ export function unquarantineCommand(opts: UnquarantineOptions): Promise<number> 
   }
   const body: { resolution: string; note?: string } = { resolution: r };
   if (opts.note != null && opts.note.length > 0) body.note = opts.note;
-  return writeIntent(opts, opts.runId, "unquarantine", (p) => p.buildUnquarantine(body));
+  return writeIntent(opts, opts.runId, "unquarantine", (p, state) => p.buildUnquarantine(body, state));
 }
 
 export interface SteerOptions extends DiscoveryOpts {

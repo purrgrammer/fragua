@@ -56,6 +56,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       if (fact.payload.baseGitRef !== undefined) {
         next.baseGitRef = fact.payload.baseGitRef;
       }
+      if (fact.payload.baseHeadSha !== undefined) {
+        next.baseHeadSha = fact.payload.baseHeadSha;
+      }
       return next;
     }
     case "fact.dispatch_started": {
@@ -207,6 +210,12 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.run_terminated": {
       closeDispatchInterval(next, now);
       next.nodeStartedAt = null;
+      // contract: no-bump — joins the unreleased v7 cut (pragmas.ts); every
+      // checkout arm keys on `inCheckout`, which no pre-v7 log carries.
+      // A checkout run with no base never started, so it never wrote the
+      // checkout: free it (a waiter cancelled while queued, a first-attach
+      // worktree_error).
+      if (next.inCheckout && next.baseGitSha == null) next.checkoutReleased = true;
       const p = fact.payload;
       if (p.status === "completed") {
         next.status = "completed";
@@ -326,6 +335,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.inboxStatus = "discarded";
       return next;
     }
+    case "fact.checkout_released": {
+      next.checkoutReleased = true;
+      return next;
+    }
     case "fact.run_requeued_after_crash": {
       // If sweep captured the dying daemon's last heartbeat, credit the
       // pre-crash active span (heartbeat updates ~every 5s, so within ~5s of
@@ -364,6 +377,13 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.diffBaseSha = fact.payload.diffBaseSha;
       const hasStat = fact.payload.committed !== null || fact.payload.uncommitted !== null;
       next.changeStat = hasStat ? { committed: fact.payload.committed, uncommitted: fact.payload.uncommitted } : null;
+      // A checkout run's work is already in the operator's tree — never held
+      // aside for the inbox. Its recorded completion frees the checkout.
+      if (next.inCheckout) {
+        next.inboxStatus = null;
+        if (next.status === "completed") next.checkoutReleased = true;
+        return next;
+      }
       // Inbox gate is recoverable AGENT work, not "diff vs base != 0".
       // Committed work counts as the run's own only when the worktree ended on
       // the provisioned, detached line: `headRef === null`. A named branch
@@ -420,6 +440,9 @@ export function genesisToInitialState(runId: string, payload: RunEnqueuedPayload
     baseGitSha: payload.baseGitSha ?? null,
     baseGitRef: payload.baseGitRef ?? null,
     baseHeadSha: payload.baseHeadSha ?? null,
+    inCheckout: payload.inCheckout === true,
+    checkoutPath: null,
+    checkoutReleased: false,
     finalGitSha: null,
     finalHeadRef: null,
     diffBaseSha: null,

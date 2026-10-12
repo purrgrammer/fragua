@@ -283,6 +283,37 @@ describe("importRunBundle", () => {
     dst.close();
   });
 
+  test("round-trips inCheckout and leaves checkout_path null", async () => {
+    const src = freshStore();
+    const sha = await seedWorkflow(src, "b".repeat(64));
+    const runId = newRunId();
+    const key = "/home/dev/feature-wt";
+    src.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id",
+      projectName: "proj",
+      inCheckout: true,
+      checkoutPath: key,
+    });
+    // a non-terminal (still queued) checkout run: it holds its key at the source
+    expect(src.getCheckoutHolder(key)?.runId).toBe(runId);
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const state = dst.getState(runId)!;
+    expect(state.inCheckout).toBe(true);
+    expect(state.checkoutPath).toBeNull();
+    expect(state.checkoutReleased).toBe(false);
+    expect(state.inboxStatus).toBeNull();
+    // an imported run never holds a checkout, so it wedges no enqueue / accept
+    expect(dst.getCheckoutHolder(key)).toBeNull();
+    dst.close();
+  });
+
   test("a cwd-less run WITHOUT the import marker is NOT flagged imported", async () => {
     // The regression guard: `imported` keys on the `imported_runs` marker, not on
     // a null cwd. A run enqueued without filesystem context (CI / API by sha) has

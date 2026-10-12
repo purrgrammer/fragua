@@ -24,7 +24,7 @@
 //      the daemon's startup pwd).
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecutionEnvironment } from "@fragua/core";
@@ -507,6 +507,115 @@ describe("WorktreeProvisioner — snapshots (worktrees.md)", () => {
       expect(await p.snapshot("r-local", "terminal")).toBeNull();
     } finally {
       rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("WorktreeProvisioner — checkout runs", () => {
+  function checkoutRepo(): { repo: string; git: (args: string[]) => string } {
+    const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "fragua-prov-co-")));
+    const git = (args: string[]) => {
+      const r = Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        cwd: repo,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr.toString()}`);
+      return r.stdout.toString().trim();
+    };
+    git(["init", "-q"]);
+    writeFileSync(
+      join(repo, ".gitignore"),
+      ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n",
+    );
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    return { repo, git };
+  }
+
+  test("ensure with checkoutPath attaches; dispose leaves the checkout", async () => {
+    const { repo, git } = checkoutRepo();
+    try {
+      const before = git(["worktree", "list", "--porcelain"]);
+      const p = new WorktreeProvisioner({ bootstrap: "touch BOOTSTRAPPED" });
+      const env = await p.ensure("r-co", { cwd: repo, checkoutPath: repo });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      expect(env.cwd()).toBe(repo);
+      expect(p.baseGitSha("r-co")).toBe(git(["rev-parse", "HEAD"]));
+      expect(p.baseHeadSha("r-co")).toBeNull();
+      expect(existsSync(join(repo, "BOOTSTRAPPED"))).toBe(false);
+      const r = await env.exec('printf %s "$FRAGUA_RUN_ID"');
+      expect(r.stdout).toBe("r-co");
+      await p.dispose("r-co");
+      expect(existsSync(join(repo, "a.txt"))).toBe(true);
+      expect(git(["worktree", "list", "--porcelain"])).toBe(before);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh provisioner given baseRef + baseHeadSha adopts and does not capture", async () => {
+    const { repo, git } = checkoutRepo();
+    try {
+      writeFileSync(join(repo, "a.txt"), "wip\n");
+      const first = new WorktreeProvisioner();
+      await first.ensure("r-adopt", { cwd: repo, checkoutPath: repo });
+      const s = first.baseGitSha("r-adopt")!;
+      const head = first.baseHeadSha("r-adopt")!;
+      expect(head).toBe(git(["rev-parse", "HEAD"]));
+      expect(git(["rev-parse", "refs/fragua/bases/r-adopt"])).toBe(s);
+      // the daemon restarts; the operator kept editing
+      writeFileSync(join(repo, "a.txt"), "wip and more\n");
+      const again = new WorktreeProvisioner();
+      await again.ensure("r-adopt", { cwd: repo, checkoutPath: repo, baseRef: s, baseHeadSha: head });
+      expect(again.baseGitSha("r-adopt")).toBe(s);
+      expect(again.baseHeadSha("r-adopt")).toBe(head);
+      expect(git(["rev-parse", "refs/fragua/bases/r-adopt"])).toBe(s);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("attach failure message starts with the checkout_* code", async () => {
+    const { repo } = checkoutRepo();
+    try {
+      const p = new WorktreeProvisioner();
+      await expect(p.ensure("r-miss", { cwd: repo, checkoutPath: join(repo, "gone") })).rejects.toThrow(
+        /^checkout_missing: /,
+      );
+      const other = checkoutRepo();
+      try {
+        await expect(p.ensure("r-other", { cwd: repo, checkoutPath: other.repo })).rejects.toThrow(
+          /^checkout_unregistered: /,
+        );
+      } finally {
+        rmSync(other.repo, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("snapshots for one run serialise: a boundary started before the terminal never moves snapshots/<id> past it", async () => {
+    const { repo, git } = checkoutRepo();
+    try {
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-chain", { cwd: repo, checkoutPath: repo });
+      await env.writeFile("x.txt", "one\n");
+      const stepP = p.snapshot("r-chain", "step");
+      const termP = p.snapshot("r-chain", "terminal");
+      const [step, term] = await Promise.all([stepP, termP]);
+      if (step == null || term == null) throw new Error("expected both snapshots");
+      expect(term.parentSnap).toBe(step.commitSha);
+      expect(git(["rev-parse", "refs/fragua/snapshots/r-chain"])).toBe(term.commitSha);
+      // checkout arm: diff base is the base, the whole effect is uncommitted
+      expect(term.diffBaseSha).toBe(p.baseGitSha("r-chain")!);
+      expect(term.committed).toBeNull();
+      expect(term.uncommitted?.filesChanged).toBe(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
     }
   });
 });

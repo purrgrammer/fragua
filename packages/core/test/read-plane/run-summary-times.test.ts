@@ -64,6 +64,9 @@ function baseState(overrides: Partial<RunState> = {}): RunState {
     baseGitSha: null,
     baseGitRef: null,
     baseHeadSha: null,
+    inCheckout: false,
+    checkoutPath: null,
+    checkoutReleased: false,
     ...overrides,
   } as RunState;
 }

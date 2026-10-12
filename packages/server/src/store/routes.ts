@@ -23,6 +23,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { RunActionExec, RunSnapshotReader, WorkflowReader } from "../ports.ts";
 import { numericQueryParam } from "./query-params.ts";
+import { buildRunActionGate } from "./run-action-gate.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
@@ -550,9 +551,19 @@ export function createRoutes(deps: ServerDeps): Hono {
     commitBuilt(c, c.req.param("id"), plane.buildResume((await readJson(c)) ?? {})),
   );
 
-  app.post("/runs/:id/unquarantine", async (c) =>
-    commitBuilt(c, c.req.param("id"), plane.buildUnquarantine(await readJson(c))),
-  );
+  // A checkout run's retry / treat_as_done would replay non-idempotent work
+  // over the operator's tree: the intent plane refuses them (`checkout_replay`)
+  // and that refusal is a 409, not a malformed-body 400.
+  app.post("/runs/:id/unquarantine", async (c) => {
+    const runId = c.req.param("id");
+    const state = readPlane.controlState(runId);
+    if (state == null) return c.json({ error: "run not found", code: "not_found" }, 404);
+    const built = plane.buildUnquarantine(await readJson(c), { inCheckout: state.inCheckout });
+    if (!built.ok && built.code === "checkout_replay") {
+      return c.json({ error: built.error, code: built.code }, 409);
+    }
+    return commitBuilt(c, runId, built);
+  });
 
   app.post("/runs/:id/priority", async (c) =>
     commitBuilt(c, c.req.param("id"), plane.buildPriority(await readJson(c))),
@@ -593,30 +604,20 @@ export function createRoutes(deps: ServerDeps): Hono {
   // ff-ability / conflict. A branch-name collision without `--force` and a
   // rare target-moved race fall through to the sweep's defense-in-depth.
 
-  // Read run_state and assemble the gate the workspace action consults. The
-  // only check here is existence (404) — the state preconditions (terminal /
-  // in-inbox / has-worktree) live inside `applyAccept`/`applyDiscard` so server
-  // and CLI share one set of refusals (intent-plane.md §3.7).
-  function readGate(c: Context, runId: string): { ok: true; gate: RunActionGate } | { ok: false; res: Response } {
-    const state = readPlane.controlState(runId);
-    if (state == null) return { ok: false, res: c.json({ error: "run not found", code: "not_found" }, 404) };
-    return {
-      ok: true,
-      gate: {
-        runId,
-        status: state.status,
-        inboxStatus: state.inboxStatus,
-        cwd: state.cwd,
-        baseGitSha: state.baseGitSha ?? "",
-        baseHeadSha: state.baseHeadSha,
-        diffBaseSha: state.diffBaseSha,
-      },
-    };
+  // The only check here is existence (404); see `buildRunActionGate`.
+  async function readGate(
+    c: Context,
+    runId: string,
+    opts: { forAccept: boolean },
+  ): Promise<{ ok: true; gate: RunActionGate } | { ok: false; res: Response }> {
+    const gate = await buildRunActionGate(readPlane, runId, opts);
+    if (gate == null) return { ok: false, res: c.json({ error: "run not found", code: "not_found" }, 404) };
+    return { ok: true, gate };
   }
 
   app.post("/runs/:id/accept", async (c) => {
     const runId = c.req.param("id");
-    const g = readGate(c, runId);
+    const g = await readGate(c, runId, { forAccept: true });
     if (!g.ok) return g.res;
     // Run the accept SYNCHRONOUSLY so the operator sees the result now: replay
     // the run's commits onto HEAD + stage the tail. The gate refusals + git
@@ -639,7 +640,7 @@ export function createRoutes(deps: ServerDeps): Hono {
 
   app.post("/runs/:id/discard", async (c) => {
     const runId = c.req.param("id");
-    const g = readGate(c, runId);
+    const g = await readGate(c, runId, { forAccept: false });
     if (!g.ok) return g.res;
     const res = await runActions.discard(g.gate);
     if (!res.ok) return c.json({ error: res.detail, code: res.reason }, 409);

@@ -106,3 +106,27 @@ describe("fragua runs — numeric flags arrive coerced (cac → number)", () => 
     expect(opts["iteration"]).toBe(2);
   });
 });
+
+describe("--checkout is declared only on `fragua run`", () => {
+  const bin = new URL("../bin/fragua.ts", import.meta.url).pathname;
+  const runBin = (...args: string[]) => {
+    const r = Bun.spawnSync({ cmd: [process.execPath, bin, ...args], stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode, text: r.stdout.toString() + r.stderr.toString() };
+  };
+
+  test("ci and schedule reject --checkout", () => {
+    const ci = runBin("ci", "nope.yaml", "--checkout", ".");
+    expect(ci.code).not.toBe(0);
+    expect(ci.text).toContain("Unknown option `--checkout`");
+    const sched = runBin("schedule", "add", "nope", "--every", "1h", "--checkout", ".");
+    expect(sched.code).not.toBe(0);
+    expect(sched.text).toContain("Unknown option `--checkout`");
+  });
+
+  test("run --help documents --checkout with the decided help text", () => {
+    const help = runBin("run", "--help");
+    expect(help.text).toContain(
+      "Run inside this existing checkout of the repository (no per-run worktree; the run's changes land directly in it). Use . for the current one.",
+    );
+  });
+});

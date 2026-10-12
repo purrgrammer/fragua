@@ -10,17 +10,24 @@ import { parseWorkflow } from "../../src/parser/yaml.ts";
 // build* never touches the store, so a stub that records appendIntent is
 // enough for the whole suite. The pure build half is what we exhaustively
 // cover; commit is a single passthrough, smoke-tested at the end.
+const NOT_CHECKOUT = { inCheckout: false };
+
 function rig() {
   const appended: { runId: string; intent: IntentEvent }[] = [];
+  const withFact: { runId: string; intent: IntentEvent; facts: unknown[]; expectedVersion: number }[] = [];
   const store = {
     appendIntent(runId: string, intent: IntentEvent) {
       appended.push({ runId, intent });
       return { seq: appended.length, ts: 0 };
     },
+    appendIntentWithFact(runId: string, intent: IntentEvent, facts: unknown[], expectedVersion: number) {
+      withFact.push({ runId, intent, facts, expectedVersion });
+      return { intentSeq: 41, factSeqs: [42], newVersion: expectedVersion + 1 };
+    },
   } as unknown as IEventStore;
   let n = 0;
   const newRunId = () => `run-${++n}`;
-  return { plane: makeIntentPlane({ store, newRunId }), appended };
+  return { plane: makeIntentPlane({ store, newRunId }), appended, withFact };
 }
 
 describe("intent plane — build* (validate + construct)", () => {
@@ -74,13 +81,13 @@ describe("intent plane — build* (validate + construct)", () => {
 
   test("unquarantine: resolution ∈ enum", () => {
     const { plane } = rig();
-    expect(plane.buildUnquarantine({ resolution: "retry" })).toEqual({
+    expect(plane.buildUnquarantine({ resolution: "retry" }, NOT_CHECKOUT)).toEqual({
       ok: true,
       intent: { type: "intent.unquarantine", payload: { resolution: "retry" } },
     });
-    expect(plane.buildUnquarantine({ resolution: "treat_as_done", note: "verified" }).ok).toBe(true);
-    expect(plane.buildUnquarantine({ resolution: "bogus" }).ok).toBe(false);
-    expect(plane.buildUnquarantine({}).ok).toBe(false);
+    expect(plane.buildUnquarantine({ resolution: "treat_as_done", note: "verified" }, NOT_CHECKOUT).ok).toBe(true);
+    expect(plane.buildUnquarantine({ resolution: "bogus" }, NOT_CHECKOUT).ok).toBe(false);
+    expect(plane.buildUnquarantine({}, NOT_CHECKOUT).ok).toBe(false);
   });
 
   test("priority: newPriority is any number (incl. negative)", () => {
@@ -402,6 +409,18 @@ describe("intent plane — buildEnqueue", () => {
     expect(r.params.baseHeadSha).toBe("h".repeat(40));
   });
 
+  test("buildEnqueue carries checkoutPath into params with inCheckout", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", checkoutPath: "/repo/feature-wt" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.inCheckout).toBe(true);
+    expect(r.params.checkoutPath).toBe("/repo/feature-wt");
+    const plain = plane.buildEnqueue({ workflowSha: "sha1" });
+    if (!plain.ok) throw new Error(plain.error);
+    expect(plain.params.inCheckout).toBeUndefined();
+    expect(plain.params.checkoutPath).toBeUndefined();
+  });
+
   test("no pinned base → params omit baseGitSha/baseGitRef", () => {
     const { plane } = rig();
     const r = plane.buildEnqueue({ workflowSha: "sha1" });
@@ -451,5 +470,50 @@ describe("intent plane — commit", () => {
     const { seq } = plane.commit("run-1", built.intent);
     expect(seq).toBe(1);
     expect(appended).toEqual([{ runId: "run-1", intent: { type: "intent.pause_requested", payload: {} } }]);
+  });
+});
+
+describe("buildUnquarantine — checkout_replay", () => {
+  test("refuses retry and treat_as_done for an in-checkout run with code checkout_replay", () => {
+    const { plane } = rig();
+    for (const resolution of ["retry", "treat_as_done"]) {
+      const r = plane.buildUnquarantine({ resolution }, { inCheckout: true });
+      expect(r.ok).toBe(false);
+      if (r.ok) continue;
+      expect(r.code).toBe("checkout_replay");
+      expect(r.error).toContain("cancel");
+    }
+  });
+
+  test("allows cancel for an in-checkout run", () => {
+    const { plane } = rig();
+    expect(plane.buildUnquarantine({ resolution: "cancel" }, { inCheckout: true })).toEqual({
+      ok: true,
+      intent: { type: "intent.unquarantine", payload: { resolution: "cancel" } },
+    });
+  });
+});
+
+describe("buildCheckoutRelease", () => {
+  const base = { status: "halted" as const, inCheckout: true, checkoutReleased: false, checkoutPath: "/co" };
+
+  test("refuses not_checkout_run / not_terminal / already_released", () => {
+    const { plane } = rig();
+    const codes = [
+      plane.buildCheckoutRelease({ ...base, inCheckout: false }),
+      plane.buildCheckoutRelease({ ...base, status: "running" }),
+      plane.buildCheckoutRelease({ ...base, checkoutReleased: true }),
+    ].map((r) => (r.ok ? "ok" : r.code));
+    expect(codes).toEqual(["not_checkout_run", "not_terminal", "already_released"]);
+  });
+
+  test("builds intent.checkout_release + fact.checkout_released for a terminal unreleased holder", () => {
+    const { plane, withFact } = rig();
+    const b = plane.buildCheckoutRelease(base);
+    if (!b.ok) throw new Error(b.error);
+    expect(b.intent).toEqual({ type: "intent.checkout_release", payload: {} });
+    expect(b.fact).toEqual({ type: "fact.checkout_released", payload: {} });
+    expect(plane.commitCheckoutRelease("run-x", b, 7)).toEqual({ seq: 41 });
+    expect(withFact).toEqual([{ runId: "run-x", intent: b.intent, facts: [b.fact], expectedVersion: 7 }]);
   });
 });

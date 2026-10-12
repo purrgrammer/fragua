@@ -20,7 +20,15 @@ import type {
   Schedule,
   ScheduleOverlapPolicy,
 } from "@fragua/store";
-import { type DaemonEvent, type IntentEvent, MAX_EVENT_PAYLOAD_BYTES, utf8ByteLength } from "@fragua/types";
+import {
+  type DaemonEvent,
+  type FactEvent,
+  type IntentEvent,
+  isTerminal,
+  MAX_EVENT_PAYLOAD_BYTES,
+  type RunStatus,
+  utf8ByteLength,
+} from "@fragua/types";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
@@ -37,7 +45,32 @@ import { hasInputs, setInputs } from "../routing.ts";
 import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
-export type BuildResult<T extends IntentEvent = IntentEvent> = { ok: true; intent: T } | { ok: false; error: string };
+/** A failed build may carry a machine `code` (e.g. `checkout_replay`) the
+ * adapter maps to its own surface (HTTP 409, CLI `[code]` + non-zero exit). */
+export type BuildResult<T extends IntentEvent = IntentEvent> =
+  | { ok: true; intent: T }
+  | { ok: false; error: string; code?: string };
+
+/** Why `fragua runs release` refuses. */
+export type CheckoutReleaseRefusal = "not_checkout_run" | "not_terminal" | "already_released";
+
+/** The run-state slice the checkout-release builder checks. */
+export interface CheckoutReleaseState {
+  status: RunStatus;
+  inCheckout: boolean;
+  checkoutReleased: boolean;
+  checkoutPath: string | null;
+}
+
+/** A validated checkout release: the operator intent and the fact it folds
+ * into, committed together by {@link IntentPlane.commitCheckoutRelease}. */
+export type CheckoutReleaseBuild =
+  | {
+      ok: true;
+      intent: Extract<IntentEvent, { type: "intent.checkout_release" }>;
+      fact: Extract<FactEvent, { type: "fact.checkout_released" }>;
+    }
+  | { ok: false; code: CheckoutReleaseRefusal; error: string };
 
 /** Genesis-event payload budget for the serialized run `inputs`. The store caps
  * the whole `intent.run_enqueued` payload at 4 KiB (`MAX_EVENT_PAYLOAD_BYTES`);
@@ -101,6 +134,9 @@ export interface EnqueueInput {
   /** The `--base` ref as typed (branch/tag/sha) — human label for `baseGitSha`.
    * For `--dirty`, the operator's branch at capture. */
   baseGitRef?: string | undefined;
+  /** `--checkout`: the checkout key (realpath of its toplevel). Sets the
+   * portable genesis `inCheckout` marker and the local `run_state.checkout_path`. */
+  checkoutPath?: string | undefined;
   /** `--dirty`: the operator HEAD the synthetic `baseGitSha` was captured over.
    * Carried onto the genesis payload + `run_state.base_head_sha`. */
   baseHeadSha?: string | undefined;
@@ -193,7 +229,10 @@ export interface IntentPlane {
   buildCancel(body: unknown): BuildResult<IntentOf<"intent.cancel_requested">>;
   buildHuman(body: unknown): BuildResult<IntentOf<"intent.human_input">>;
   buildResume(body: unknown): BuildResult<IntentOf<"intent.resume">>;
-  buildUnquarantine(body: unknown): BuildResult<IntentOf<"intent.unquarantine">>;
+  /** Quarantine resolution. `retry` / `treat_as_done` replay from the start,
+   * so they are refused (`checkout_replay`) for a run that executes in an
+   * operator checkout — cancel is its only resolution. */
+  buildUnquarantine(body: unknown, state: { inCheckout: boolean }): BuildResult<IntentOf<"intent.unquarantine">>;
   buildPriority(body: unknown): BuildResult<IntentOf<"intent.priority_adjusted">>;
   buildBudget(body: unknown): BuildResult<IntentOf<"intent.budget_adjusted">>;
   buildMaxRetries(body: unknown): BuildResult<IntentOf<"intent.max_retries_adjusted">>;
@@ -210,6 +249,16 @@ export interface IntentPlane {
   }): IntentOf<"intent.accept_run">;
   /** Record a completed local discard (refs already deleted). Pure. */
   buildDiscardRun(result: { refs: string[] }): IntentOf<"intent.discard_run">;
+  /** Validate a `fragua runs release`: refuses `not_checkout_run`,
+   * `not_terminal`, `already_released`. Pure. */
+  buildCheckoutRelease(state: CheckoutReleaseState): CheckoutReleaseBuild;
+  /** The single checkout-release write: the intent and its fact in one store
+   * transaction, OCC-checked against `expectedVersion`. */
+  commitCheckoutRelease(
+    runId: string,
+    build: Extract<CheckoutReleaseBuild, { ok: true }>,
+    expectedVersion: number,
+  ): { seq: number };
   /** Workflow-identity mint (parse + hash + serialize IR). Pure. */
   buildSaveWorkflow(source: string): WorkflowMint;
   /** Validate input bindings, assemble routing, mint the run id, build the
@@ -270,8 +319,15 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       if (body.note !== undefined) payload.note = body.note;
       return { ok: true, intent: { type: "intent.resume", payload } };
     },
-    buildUnquarantine(body) {
+    buildUnquarantine(body, state) {
       if (!Value.Check(S.UnquarantineBody, body)) return fail(S.UnquarantineBody, body);
+      if (state.inCheckout && (body.resolution === "retry" || body.resolution === "treat_as_done")) {
+        return {
+          ok: false,
+          code: "checkout_replay",
+          error: `${body.resolution} would replay the run from the start over a checkout you also own; cancel it instead (--resolution cancel)`,
+        };
+      }
       const payload: { resolution: "treat_as_done" | "retry" | "cancel"; note?: string } = {
         resolution: body.resolution,
       };
@@ -328,6 +384,34 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
     },
     buildDiscardRun(result) {
       return { type: "intent.discard_run", payload: { refs: result.refs } };
+    },
+    buildCheckoutRelease(state) {
+      if (!state.inCheckout) {
+        return { ok: false, code: "not_checkout_run", error: "run did not execute in a checkout" };
+      }
+      if (!isTerminal(state.status)) {
+        return {
+          ok: false,
+          code: "not_terminal",
+          error: `run not terminal (status=${state.status}); cancel it first or wait for it to finish`,
+        };
+      }
+      if (state.checkoutReleased) {
+        return {
+          ok: false,
+          code: "already_released",
+          error: `checkout ${state.checkoutPath ?? "(unbound)"} is already released`,
+        };
+      }
+      return {
+        ok: true,
+        intent: { type: "intent.checkout_release", payload: {} },
+        fact: { type: "fact.checkout_released", payload: {} },
+      };
+    },
+    commitCheckoutRelease(runId, build, expectedVersion) {
+      const r = deps.store.appendIntentWithFact(runId, build.intent, [build.fact], expectedVersion);
+      return { seq: r.intentSeq };
     },
     buildSaveWorkflow(source) {
       let graph: Graph;
@@ -424,6 +508,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
         ...(input.baseGitSha !== undefined ? { baseGitSha: input.baseGitSha } : {}),
         ...(input.baseGitRef !== undefined ? { baseGitRef: input.baseGitRef } : {}),
         ...(input.baseHeadSha !== undefined ? { baseHeadSha: input.baseHeadSha } : {}),
+        ...(input.checkoutPath !== undefined ? { inCheckout: true as const, checkoutPath: input.checkoutPath } : {}),
       };
       return { ok: true, runId, params };
     },

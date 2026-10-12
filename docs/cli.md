@@ -36,7 +36,7 @@ fragua providers {ls,add,rm,edit}-model  <provider> <id> [flags]
 ## create runs — `fragua run <workflow>`
 
 ```sh
-fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref> | --dirty]
+fragua run <workflow> [-i name=value]… [--title <t>] [--priority <n>] [--base <ref> | --dirty | --checkout <path>]
                       [--no-follow] [--cwd <dir>] [--db <path>]
 ```
 
@@ -66,6 +66,59 @@ a commit to capture over: <checkout> has no commits yet`), and on a checkout who
 `.gitignore` lacks the fragua state block (run `fragua init`). Caveat: a branch the
 run pushes descends from the captured commit, so pushing it publishes your WIP,
 untracked files included.
+
+`--checkout <path>` — *Run inside this existing checkout of the repository (no
+per-run worktree; the run's changes land directly in it). Use . for the current
+one.* `<path>` is any directory inside a checkout; the run is keyed on that
+checkout's toplevel (realpath). It is accepted only when the checkout belongs to
+the same repository as the project (same `git rev-parse --git-common-dir`), is not
+a fragua-owned run worktree (`.fragua/worktrees/<id>`), has at least one commit,
+and ignores the fragua state block. Otherwise the enqueue refuses, writing nothing:
+`checkout_missing`, `checkout_unregistered`, `checkout_fragua_owned`,
+`checkout_unborn`, or the `fragua init` hint. It cannot be combined with `--base`
+(honouring it would require checking out the ref in a checkout fragua does not
+own) or `--dirty` (`--dirty` asks for a fresh per-run worktree and `--checkout`
+asks for none). Neither `fragua schedule`, `fragua ci` nor the web enqueue accepts
+it.
+
+The run's base is the checkout's state when the run **first starts**: HEAD when the
+tree is clean, otherwise a synthetic commit over HEAD kept at
+`refs/fragua/bases/<run_id>`. Your index, HEAD and branch are never reset, checked
+out, stashed or removed by fragua; the agent may commit or switch branches there as
+any workflow could. `runs diff --against base` shows everything the run did to the
+checkout. `runs status` shows `in checkout <path>`.
+
+**One run per checkout.** A checkout is *held* by any run on it that is not yet
+released: queued, running, paused, quarantined, or terminal-but-unreleased. While
+it is held, a second `--checkout` run on it, a `--dirty` run over it, and an
+`accept` into it all refuse with `checkout_busy`:
+
+```
+checkout <path> is held by run <id> (<status>); wait for it to finish, or run `fragua runs release <id>` once it is terminal
+```
+
+A checkout run releases on its own when it completes and its terminal snapshot is
+recorded, or when it ends without ever starting (cancelled while queued, a
+first-attach failure). A run that halts, is cancelled after it started, or
+completes without a recorded snapshot keeps the checkout until you run
+`fragua runs release <id>` (below). This is a read, not a lock: two commands
+started at the same moment on one checkout, or one checkout reached through two
+stores, can still collide — an operator-concurrency hazard.
+
+**Iterating on a branch (the PR-review pattern).** Iterate *on* the branch with a
+checkout run, rather than having a detached run check the branch out:
+
+```sh
+git worktree add ../feature-wt feature                     # once
+fragua run work   --checkout ../feature-wt --input task=…  # feature work
+fragua run review-fixes --checkout ../feature-wt --input pr=123
+fragua run review-fixes --checkout ../feature-wt --input pr=123
+```
+
+Each run starts from the previous one's result; commit and push from
+`../feature-wt` whenever you choose. A run that halts or is cancelled holds the
+checkout until `fragua runs release`. `--checkout .` on the main checkout works the
+same way when you are on `feature` there.
 
 Saves + enqueues, then
 **follows by default** (streams the event log to terminal, answering HITL gates
@@ -97,6 +150,7 @@ fragua runs accept  <id> [--autostash]            # replay the run's commits ont
                                                   #   a run that commits on its own branch (agent/$FRAGUA_RUN_ID) is not in the inbox: land it via that branch
                                                   #   a --dirty run lands as unstaged changes instead (see below); --autostash is ignored
 fragua runs discard <id>                          # drop the run's fragua refs (never refs/fragua/bases/<id>)
+fragua runs release <id>                          # free a terminal --checkout run's hold on its checkout
 
 # lifecycle + control
 fragua runs respond <id> [route] [--note "…"]     # answer a HITL gate (interactive without a route)
@@ -148,6 +202,28 @@ would also revert your edits elsewhere). Every refusal writes nothing and names
 A land interrupted part-way is not resumed automatically: restore the listed paths
 from `refs/fragua/bases/<run_id>`. `discard` never deletes that ref; `fragua gc
 --snapshots` reclaims it with the run's other refs.
+
+Every `accept` writes `run.cwd`'s checkout, so it also refuses `checkout_busy` while
+a `--checkout` run holds that checkout — including a halted or cancelled one that
+awaits `fragua runs release`.
+
+**Checkout runs are never in the inbox.** Their changes are already in the
+checkout, so `accept` and `discard` refuse `not_in_inbox`:
+
+```
+run executed in checkout <path>; its changes are already there — commit them or restore with `git restore --source=<base_git_sha> --worktree -- :/`
+```
+
+**`fragua runs release <id>`** frees a terminal checkout run's hold. It is
+synchronous and has no server route: it records `intent.checkout_release` and
+`fact.checkout_released` together. It refuses `not_checkout_run`, `not_terminal`
+(cancel the run first) and `already_released`. Release asserts that nothing is
+still writing the checkout. Caveat: a run that has only just completed may still be
+recording its terminal snapshot — releasing at that moment does not wait for it,
+and the command says so. `unquarantine --resolution retry|treat_as_done` is refused
+for a checkout run (`checkout_replay`): both replay from the start over a tree you
+also own, so cancel it instead. `fragua gc --snapshots` keeps an unreleased checkout
+run's refs and reclaims them once it is released.
 
 `fragua runs status` surfaces any active soft budget warning (the 80% mark
 before the hard pause); `fragua runs tail` prefixes the same event with ⚠ in

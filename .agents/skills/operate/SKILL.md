@@ -47,6 +47,7 @@ Common failures:
 - **`fragua runs ls` errors** — no store at this path. `fragua harness` creates `~/.fragua/fragua.db` on first start; or check `--db`.
 - **Runs stuck `queued`** — no harness running (or its daemon died / heartbeat stale): nothing is executing the queue. Start/restart `fragua harness` — but the user should run it themselves (don't start it on their behalf without asking; it attaches to the current shell).
 - **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`. A workflow with `type: judge` steps additionally needs a judge provider — `fragua providers add typesafe` (CI: `TYPESAFE_API_KEY`); missing, the run halts at its first judge with "provider typesafe is not credentialed". A judge step can name another backend with `provider:`, and one whose record marks auth optional (a local runtime) needs no credential at all.
+- **`checkout_busy`** — `fragua run --checkout <path>` (or `--dirty`, or `runs accept`) refuses because another run still holds that checkout. The message names the holder and its status: wait for it to finish, or — once it is terminal — `fragua runs release <id>`. A halted or cancelled checkout run keeps holding until released.
 - **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
 
 ---
@@ -59,6 +60,7 @@ fragua run <workflow>  \
   [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
   [--dirty]              # base the run on your uncommitted tree (captured now; untracked included, ignored excluded; not with --base)
+  [--checkout <path>]    # run inside this existing checkout (no worktree; changes land in it directly); `.` = current one; not with --base/--dirty
   [--no-follow]          # enqueue and exit; print only the run id
   [--db path/to/db]      # target a specific store (default ~/.fragua/fragua.db)
 ```
@@ -66,6 +68,8 @@ fragua run <workflow>  \
 `<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. `--input name=value` binds typed inputs (`${{ inputs.name }}`; a value `@path`/`@-` reads a file/stdin); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised (follow by default; `--no-follow` to opt out).
 
 > **A multi-line or punctuation-heavy value → `@file`/`@-`, never an inline `--input x="…"`.** Your *shell* expands the quoted string before `fragua` sees it: backticks run as command substitution (silently deleting the wrapped words), `$(…)` / `$VAR` get evaluated, and embedded quotes truncate it — so a long task prompt arrives mangled, and the run executes against corrupted text. Write the prompt to a file and pass `--input task=@prompt.txt` (or pipe it via `--input task=@-`). This is purely about getting the bytes past the shell intact; the workflow's `${{ inputs.x }}` substitution is a separate, safe step.
+
+`--checkout <path>` runs in an existing checkout of the same repository instead of a fresh worktree — the run's changes land directly in it, and its base is captured when it first starts. **Busy rule:** one run holds a checkout from enqueue until it is released (automatically on a recorded completion or if it never started; otherwise `fragua runs release <id>`). While held, another `--checkout` run on it, a `--dirty` run over it, and an `accept` into it refuse `checkout_busy`. The PR-review pattern: `git worktree add ../feature-wt feature` once, then repeated `fragua run … --checkout ../feature-wt`. See `docs/execution-model.md` § Checkout runs.
 
 Every `bash` call and `tool` step in the run sees `$FRAGUA_RUN_ID` (the run's id, engine-set, shell-only) — see `docs/execution-model.md` § Per-run branches.
 
@@ -134,6 +138,7 @@ Each verb appends an `intent.*` event the daemon folds on its next tick (~50ms);
 | `fragua runs resume <id> [--note <t>]` | `intent.resume` | Any `paused_*` run → `queued`. |
 | `fragua runs respond <id> [route] [--note <t>]` | `intent.human_input` | Answers a `paused_human` gate; route must be in the gate's enum (§5). |
 | `fragua runs unquarantine <id> --resolution treat_as_done\|retry\|cancel` | `intent.unquarantine` | Resolves an orphan side effect (§6). |
+| `fragua runs release <id>` | `intent.checkout_release` (+ `fact.checkout_released`, written in the same transaction — synchronous, no daemon) | A terminal `--checkout` run stops holding its checkout: `runs status` drops `held — release with …`, and new `--checkout` / `--dirty` / `accept` on that checkout proceed. Refuses `not_checkout_run` / `not_terminal` (cancel first) / `already_released`. Right after a completion the terminal snapshot may still be recording; release doesn't wait (the message says so). |
 | `fragua runs priority <id> <n> [--note <t>]` | `intent.priority_adjusted` | Re-orders the queue; running runs unaffected. |
 | `fragua runs budget <id> --scope <s> --metric <m> --new-limit <n> [--note <t>]` | `intent.budget_adjusted` | Raises a cap; doesn't wake on its own — pair with `resume`. |
 | `fragua runs max-retries <id> <n> --node <nodeId> [--note <t>]` | `intent.max_retries_adjusted` | Raises one node's handler-retry cap on a `paused{reason:"max_retries"}` run; pair with `resume`. |
@@ -171,6 +176,8 @@ fragua runs unquarantine <id> --resolution treat_as_done|retry|cancel --note "<e
 #   cancel        — stop the run (blast radius unclear)
 ```
 
+For a `--checkout` run, `treat_as_done` and `retry` are refused with `[checkout_replay]` (both replay from the start over a tree the operator also owns) — `cancel` is the only resolution.
+
 Inspect the orphaned intents first — `fragua runs status <id>` lists them (the `quarantined:` line) — and present options + evidence to the user. Never auto-choose.
 
 ---
@@ -197,6 +204,8 @@ A run that commits on its own branch (`agent/$FRAGUA_RUN_ID`) lands through that
 
 S, the captured base, stays at `refs/fragua/bases/<id>` — the undo and restore source if a land is interrupted. `discard` never deletes it; `fragua gc --snapshots` does.
 
+**Checkout runs** (`fragua run --checkout`; `runs status` shows `in checkout <path>`) **never enter the inbox** — their changes are already in that checkout. `accept`/`discard` refuse `not_in_inbox`; commit the changes there, or undo the run with `git restore --source=<base> --worktree -- :/` (the base is `runs status`'s `base:` sha). Then `fragua runs release <id>` if it still shows `held`.
+
 ---
 
 ## 8. Schedules — recurring runs
@@ -219,6 +228,7 @@ If a schedule's workflow goes missing/unparseable at fire time, the dispatcher r
 - **Don't spam steer.** 5 aborts without progress halts the run with `reason:"abort_loop"`; usually `cancel` + re-enqueue with a better prompt is right.
 - **Don't write intents the user didn't ask for.** Steer / pause / cancel / unquarantine can lose work or change external state. Present evidence, let the user decide.
 - **Don't `accept` a commit-base run over a dirty tree.** Commit/stash local changes first, or it refuses with `dirty_tree`. (Dirty-base runs from `--dirty` land per path as unstaged changes and don't need a clean tree.)
+- **Don't `--checkout .` the checkout you are editing in unless you mean it.** Everything that changes there between the run's first start and its terminal snapshot is attributed to the run — including your own edits while it is paused — and the checkout is held until release.
 - **Don't assume one daemon.** Parallel fraguas (different `--db`) coexist; pass `--db` to target one.
 - **Don't treat `queued` as broken.** No daemon = no dispatch. Check the harness first.
 

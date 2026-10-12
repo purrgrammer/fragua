@@ -251,6 +251,15 @@ export const RunDetail = Type.Object({
   /** Present only for a `--dirty` run: the operator HEAD its synthetic
    * `baseGitSha` was captured over. Drives the `dirty base over` badge. */
   baseHeadSha: Type.Optional(Type.String()),
+  /** Present (true) only for a `--checkout` run: it executes inside an
+   * operator checkout and never enters the inbox. */
+  inCheckout: Type.Optional(Type.Boolean()),
+  /** The checkout key a `--checkout` run executes in. Absent on import (a
+   * local binding). Drives the `in checkout <path>` badge. */
+  checkoutPath: Type.Optional(Type.String()),
+  /** For a `--checkout` run: whether its hold on the checkout is released.
+   * A terminal run with `false` shows `held — release with …`. */
+  checkoutReleased: Type.Optional(Type.Boolean()),
   /** True when the run was brought in via `fragua import`. The run has no
    * local `cwd`, the daemon will never dispatch it, and operate controls
    * (pause/resume/cancel) should be suppressed. Derived from `cwd == null`

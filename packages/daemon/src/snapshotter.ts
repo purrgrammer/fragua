@@ -48,6 +48,16 @@ export type CaptureSnapshotOpts = {
    * computed tree on a `step` boundary the snapshot is suppressed (returns
    * null) — read-only steps cost a probe but write nothing. */
   prevTreeSha?: string | null;
+  /** `"worktree"` (default): a fresh per-run worktree. `"checkout"`: an
+   * operator checkout — `diffBaseSha` is always `baseGitSha`, `heads/<id>` is
+   * informational, and the whole effect counts as `uncommitted`. */
+  mode?: "worktree" | "checkout";
+  /** Checkout mode: the HEAD a dirty base was captured over. `heads/<id>` is
+   * written iff HEAD differs from `baseHeadSha ?? baseGitSha`. */
+  baseHeadSha?: string | null;
+  /** Pathspecs excluded from the capture (run.cwd's fragua state, when it
+   * lies inside the snapshotted checkout). */
+  excludes?: readonly string[];
 };
 
 export type SnapshotResult = {
@@ -100,9 +110,11 @@ export async function resolveSnapshotParent(worktree: string, runId: string, bas
  */
 export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<SnapshotResult | null> {
   const { worktree, runId, baseGitSha, parentSnap, boundary, prevTreeSha } = opts;
+  const checkout = opts.mode === "checkout";
 
-  // The worktree is never run.cwd's checkout, so no state excludes apply.
-  const treeSha = await captureTree({ dir: worktree, label: runId, excludes: [] });
+  // A fresh worktree is never run.cwd's checkout, so it passes no excludes; a
+  // checkout run whose checkout holds run.cwd passes its state pathspecs.
+  const treeSha = await captureTree({ dir: worktree, label: runId, excludes: opts.excludes ?? [] });
   if (boundary === "step" && prevTreeSha != null && prevTreeSha === treeSha) {
     return null;
   }
@@ -114,11 +126,24 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
   await updateRefWithRetry(worktree, `refs/fragua/snapshots/${runId}`, commitSha);
 
   const headSha = await git(worktree, ["rev-parse", "HEAD"]);
-  if (baseGitSha !== "" && headSha !== baseGitSha) {
+  const headGate = checkout ? (opts.baseHeadSha ?? baseGitSha) : baseGitSha;
+  if (headGate !== "" && headSha !== headGate) {
     await updateRefWithRetry(worktree, `refs/fragua/heads/${runId}`, headSha);
   }
 
   const result: SnapshotResult = { treeSha, commitSha, parentSnap, headSha };
+
+  if (checkout) {
+    // The checkout's base→snapshot tree diff is exactly what the run did to
+    // it — committed, branch-switched or not — so no merge-base and no split.
+    result.committed = null;
+    result.uncommitted = parseShortstat(await git(worktree, ["diff", "--shortstat", baseGitSha, commitSha]));
+    if (boundary !== "step") {
+      result.headRef = await symbolicRef(worktree);
+      result.diffBaseSha = baseGitSha;
+    }
+    return result;
+  }
 
   // Diff stats feed the Diff selector and the inbox change-stat — computed
   // at EVERY boundary (step included) so each selectable snapshot shows its
@@ -144,15 +169,17 @@ export async function captureSnapshot(opts: CaptureSnapshotOpts): Promise<Snapsh
   if (boundary !== "step") {
     // Branch label + honest diff base — surfaced in the inbox / row feed,
     // not needed per-step.
-    let headRef: string | null = null;
-    try {
-      headRef = (await git(worktree, ["symbolic-ref", "--short", "HEAD"])) || null;
-    } catch {
-      headRef = null; // detached / tag / unborn
-    }
-    result.headRef = headRef;
+    result.headRef = await symbolicRef(worktree);
     result.diffBaseSha = diffBaseSha;
   }
 
   return result;
+}
+
+async function symbolicRef(dir: string): Promise<string | null> {
+  try {
+    return (await git(dir, ["symbolic-ref", "--short", "HEAD"])) || null;
+  } catch {
+    return null; // detached / tag / unborn
+  }
 }

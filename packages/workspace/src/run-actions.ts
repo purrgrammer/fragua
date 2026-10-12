@@ -16,6 +16,7 @@ import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { type InboxStatus, isTerminal, type RunStatus } from "@fragua/types";
 import { type DiffStat, dirtyBaseRef, isFraguaStatePath, parseShortstat } from "./capture.ts";
+import { checkoutBusyDetail, checkoutNotInInboxDetail } from "./checkout.ts";
 
 const execFileP = promisify(execFile);
 
@@ -74,6 +75,15 @@ export interface RunActionGate {
   baseHeadSha: string | null;
   /** `run_state.diff_base_sha` — the range the review surfaces showed. */
   diffBaseSha: string | null;
+  /** `run_state.in_checkout` — the run executed in an operator checkout, so
+   * there is nothing held aside to land or drop. */
+  inCheckout: boolean;
+  /** `run_state.checkout_path` — used only for the refusal message. */
+  checkoutPath: string | null;
+  /** Precomputed by the gate builder: the run holding run.cwd's checkout, or
+   * `null` when free. Accept-only — every accept writes that checkout;
+   * discard deletes refs only and ignores it. */
+  checkoutBusy: { runId: string; status: string; path: string } | null;
 }
 
 /** Refusals from the state gate, shared by accept and discard. */
@@ -85,6 +95,9 @@ function checkGate(
 ): { ok: true; cwd: string } | { ok: false; reason: RunActionRefusal; detail: string } {
   if (!isTerminal(gate.status)) {
     return { ok: false, reason: "not_terminal", detail: `run not terminal (status=${gate.status})` };
+  }
+  if (gate.inCheckout) {
+    return { ok: false, reason: "not_in_inbox", detail: checkoutNotInInboxDetail(gate.checkoutPath, gate.baseGitSha) };
   }
   if (gate.inboxStatus == null) return { ok: false, reason: "not_in_inbox", detail: "run has no recoverable work" };
   if (gate.inboxStatus === "discarded") return { ok: false, reason: "discarded", detail: "run already discarded" };
@@ -172,7 +185,7 @@ export type AcceptResult =
     }
   | {
       ok: false;
-      reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict" | DirtyAcceptRefusal;
+      reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict" | "checkout_busy" | DirtyAcceptRefusal;
       detail: string;
     };
 
@@ -216,6 +229,10 @@ export async function applyAccept(
   const g = checkGate(gate);
   if (!g.ok) return g;
   const cwd = g.cwd;
+  const busy = gate.checkoutBusy;
+  if (busy != null) {
+    return { ok: false, reason: "checkout_busy", detail: checkoutBusyDetail(busy.path, busy.runId, busy.status) };
+  }
   // A dirty-base run's dirt is its base: it lands per path and never needs the
   // tree clean, so autostash does not apply.
   if (gate.baseHeadSha != null) return acceptDirtyBase(git, gate, cwd);

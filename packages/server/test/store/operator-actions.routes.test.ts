@@ -3,6 +3,10 @@
 // (operator-actions.test.ts) folds it into the git mutation + fact.
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { type IEventStore, SqliteStore } from "@fragua/store";
 import type { RunActionExec } from "../../src/ports.ts";
@@ -143,6 +147,61 @@ describe("operator post-run primitive endpoints", () => {
       .filter((e) => e.type === "intent.accept_run")
       .at(-1);
     expect(intent?.payload).toEqual({ sha: "head1", replayed: 0, tailStaged: false, landedUnstaged: true });
+  });
+
+  test("accept: 409 checkout_busy with the CLI's message when run.cwd's checkout is held", async () => {
+    const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "srv-busy-")));
+    try {
+      spawnSync("git", ["init", "-q", repo]);
+      writeFileSync(join(repo, "a.txt"), "a\n");
+      spawnSync("git", ["-C", repo, "add", "-A"]);
+      spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"]);
+      store.enqueueRun({ runId: "holder", workflowSha: "wf", cwd: repo, inCheckout: true, checkoutPath: repo });
+      seed(store, { runId: "rb", cwd: repo });
+      // the real workspace accept: the busy gate refuses before any git write
+      const app = createRoutes({ store });
+      const res = await app.request("/runs/rb/accept", { method: "POST" });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        code: "checkout_busy",
+        error: `checkout ${repo} is held by run holder (queued); wait for it to finish, or run \`fragua runs release holder\` once it is terminal`,
+      });
+      expect(lastIntent(store, "rb")).not.toBe("intent.accept_run");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("unquarantine: 409 checkout_replay for retry and treat_as_done on an in-checkout run", async () => {
+    const app = createRoutes({ store, runActions: okActions });
+    store.enqueueRun({ runId: "rq", workflowSha: "wf", cwd: "/tmp/repo", inCheckout: true, checkoutPath: "/tmp/co" });
+    for (const resolution of ["retry", "treat_as_done"]) {
+      const res = await app.request("/runs/rq/unquarantine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resolution }),
+      });
+      expect(res.status).toBe(409);
+      expect((await res.json()) as { code?: string }).toMatchObject({ code: "checkout_replay" });
+    }
+    expect(lastIntent(store, "rq")).toBe("intent.run_enqueued");
+    const cancel = await app.request("/runs/rq/unquarantine", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resolution: "cancel" }),
+    });
+    expect(cancel.status).toBeLessThan(300);
+    expect(lastIntent(store, "rq")).toBe("intent.unquarantine");
+  });
+
+  test("unquarantine: 404 for an unknown run", async () => {
+    const app = createRoutes({ store, runActions: okActions });
+    const res = await app.request("/runs/nope/unquarantine", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resolution: "cancel" }),
+    });
+    expect(res.status).toBe(404);
   });
 
   test("accept: 409 passes checkout_moved through as code", async () => {

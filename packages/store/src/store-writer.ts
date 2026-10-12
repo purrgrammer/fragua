@@ -18,6 +18,7 @@ import {
   claimQueuedRun,
   countDispatchableRunningRuns,
   insertRunState,
+  selectCheckoutHolder,
   selectNextQueuedRun,
   selectRunStateRow,
   updateRunStateTitle,
@@ -33,6 +34,7 @@ import {
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
+  CheckoutBusyError,
   ConcurrencyError,
   type EnqueueRunParams,
   type FactAppendResult,
@@ -82,6 +84,8 @@ export function writeProjection(
     updatedAt: state.updatedAt,
     baseGitSha: state.baseGitSha,
     baseGitRef: state.baseGitRef,
+    baseHeadSha: state.baseHeadSha,
+    checkoutReleased: state.checkoutReleased,
     finalGitSha: state.finalGitSha,
     finalHeadRef: state.finalHeadRef,
     diffBaseSha: state.diffBaseSha,
@@ -281,6 +285,57 @@ export function appendIntent(ctx: StoreCtx, runId: string, event: IntentEvent): 
   return { seq, ts };
 }
 
+export function appendIntentWithFact(
+  ctx: StoreCtx,
+  runId: string,
+  intent: IntentEvent,
+  facts: FactEvent[],
+  expectedVersion: number,
+): { intentSeq: number; factSeqs: number[]; newVersion: number } {
+  if (facts.length === 0) throw new Error("appendIntentWithFact requires at least one fact");
+  const ts = ctx.now();
+  const startAt = performance.now();
+  // Fold + serialize outside the lock (I1); the txn re-checks version and
+  // next_seq so the predicted intent seq and the speculative fold stay valid.
+  const row = selectRunStateRow(ctx.db, runId);
+  if (row == null) throw new RunNotFoundError(runId);
+  if (row.version !== expectedVersion) throw new ConcurrencyError(expectedVersion, row.version);
+  const intentSeq = row.next_seq;
+  let state = rowToRunState(row);
+  for (const f of facts) state = applyFact(state, f, ts);
+  state = { ...state, version: state.version + 1, lastAppliedSeq: Math.max(state.lastAppliedSeq, intentSeq) };
+  const projection = {
+    routingJson: JSON.stringify(state.routing),
+    metricsJson: JSON.stringify(state.metrics),
+    changeStatJson: state.changeStat != null ? JSON.stringify(state.changeStat) : null,
+  };
+  const intentPayload = ctx.validatePayload(intent.payload);
+  const factPayloads = facts.map((f) => ctx.validatePayload(f.payload));
+  const factSeqs: number[] = [];
+
+  try {
+    ctx.writeTxn(() => {
+      const current = selectRunStateRow(ctx.db, runId);
+      if (current == null) throw new RunNotFoundError(runId);
+      if (current.version !== expectedVersion || current.next_seq !== intentSeq) {
+        throw new ConcurrencyError(expectedVersion, current.version);
+      }
+      insertEventWeb(ctx.db, runId, bumpRunSeq(ctx.db, runId), intent.type, intentPayload, ts);
+      for (let i = 0; i < facts.length; i++) {
+        const seq = bumpRunSeq(ctx.db, runId);
+        factSeqs.push(seq);
+        insertEventDaemon(ctx.db, runId, seq, facts[i]!.type, factPayloads[i]!, ts);
+      }
+      writeProjection(ctx, state, expectedVersion, projection);
+    });
+    ctx.metrics.recordWrite(performance.now() - startAt, "fact");
+  } catch (err) {
+    if (err instanceof ConcurrencyError) ctx.metrics.recordOccConflict();
+    throw err;
+  }
+  return { intentSeq, factSeqs, newVersion: state.version };
+}
+
 export function appendObservabilityEvents(
   ctx: StoreCtx,
   runId: string,
@@ -388,6 +443,7 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
     ...(params.baseGitSha != null ? { baseGitSha: params.baseGitSha } : {}),
     ...(params.baseGitRef != null ? { baseGitRef: params.baseGitRef } : {}),
     ...(params.baseHeadSha != null ? { baseHeadSha: params.baseHeadSha } : {}),
+    ...(params.inCheckout === true ? { inCheckout: true as const } : {}),
   } satisfies RunEnqueuedPayload);
   const genesisBytes = utf8ByteLength(genesisPayload);
   if (genesisBytes >= MAX_EVENT_PAYLOAD_BYTES) {
@@ -397,6 +453,12 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
   ctx.writeTxn(() => {
     if (!workflowExists(ctx.db, params.workflowSha)) {
       throw new Error(`unknown workflow sha ${params.workflowSha}`);
+    }
+    // The held read again under the write lock, so two enqueues racing on one
+    // checkout cannot both pass the caller's pre-check.
+    if (params.checkoutPath != null) {
+      const holder = selectCheckoutHolder(ctx.db, params.checkoutPath);
+      if (holder != null) throw new CheckoutBusyError(params.checkoutPath, holder);
     }
     // Insert blob rows for any values spilled to the CAS. The BlobFS.put()
     // calls happened before this transaction; the row insert is the
@@ -426,6 +488,8 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
       baseGitSha: params.baseGitSha ?? null,
       baseGitRef: params.baseGitRef ?? null,
       baseHeadSha: params.baseHeadSha ?? null,
+      inCheckout: params.inCheckout === true,
+      checkoutPath: params.checkoutPath ?? null,
     });
 
     const seq = bumpRunSeq(ctx.db, params.runId);

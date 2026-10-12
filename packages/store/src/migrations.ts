@@ -103,7 +103,40 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     down: (db) => db.exec("ALTER TABLE run_state DROP COLUMN base_head_sha"),
     lossy: true,
   },
+  // v6 → v7: checkout runs (`fragua run --checkout`). `in_checkout` folds from
+  // the genesis marker, `checkout_path` is a local binding, `checkout_released`
+  // frees the checkout. `down` is lossy: `checkout_path` is not in the log.
+  7: {
+    up: (db) => {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(run_state)").all();
+      if (!cols.some((c) => c.name === "in_checkout")) {
+        db.exec("ALTER TABLE run_state ADD COLUMN in_checkout INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!cols.some((c) => c.name === "checkout_path")) {
+        db.exec("ALTER TABLE run_state ADD COLUMN checkout_path TEXT");
+      }
+      if (!cols.some((c) => c.name === "checkout_released")) {
+        db.exec("ALTER TABLE run_state ADD COLUMN checkout_released INTEGER NOT NULL DEFAULT 0");
+      }
+      db.exec(CHECKOUT_INDEX_SQL);
+    },
+    down: (db) => {
+      db.exec("DROP INDEX IF EXISTS idx_run_state_checkout");
+      db.exec("ALTER TABLE run_state DROP COLUMN checkout_released");
+      db.exec("ALTER TABLE run_state DROP COLUMN checkout_path");
+      db.exec("ALTER TABLE run_state DROP COLUMN in_checkout");
+    },
+    lossy: true,
+  },
 };
+
+/** The held-checkout lookup index. Kept out of `schema.sql` because that file
+ * re-runs before the walk-forward steps, when a pre-v7 `run_state` has no
+ * `checkout_path`; every path that lands on v7 executes it after the columns
+ * exist. */
+const CHECKOUT_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_run_state_checkout
+  ON run_state(checkout_path)
+  WHERE checkout_path IS NOT NULL AND checkout_released = 0`;
 
 /** Steps that deliberately ship without a `down`, each with the reason a
  * downgrade past it is unsupported. A step appears here XOR declares a `down`
@@ -129,6 +162,7 @@ export function migrate(db: Database): void {
   if (version == null) {
     db.transaction(() => {
       db.exec(SCHEMA_SQL);
+      db.exec(CHECKOUT_INDEX_SQL);
       db.query("INSERT INTO schema_version (id, version) VALUES (1, ?)").run(CURRENT_SCHEMA_VERSION);
     })();
     return;
@@ -139,6 +173,7 @@ export function migrate(db: Database): void {
     // Idempotent bootstrap re-run to land any new `IF NOT EXISTS` index/table.
     db.transaction(() => {
       db.exec(SCHEMA_SQL);
+      db.exec(CHECKOUT_INDEX_SQL);
     })();
     return;
   }

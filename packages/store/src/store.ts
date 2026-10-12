@@ -24,6 +24,7 @@ import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate, verifySchema } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas } from "./pragmas.ts";
 import type {
+  CheckoutHolderRow,
   CwdSummaryRow,
   FleetSummary,
   FleetSummaryOpts,
@@ -172,6 +173,15 @@ export class SqliteStore implements IEventStore {
     return writer.appendIntent(this.ctx, runId, event);
   }
 
+  appendIntentWithFact(
+    runId: string,
+    intent: IntentEvent,
+    facts: FactEvent[],
+    expectedVersion: number,
+  ): { intentSeq: number; factSeqs: number[]; newVersion: number } {
+    return writer.appendIntentWithFact(this.ctx, runId, intent, facts, expectedVersion);
+  }
+
   appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] } {
     return writer.appendObservabilityEvents(this.ctx, runId, events);
   }
@@ -301,6 +311,10 @@ export class SqliteStore implements IEventStore {
 
   getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[] {
     return reader.getGcEligibleSnapshotRuns(this.ctx, opts);
+  }
+
+  getCheckoutHolder(key: string): CheckoutHolderRow | null {
+    return reader.getCheckoutHolder(this.ctx, key);
   }
 
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null {

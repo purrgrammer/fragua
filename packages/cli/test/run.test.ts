@@ -3,7 +3,7 @@
 // fiber over the same file-backed store makes the run actually progress.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as handler from "@fragua/core/handler";
@@ -523,5 +523,161 @@ describe("fragua run --dirty", () => {
     } finally {
       await r.close();
     }
+  });
+});
+
+describe("fragua run --checkout", () => {
+  const BLOCK = ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n";
+
+  function g(cwd: string, ...args: string[]): string {
+    const res = Bun.spawnSync({
+      cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (res.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr.toString()}`);
+    return res.stdout.toString().trim();
+  }
+
+  function project(opts: { block?: boolean; commit?: boolean } = {}): string {
+    const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "fragua-co-run-")));
+    tmps.push(repo);
+    g(repo, "init", "-q", "-b", "main");
+    mkdirSync(join(repo, ".fragua"), { recursive: true });
+    writeFileSync(join(repo, ".fragua", "config.yaml"), "id: 0190a0a0-0000-7000-8000-000000000002\nname: p\n");
+    writeFileSync(join(repo, ".gitignore"), opts.block === false ? "*.log\n" : BLOCK);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    if (opts.commit !== false) {
+      g(repo, "add", "-A");
+      g(repo, "commit", "-q", "-m", "base");
+    }
+    return repo;
+  }
+
+  /** A store with no executor, so an enqueued checkout run stays queued (held). */
+  function bareStore(): { dbPath: string; store: SqliteStore } {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-co-db-"));
+    tmps.push(dir);
+    const dbPath = join(dir, "fragua.db");
+    return { dbPath, store: new SqliteStore({ path: dbPath }) };
+  }
+
+  async function capture<T>(fn: () => Promise<T>): Promise<{ result: T; out: string; err: string }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const ol = console.log;
+    const oe = console.error;
+    console.log = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => err.push(a.map(String).join(" "));
+    try {
+      return { result: await fn(), out: out.join("\n"), err: err.join("\n") };
+    } finally {
+      console.log = ol;
+      console.error = oe;
+    }
+  }
+
+  const run = (dbPath: string, cwd: string, extra: Record<string, unknown>) =>
+    capture(() => runCommand({ workflow: writeWorkflow(), dbPath, cwd, follow: false, ...extra }));
+
+  test("--checkout with --base → exit 1, nothing enqueued", async () => {
+    const { dbPath, store } = bareStore();
+    const repo = project();
+    const { result, err } = await run(dbPath, repo, { checkout: ".", base: "HEAD" });
+    expect(result).toBe(1);
+    expect(err).toContain("--checkout cannot combine with --base");
+    expect(store.listRunIds()).toHaveLength(0);
+    store.close();
+  });
+
+  test("--checkout with --dirty → exit 1, nothing enqueued", async () => {
+    const { dbPath, store } = bareStore();
+    const repo = project();
+    const { result, err } = await run(dbPath, repo, { checkout: ".", dirty: true });
+    expect(result).toBe(1);
+    expect(err).toContain("--checkout cannot combine with --dirty");
+    expect(store.listRunIds()).toHaveLength(0);
+    store.close();
+  });
+
+  test("non-git cwd / missing / other repo / fragua-owned / unborn / no ignore block → each refuses with its message", async () => {
+    const { dbPath, store } = bareStore();
+    const nogit = mkdtempSync(join(tmpdir(), "fragua-co-nogit-"));
+    tmps.push(nogit);
+    const a = await run(dbPath, nogit, { checkout: "." });
+    expect(a.result).toBe(1);
+    expect(a.err).toContain("--checkout needs a git checkout");
+
+    const repo = project();
+    const missing = await run(dbPath, repo, { checkout: "nope" });
+    expect(missing.err).toContain("[checkout_missing]");
+
+    const other = project();
+    const otherRepo = await run(dbPath, repo, { checkout: other });
+    expect(otherRepo.err).toContain("[checkout_unregistered]");
+
+    const owned = join(repo, ".fragua", "worktrees", "someRun");
+    g(repo, "worktree", "add", "-q", "--detach", owned);
+    const ownedR = await run(dbPath, repo, { checkout: owned });
+    expect(ownedR.err).toContain("[checkout_fragua_owned]");
+
+    const unborn = project({ commit: false });
+    const unbornR = await run(dbPath, unborn, { checkout: "." });
+    expect(unbornR.err).toContain("[checkout_unborn]");
+
+    const noBlock = project({ block: false });
+    const noBlockR = await run(dbPath, noBlock, { checkout: "." });
+    expect(noBlockR.err).toContain("[ignore_block_missing]");
+    expect(noBlockR.err).toContain("fragua init");
+
+    for (const r of [missing, otherRepo, ownedR, unbornR, noBlockR]) expect(r.result).toBe(1);
+    expect(store.listRunIds()).toHaveLength(0);
+    store.close();
+  });
+
+  test("--checkout . enqueues with inCheckout and checkoutPath = key, base null", async () => {
+    const { dbPath, store } = bareStore();
+    const repo = project();
+    const { result, out } = await run(dbPath, repo, { checkout: "." });
+    expect(result).toBe(0);
+    expect(out).toContain(`in checkout ${repo}`);
+    const state = store.getState(store.listRunIds()[0]!)!;
+    expect(state.inCheckout).toBe(true);
+    expect(state.checkoutPath).toBe(repo);
+    expect(state.baseGitSha).toBeNull();
+    expect(state.baseHeadSha).toBeNull();
+    store.close();
+  });
+
+  test("a second --checkout on a held key → checkout_busy with the decided text", async () => {
+    const { dbPath, store } = bareStore();
+    const repo = project();
+    const wt = join(realpathSync.native(mkdtempSync(join(tmpdir(), "fragua-co-wt-"))), "feature-wt");
+    tmps.push(join(wt, ".."));
+    g(repo, "worktree", "add", "-q", "-b", "feature", wt);
+    expect((await run(dbPath, repo, { checkout: wt })).result).toBe(0);
+    const holder = store.listRunIds()[0]!;
+    const second = await run(dbPath, repo, { checkout: wt });
+    expect(second.result).toBe(1);
+    expect(second.err).toContain(
+      `checkout ${wt} is held by run ${holder} (queued); wait for it to finish, or run \`fragua runs release ${holder}\` once it is terminal`,
+    );
+    expect(store.listRunIds()).toHaveLength(1);
+    store.close();
+  });
+
+  test("--dirty on a held run.cwd checkout → checkout_busy before capture", async () => {
+    const { dbPath, store } = bareStore();
+    const repo = project();
+    expect((await run(dbPath, repo, { checkout: "." })).result).toBe(0);
+    const holder = store.listRunIds()[0]!;
+    writeFileSync(join(repo, "a.txt"), "wip\n");
+    const dirty = await run(dbPath, repo, { dirty: true });
+    expect(dirty.result).toBe(1);
+    expect(dirty.err).toContain(`checkout ${repo} is held by run ${holder} (queued)`);
+    expect(g(repo, "for-each-ref", "refs/fragua")).toBe("");
+    expect(store.listRunIds()).toHaveLength(1);
+    store.close();
   });
 });

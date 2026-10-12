@@ -227,10 +227,31 @@ export async function prepareDirtyBase(gitExec: GitExec, cwd: string): Promise<D
   const refR = await gitExec(top, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
   const baseGitRef = refR.exitCode === 0 && refR.stdout.trim() !== "" ? refR.stdout.trim() : null;
 
-  const tree = await captureTree({ dir: top, label: "enqueue", excludes: fraguaStateExcludes(rel) });
-  const headTree = await git(top, ["rev-parse", `${head}^{tree}`]);
-  if (tree === headTree) return { ok: true, clean: true, headSha: head, baseGitRef, top };
+  const base = await captureBaseOver({ top, head, label: "enqueue", excludes: fraguaStateExcludes(rel) });
+  if (base.clean) return { ok: true, clean: true, headSha: head, baseGitRef, top };
+  return { ok: true, clean: false, baseGitSha: base.s, baseHeadSha: head, baseGitRef, top };
+}
 
-  const s = await git(top, ["commit-tree", tree, "-p", head, "-m", "fragua dirty base"], SNAPSHOT_IDENT);
-  return { ok: true, clean: false, baseGitSha: s, baseHeadSha: head, baseGitRef, top };
+export interface CaptureBaseOverOptions {
+  /** The checkout key (toplevel). */
+  top: string;
+  /** HEAD commit the capture is taken over. */
+  head: string;
+  /** Sentinel-index label: `enqueue`, or the run id. */
+  label: string;
+  excludes: readonly string[];
+}
+
+/** Capture `top`'s index + working tree over `head`. A tree equal to
+ * `tree(head)` is clean; otherwise the synthetic commit S =
+ * `commit-tree T -p head` is created, unreferenced. The one base capture shared
+ * by `--dirty` at enqueue and a checkout run's first start. */
+export async function captureBaseOver(
+  opts: CaptureBaseOverOptions,
+): Promise<{ clean: true } | { clean: false; s: string }> {
+  const tree = await captureTree({ dir: opts.top, label: opts.label, excludes: opts.excludes });
+  const headTree = await git(opts.top, ["rev-parse", `${opts.head}^{tree}`]);
+  if (tree === headTree) return { clean: true };
+  const s = await git(opts.top, ["commit-tree", tree, "-p", opts.head, "-m", "fragua dirty base"], SNAPSHOT_IDENT);
+  return { clean: false, s };
 }

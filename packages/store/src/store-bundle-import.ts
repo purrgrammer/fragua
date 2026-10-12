@@ -297,6 +297,8 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             baseGitSha: d.baseGitSha,
             baseGitRef: d.baseGitRef,
             baseHeadSha: d.baseHeadSha,
+            inCheckout: d.inCheckout,
+            checkoutPath: null, // a local binding — an imported run never holds a checkout
           });
           writeRunStateProjection(ctx.db, {
             runId: d.runId,
@@ -315,6 +317,8 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             updatedAt: d.updatedAt,
             baseGitSha: d.baseGitSha,
             baseGitRef: d.baseGitRef,
+            baseHeadSha: d.baseHeadSha,
+            checkoutReleased: d.checkoutReleased,
             finalGitSha: d.finalGitSha,
             finalHeadRef: d.finalHeadRef,
             diffBaseSha: d.diffBaseSha,

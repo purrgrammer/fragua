@@ -12,8 +12,10 @@ import type { Database } from "bun:sqlite";
  * v5 adds the `mcp_oauth` table (per-server OAuth state for remote MCP
  * servers, additive).
  * v6 adds `run_state.base_head_sha` (the operator HEAD a `--dirty` run's
- * synthetic base was captured over). */
-export const CURRENT_SCHEMA_VERSION = 6;
+ * synthetic base was captured over).
+ * v7 adds `run_state.in_checkout` / `checkout_path` / `checkout_released`
+ * (`fragua run --checkout`) and the `idx_run_state_checkout` index. */
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */
@@ -64,7 +66,12 @@ export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
  * the optional `landedUnstaged` on `intent.accept_run` / `fact.run_accepted`. A
  * v6 daemon would drop the marker and land a dirty-base run through the
  * commit-base accept. `MIN_COMPATIBLE` stays 1 — pre-v7 genesis carries no
- * `baseHeadSha`, so v1-v6 runs seed it null and fold unchanged. */
+ * `baseHeadSha`, so v1-v6 runs seed it null and fold unchanged.
+ * v7 also carries the checkout mode: the optional genesis `inCheckout`, the
+ * optional `fact.run_started.baseHeadSha`, the `intent.checkout_release` /
+ * `fact.checkout_released` pair, and the fold arms that keep an in-checkout run
+ * out of the inbox and release its checkout. Every arm keys on `inCheckout`,
+ * which no pre-v7 log carries, so re-folding an existing log is unchanged. */
 export const EVENT_CONTRACT_VERSION = 7;
 
 /** Lowest contract version the daemon folds. THE RULE: write the newest

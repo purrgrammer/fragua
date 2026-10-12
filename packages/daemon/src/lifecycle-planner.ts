@@ -29,6 +29,7 @@ export function planRunStarted(input: {
   startNode: string;
   baseGitSha?: string;
   baseGitRef?: string;
+  baseHeadSha?: string;
 }): LifecyclePlan {
   return {
     facts: [
@@ -40,6 +41,7 @@ export function planRunStarted(input: {
           startNode: input.startNode,
           ...(input.baseGitSha != null ? { baseGitSha: input.baseGitSha } : {}),
           ...(input.baseGitRef != null ? { baseGitRef: input.baseGitRef } : {}),
+          ...(input.baseHeadSha != null ? { baseHeadSha: input.baseHeadSha } : {}),
         },
       },
     ],

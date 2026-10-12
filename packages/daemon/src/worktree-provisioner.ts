@@ -135,6 +135,13 @@ export interface ProvisionOpts {
    * the provisioner checks S exists and (re)writes `refs/fragua/bases/<runId>`
    * → S; a missing S fails the provision (→ `worktree_error`). */
   dirtyBase?: boolean;
+  /** `fragua run --checkout`: the checkout key. The run executes in that
+   * existing operator checkout (`ownership: "operator"`) — attached, never
+   * created or disposed. `baseRef` (with `baseHeadSha`) is then the base the
+   * run recorded at its first start, adopted rather than re-captured. */
+  checkoutPath?: string;
+  /** Checkout run on re-attach: the recorded `run_state.base_head_sha`. */
+  baseHeadSha?: string;
 }
 
 export interface Provisioner {
@@ -152,6 +159,10 @@ export interface Provisioner {
    * post-run merge/commit target default.
    * `null` for non-worktree envs or a detached/tag/unborn source HEAD. */
   baseGitRef(runId: string): string | null;
+  /** The HEAD a checkout run's dirty first-start base was captured over, or
+   * `null` (clean base, or not a checkout run). Optional: provisioners that
+   * never host checkout runs omit it. */
+  baseHeadSha?(runId: string): string | null;
   /** Capture a worktree snapshot at a boundary.
    * Returns the result, or `null` when delta-suppressed (unchanged tree on a
    * `step` boundary) or when the run isn't worktree-backed (bare cwd). Moves
@@ -178,6 +189,11 @@ export class WorktreeProvisioner implements Provisioner {
    * Empty after a daemon restart — `snapshot()` then falls back to the tip ref
    * (resolveSnapshotParent) so the chain stays connected. */
   private readonly snapshotCursor = new Map<string, { commitSha: string; treeSha: string }>();
+  /** Per-run snapshot chain: each `snapshot(runId)` waits for the previous one
+   * of the same run, so `refs/fragua/snapshots/<runId>` advances in capture
+   * order (a boundary snapshot that started first can never land after the
+   * terminal one and move the tip back). */
+  private readonly snapshotChain = new Map<string, Promise<unknown>>();
 
   constructor(opts: WorktreeProvisionerOptions = {}) {
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
@@ -267,7 +283,24 @@ export class WorktreeProvisioner implements Provisioner {
     return null;
   }
 
-  async snapshot(runId: string, boundary: SnapshotBoundary): Promise<SnapshotResult | null> {
+  baseHeadSha(runId: string): string | null {
+    const env = this.envs.get(runId);
+    if (env instanceof WorktreeEnvironment && env.ownership === "operator") return env.baseHeadSha;
+    return null;
+  }
+
+  snapshot(runId: string, boundary: SnapshotBoundary): Promise<SnapshotResult | null> {
+    const prev = this.snapshotChain.get(runId) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(() => this.snapshotNow(runId, boundary));
+    this.snapshotChain.set(runId, next);
+    const clear = () => {
+      if (this.snapshotChain.get(runId) === next) this.snapshotChain.delete(runId);
+    };
+    next.then(clear, clear);
+    return next;
+  }
+
+  private async snapshotNow(runId: string, boundary: SnapshotBoundary): Promise<SnapshotResult | null> {
     const env = this.envs.get(runId);
     if (!(env instanceof WorktreeEnvironment)) return null; // bare cwd → no snapshots
     const baseGitSha = env.baseGitSha ?? "";
@@ -280,6 +313,9 @@ export class WorktreeProvisioner implements Provisioner {
       parentSnap,
       boundary,
       prevTreeSha: cursor?.treeSha ?? null,
+      ...(env.ownership === "operator"
+        ? { mode: "checkout" as const, baseHeadSha: env.baseHeadSha, excludes: env.captureExcludes }
+        : {}),
     });
     if (result !== null) {
       this.snapshotCursor.set(runId, { commitSha: result.commitSha, treeSha: result.treeSha });
@@ -298,6 +334,31 @@ export class WorktreeProvisioner implements Provisioner {
     }
 
     const envAllow = await this.resolveEnvAllowFor(repoRoot);
+
+    if (provisionOpts.checkoutPath !== undefined) {
+      // Operator checkout: attach, never create; no bootstrap (the checkout is
+      // the operator's and already set up); dispose is a no-op.
+      const opts: ConstructorParameters<typeof WorktreeEnvironment>[0] = {
+        runId,
+        repoRoot,
+        ownership: "operator",
+        checkoutPath: provisionOpts.checkoutPath,
+        engineEnv: { FRAGUA_RUN_ID: runId },
+      };
+      if (provisionOpts.baseRef !== undefined) {
+        opts.adoptBase = {
+          baseGitSha: provisionOpts.baseRef,
+          baseGitRef: null,
+          baseHeadSha: provisionOpts.baseHeadSha ?? null,
+        };
+      }
+      if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
+      if (envAllow.names !== undefined) opts.envAllowNames = envAllow.names;
+      if (envAllow.predicate !== undefined) opts.envAllowPredicate = envAllow.predicate;
+      const env = new WorktreeEnvironment(opts);
+      await env.init();
+      return env;
+    }
 
     if (!(await isGitRepo(repoRoot))) {
       const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = {

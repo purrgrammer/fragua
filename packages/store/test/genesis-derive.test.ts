@@ -37,7 +37,16 @@ function deriveFromLog(runId: string, events: { type: string; payload: unknown; 
  *  `imported` is read-derived by `getState` (the `imported_runs` marker), not
  *  part of the reducer projection. */
 function normalize(s: RunState): RunState {
-  return { ...s, version: 0, nextSeq: 0, lastAppliedSeq: 0, title: null, cwd: null, imported: false };
+  return {
+    ...s,
+    version: 0,
+    nextSeq: 0,
+    lastAppliedSeq: 0,
+    title: null,
+    cwd: null,
+    checkoutPath: null,
+    imported: false,
+  };
 }
 
 describe("genesis derivation", () => {
@@ -240,6 +249,32 @@ describe("genesis derivation", () => {
     const derived = deriveRunState(runId, store.getEvents(runId));
     expect(live.baseHeadSha).toBe(head);
     expect(derived.baseHeadSha).toBe(head);
+    expect(normalize(derived)).toEqual(normalize(live));
+    store.close();
+  });
+
+  test("inCheckout seeds run_state.in_checkout and deriveRunState agrees; checkoutPath derives null", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const runId = newRunId();
+    store.enqueueRun({
+      runId,
+      workflowSha: sha,
+      cwd: "/home/dev/proj",
+      projectId: "proj-id-1",
+      projectName: "proj",
+      inCheckout: true,
+      checkoutPath: "/home/dev/feature-wt",
+    });
+    const genesis = store.getEvents(runId).find((e) => e.type === "intent.run_enqueued")!;
+    expect((genesis.payload as RunEnqueuedPayload).inCheckout).toBe(true);
+    expect(JSON.stringify(genesis.payload)).not.toContain("feature-wt");
+    const live = store.getState(runId)!;
+    expect(live.inCheckout).toBe(true);
+    expect(live.checkoutPath).toBe("/home/dev/feature-wt");
+    const derived = deriveRunState(runId, store.getEvents(runId));
+    expect(derived.inCheckout).toBe(true);
+    expect(derived.checkoutPath).toBeNull();
     expect(normalize(derived)).toEqual(normalize(live));
     store.close();
   });

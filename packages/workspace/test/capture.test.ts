@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  captureBaseOver,
   captureTree,
   fraguaStateExcludes,
   isFraguaStatePath,
@@ -160,5 +161,35 @@ describe("prepareDirtyBase", () => {
     await pinDirtyBaseRef(cwd, "r1", head);
     await pinDirtyBaseRef(cwd, "r1", head);
     expect(await must(cwd, ["rev-parse", "refs/fragua/bases/r1"])).toBe(head);
+  });
+});
+
+describe("captureBaseOver", () => {
+  test("an untouched checkout with skip-worktree, assume-unchanged and sparse entries captures tree(HEAD)", async () => {
+    const cwd = await repo();
+    mkdirSync(join(cwd, "sparse"));
+    writeFileSync(join(cwd, "sparse", "s.txt"), "s\n");
+    await must(cwd, ["add", "-A"]);
+    await must(cwd, ["commit", "-qm", "sparse"]);
+    await must(cwd, ["update-index", "--skip-worktree", "a.txt"]);
+    await must(cwd, ["update-index", "--assume-unchanged", "b.txt"]);
+    writeFileSync(join(cwd, "a.txt"), "changed a\n");
+    writeFileSync(join(cwd, "b.txt"), "changed b\n");
+    // a sparse entry: skip-worktree and absent from disk
+    await must(cwd, ["update-index", "--skip-worktree", "sparse/s.txt"]);
+    rmSync(join(cwd, "sparse"), { recursive: true, force: true });
+    const head = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await captureBaseOver({ top: cwd, head, label: "run1", excludes: [] });
+    expect(r.clean).toBe(true);
+    expect(sentinels(cwd)).toEqual([]);
+  });
+
+  test("a dirty checkout yields S parented on HEAD", async () => {
+    const cwd = await repo();
+    writeFileSync(join(cwd, "a.txt"), "wip\n");
+    const head = await must(cwd, ["rev-parse", "HEAD"]);
+    const r = await captureBaseOver({ top: cwd, head, label: "run1", excludes: [] });
+    if (r.clean) throw new Error("expected dirty");
+    expect(await must(cwd, ["rev-parse", `${r.s}^`])).toBe(head);
   });
 });

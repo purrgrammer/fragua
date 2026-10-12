@@ -1339,6 +1339,59 @@ steps:
       }
     });
 
+    it("renders the read-only in-checkout badge with the held suffix when terminal and unreleased", async () => {
+      const detail = makeDetail({
+        runId: "run-co",
+        status: "fail",
+        runStatus: "halted",
+        lastEventSeq: 5,
+        baseGitSha: "abcdef1234567890",
+        inCheckout: true,
+        checkoutPath: "/home/dev/feature-wt",
+        checkoutReleased: false,
+      });
+      const { client, mock } = prepare("run-co", detail);
+      try {
+        const { container } = mount(client, "/runs/run-co/conversation");
+        const badge = await waitFor(() => {
+          const el = container.querySelector(`[data-testid="detail-in-checkout"]`);
+          if (!el) throw new Error("in-checkout badge not found");
+          return el;
+        });
+        expect(badge.textContent).toBe(
+          "in checkout /home/dev/feature-wt — held — release with fragua runs release run-co",
+        );
+        expect(badge.tagName).toBe("SPAN");
+        expect(badge.querySelector("button")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("renders the in-checkout badge without the held suffix once released", async () => {
+      const detail = makeDetail({
+        runId: "run-co-rel",
+        status: "success",
+        runStatus: "completed",
+        lastEventSeq: 5,
+        inCheckout: true,
+        checkoutPath: "/home/dev/feature-wt",
+        checkoutReleased: true,
+      });
+      const { client, mock } = prepare("run-co-rel", detail);
+      try {
+        const { container } = mount(client, "/runs/run-co-rel/conversation");
+        const badge = await waitFor(() => {
+          const el = container.querySelector(`[data-testid="detail-in-checkout"]`);
+          if (!el) throw new Error("in-checkout badge not found");
+          return el;
+        });
+        expect(badge.textContent).toBe("in checkout /home/dev/feature-wt");
+      } finally {
+        mock.restore();
+      }
+    });
+
     it("does not render the dirty base badge without baseHeadSha", async () => {
       const detail = makeDetail({
         runId: "run-clean-base",

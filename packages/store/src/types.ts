@@ -42,6 +42,7 @@ import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type { JudgeAnswerRow } from "./message-queries.ts";
 import type { MetricsSnapshot } from "./metrics.ts";
 import type {
+  CheckoutHolderRow,
   FleetSummary,
   FleetSummaryOpts,
   GcSnapshotRunRow,
@@ -108,6 +109,7 @@ export type {
 export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
+  CheckoutHolderRow,
   FleetSummary,
   FleetSummaryOpts,
   FleetWorkflowRow,
@@ -239,6 +241,16 @@ export interface RunState {
    * over (`baseGitSha^`). Non-null marks a dirty-base run; seeded from the
    * genesis payload and immutable after enqueue. */
   baseHeadSha: string | null;
+  /** The run executes inside an operator checkout (`fragua run --checkout`).
+   * Folded from the portable genesis marker, so an imported checkout run is
+   * still one. */
+  inCheckout: boolean;
+  /** The checkout key (realpath of its toplevel). A LOCAL binding like `cwd` —
+   * never in the log, `null` on import and for every non-checkout run. */
+  checkoutPath: string | null;
+  /** The checkout is free for the next run: folded true on a recorded
+   * completion, a never-started termination, or `fact.checkout_released`. */
+  checkoutReleased: boolean;
   /** Worktree snapshot + inbox projection, written by the terminal
    * `fact.snapshot_recorded`. All `null` while the run is live and for
    * bare-cwd runs. `finalGitSha` / `finalHeadRef` = worktree HEAD + its
@@ -472,6 +484,19 @@ export class ConcurrencyError extends Error {
   }
 }
 
+/** `enqueueRun` refused a checkout run because another non-imported run still
+ * holds the same checkout (not yet released). Thrown from inside the enqueue
+ * transaction, so nothing was written. */
+export class CheckoutBusyError extends Error {
+  constructor(
+    public readonly checkoutPath: string,
+    public readonly holder: CheckoutHolderRow,
+  ) {
+    super(`checkout ${checkoutPath} is held by run ${holder.runId} (${holder.status})`);
+    this.name = "CheckoutBusyError";
+  }
+}
+
 export class ArtifactTooLargeError extends Error {
   constructor(
     public readonly sizeBytes: number,
@@ -629,6 +654,13 @@ export interface EnqueueRunParams {
   /** `fragua run --dirty`: the operator HEAD the synthetic `baseGitSha` was
    * captured over. Seeds `run_state.base_head_sha`. */
   baseHeadSha?: string;
+  /** `fragua run --checkout`: rides the genesis payload as the portable
+   * `inCheckout` marker. */
+  inCheckout?: true;
+  /** The checkout key. Written to `run_state.checkout_path` outside the
+   * payload (a local binding, like `cwd`). The enqueue refuses with
+   * {@link CheckoutBusyError} when another run holds it. */
+  checkoutPath?: string;
 }
 
 export interface GetEventsOpts {
@@ -747,6 +779,19 @@ export interface GetDaemonEventsOpts {
 export interface IEventWriter {
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
+  /**
+   * Append an operator intent AND the fact it folds into in ONE transaction,
+   * OCC-checked against `expectedVersion`, advancing `last_applied_seq` to the
+   * intent's seq. Used only for the synchronous `fragua runs release`, whose
+   * fold needs no daemon (its intent-plane builder already refused every
+   * invalid state).
+   */
+  appendIntentWithFact(
+    runId: string,
+    intent: IntentEvent,
+    facts: FactEvent[],
+    expectedVersion: number,
+  ): { intentSeq: number; factSeqs: number[]; newVersion: number };
   /**
    * Append observability events (agent.*, llm.*, tool.*, cost.recorded).
    * They share the same seq space as facts/intents, so a consumer tailing
@@ -935,6 +980,13 @@ export interface IEventReader {
    * `fragua gc --snapshots`.
    */
   getGcEligibleSnapshotRuns(opts: { cwd: string; cutoff: number }): GcSnapshotRunRow[];
+  /**
+   * The run holding checkout `key` — a non-imported run with that
+   * `checkout_path` whose checkout is not yet released (queued, running,
+   * paused, quarantined, or terminal-unreleased) — or `null` when free.
+   * Backs `checkout_busy` at enqueue, before a `--dirty` capture, and at accept.
+   */
+  getCheckoutHolder(key: string): CheckoutHolderRow | null;
   /**
    * The next unapplied intent of the given `type` strictly after
    * `sinceSeq`, or `null`. Payload is parsed JSON. Used by the daemon's
