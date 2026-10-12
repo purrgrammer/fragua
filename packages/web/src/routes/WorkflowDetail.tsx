@@ -238,7 +238,7 @@ export function WorkflowDetail(): JSX.Element {
           ) : null}
         </TabsContent>
 
-        <TabsContent value="source" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-auto">
+        <TabsContent value="source" className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
           {!graph && (
             <EmptyState
               data-testid="workflow-detail-parse-error"
@@ -246,7 +246,15 @@ export function WorkflowDetail(): JSX.Element {
               description="The server returned the workflow source but it didn't parse. The raw source is below so you can inspect it."
             />
           )}
-          <CodeBlock code={detail.source} language="yaml" data-testid="workflow-detail-source" className="min-w-0">
+          <CodeBlock
+            code={detail.source}
+            language="yaml"
+            data-testid="workflow-detail-source"
+            // The block fills the tab and its body scrolls, so a long
+            // workflow pages inside the highlighted area rather than
+            // stretching the page.
+            className="flex min-h-0 min-w-0 flex-1 flex-col [&>div:last-child]:min-h-0 [&>div:last-child]:flex-1"
+          >
             <CodeBlockHeader>
               <CodeBlockTitle>
                 <CodeBlockFilename>{detail.path}</CodeBlockFilename>
