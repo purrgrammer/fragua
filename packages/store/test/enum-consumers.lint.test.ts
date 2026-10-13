@@ -16,7 +16,15 @@
 //      (the /analytics Runs chart) would otherwise silently grow a zero
 //      column when a new status is added, with no compiler signal: the
 //      SQL hardcodes the arms and the row type carries no `satisfies`.
-//      Equality (not membership) is what catches the MISSING arm.
+//      Equality (not membership) is what catches the MISSING arm;
+//   4. every quoted literal in a bare `<alias.>status = '…'` comparison —
+//      predicate position (`WHERE status = 'queued'`) AND assignment
+//      position (`SET status = 'running'`) — must be a known RunStatus.
+//      These are the dispatch-claim and crash-sweep transitions in
+//      run-state-queries.ts; a renamed literal there would never match a
+//      row (or would trip the CHECK only at runtime). The four predicates
+//      the dispatcher and startup sweep depend on are additionally pinned
+//      by name so a silent rewrite of their literals is caught.
 //
 // Conservative regex, same spirit as lint.test.ts (invariant I1). Scanning
 // the whole src tree means new SQL sites are covered the moment they exist.
@@ -84,8 +92,39 @@ function statusCaseSites(file: string, source: string): StatusSite[] {
   return sites;
 }
 
+/** Extract every bare `<alias.>status = 'literal'` comparison or assignment.
+ * `<>` / `!=` / `<=` / `>=` never match (no `=` directly after the column).
+ * Overlaps the CASE arms by design — this check is membership only.
+ * `inbox_status` is a different enum and is excluded. */
+function statusEqualitySites(file: string, source: string): StatusSite[] {
+  const sites: StatusSite[] = [];
+  const EQ_RE = /([A-Za-z_.]*status)\s*=\s*'([^']*)'/gi;
+  for (const match of source.matchAll(EQ_RE)) {
+    const column = match[1] ?? "";
+    if (column.includes("inbox_status")) continue;
+    const literal = match[2] ?? "";
+    const line = source.slice(0, match.index).split("\n").length;
+    sites.push({ file: relative(join(__dirname, "..", ".."), file), line, literals: [literal] });
+  }
+  return sites;
+}
+
+const KNOWN_STATUSES = new Set<string>(RUN_STATUSES);
+
+/** Literals in bare `status = '…'` sites of `source` that are not a RunStatus. */
+function bareEqualityOffenders(source: string): string[] {
+  return statusEqualitySites("synthetic.sql", source)
+    .flatMap((s) => s.literals)
+    .filter((l) => !KNOWN_STATUSES.has(l));
+}
+
+/** Body of a `const NAME = `…`` SQL template in `source`. */
+function sqlConstBody(source: string, name: string): string | undefined {
+  return source.match(new RegExp(`const ${name} = \`([^\`]*)\``))?.[1];
+}
+
 describe("enum-literal consumers (SQL)", () => {
-  const known = new Set<string>(RUN_STATUSES);
+  const known = KNOWN_STATUSES;
   const sources = collectSources(SRC_ROOT);
 
   test("schema.sql run_state.status CHECK lists exactly the RunStatus literals", () => {
@@ -142,5 +181,55 @@ describe("enum-literal consumers (SQL)", () => {
       "status CASE-WHEN pivots drifted from RUN_STATUSES (@fragua/types): a missing status would" +
         " silently yield a zero analytics column — update the pivot in store/src/analytics-queries.ts",
     ).toEqual({ stale: [], missing: [] });
+  });
+
+  test("every quoted literal in a bare status = '…' predicate or SET under store/src is a known RunStatus", () => {
+    const offenders: string[] = [];
+    for (const file of sources) {
+      const source = readFileSync(file, "utf8");
+      for (const site of statusEqualitySites(file, source)) {
+        for (const literal of site.literals) {
+          if (!known.has(literal)) {
+            offenders.push(
+              `${site.file}:${site.line} — '${literal}' is not a RunStatus (see RUN_STATUSES in @fragua/types)`,
+            );
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("pins the dispatch/sweep predicates in run-state-queries.ts", () => {
+    const path = join(SRC_ROOT, "run-state-queries.ts");
+    const source = readFileSync(path, "utf8");
+    const literalsOf = (name: string): string[] | undefined => {
+      const body = sqlConstBody(source, name);
+      return body === undefined ? undefined : statusEqualitySites(path, body).flatMap((s) => s.literals);
+    };
+    expect({
+      SELECT_NEXT_QUEUED_RUN_SQL: literalsOf("SELECT_NEXT_QUEUED_RUN_SQL"),
+      CLAIM_NEXT_RUN_SQL: literalsOf("CLAIM_NEXT_RUN_SQL"),
+      UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL: literalsOf("UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL"),
+      UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL: literalsOf("UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL"),
+    }).toEqual({
+      SELECT_NEXT_QUEUED_RUN_SQL: ["queued"],
+      CLAIM_NEXT_RUN_SQL: ["running", "queued"],
+      UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL: ["quarantined"],
+      UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL: ["queued"],
+    });
+  });
+
+  test("flags a renamed literal in a bare predicate the IN/CASE matchers miss", () => {
+    const sql = "UPDATE run_state SET status = 'archived' WHERE status = 'queud'";
+    expect(statusInSites("synthetic.sql", sql)).toEqual([]);
+    expect(statusCaseSites("synthetic.sql", sql)).toEqual([]);
+    expect(bareEqualityOffenders(sql)).toEqual(["archived", "queud"]);
+  });
+
+  test("does not flag inbox_status or inequality comparisons", () => {
+    expect(statusEqualitySites("synthetic.sql", "WHERE inbox_status = 'pending'")).toEqual([]);
+    expect(statusEqualitySites("synthetic.sql", "WHERE rs.inbox_status='pending'")).toEqual([]);
+    expect(statusEqualitySites("synthetic.sql", "WHERE status <> 'x' OR status != 'y'")).toEqual([]);
   });
 });

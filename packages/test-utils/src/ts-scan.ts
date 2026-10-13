@@ -69,6 +69,19 @@ function calleeName(expr: ts.Expression): string | undefined {
   return undefined;
 }
 
+/** Identifier chain of a dotted expression: `["ctx","blobs","put"]` for
+ * `ctx.blobs.put`, `["this","db"]` for `this.db`. Undefined for anything that
+ * is not a pure identifier / `this` / property-access chain. */
+export function propertyChain(expr: ts.Expression): string[] | undefined {
+  if (ts.isIdentifier(expr)) return [expr.text];
+  if (expr.kind === ts.SyntaxKind.ThisKeyword) return ["this"];
+  if (ts.isPropertyAccessExpression(expr)) {
+    const head = propertyChain(expr.expression);
+    return head === undefined ? undefined : [...head, expr.name.text];
+  }
+  return undefined;
+}
+
 export interface CallInfo {
   /** Tail identifier of the callee. */
   name: string;
@@ -135,6 +148,22 @@ export function sameFileFunctionBodies(sf: ts.SourceFile): Map<string, ts.Node> 
       (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
     ) {
       map.set(n.name.text, n.initializer.body);
+    }
+  });
+  return map;
+}
+
+/** Method name → body for the methods of the class `className` declared in
+ * `sf` (unlike {@link sameFileFunctionBodies}, which mixes every class and free
+ * function in the file together). */
+export function classMethodBodies(sf: ts.SourceFile, className: string): Map<string, ts.Node> {
+  const map = new Map<string, ts.Node>();
+  walk(sf, (n) => {
+    if (!ts.isClassDeclaration(n) || n.name?.text !== className) return;
+    for (const member of n.members) {
+      if (ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.body !== undefined) {
+        map.set(member.name.text, member.body);
+      }
     }
   });
   return map;

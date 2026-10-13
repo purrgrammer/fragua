@@ -165,14 +165,34 @@ export function selectBlobRootShas(db: Database): Set<string> {
 }
 
 /** Delete up to `limit` orphan blob rows — no artifact referent AND not a
- *  routing / outputs root — and return their sha256s so the file-side delete
- *  pass can drop the on-disk content. The roots are resolved inside this one
- *  statement, so the scan and the delete see a single snapshot. RETURNING
- *  ensures row-without-file is impossible mid-sweep. */
+ *  routing / outputs root — and return their sha256s so the caller can drop
+ *  the on-disk content under the same write lock. The roots are resolved
+ *  inside this one statement, so the scan and the delete see a single
+ *  snapshot. RETURNING ensures row-without-file is impossible mid-sweep. */
 export function deleteOrphanBlobs(db: Database, limit: number): string[] {
   return db
     .query<{ sha256: string }, [number]>(DELETE_ORPHAN_BLOBS_SQL)
     .all(limit)
+    .map((r) => r.sha256);
+}
+
+const SELECT_DELETABLE_ORPHAN_FILES_SQL = `
+  WITH roots AS (${BLOB_ROOTS_SQL})
+  SELECT c.value AS sha256
+    FROM json_each(?1) c
+   WHERE c.type = 'text'
+     AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.sha256 = c.value)
+     AND c.value NOT IN (SELECT sha256 FROM roots)
+`;
+
+/** Of the candidate file shas (a JSON array), the ones with neither a `blobs`
+ *  row nor a routing / outputs root. Run under the write lock right before the
+ *  file deletes, so a row or root committed after the candidates were listed
+ *  still protects its file. */
+export function selectDeletableOrphanFiles(db: Database, candidatesJson: string): string[] {
+  return db
+    .query<{ sha256: string }, [string]>(SELECT_DELETABLE_ORPHAN_FILES_SQL)
+    .all(candidatesJson)
     .map((r) => r.sha256);
 }
 

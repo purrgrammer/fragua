@@ -235,7 +235,9 @@ function deepResolve(v: unknown, getBlob: (sha: string) => Uint8Array): unknown 
 
 /**
  * Walk `routing` and return every `$fragua_blob` sha found anywhere in the
- * object graph. Used by `gcBlobs` to build the protected-shas set.
+ * object graph. Used by bundle export to ship a run's spilled-input blobs and
+ * by `materializeRouting` to skip resolution when there are none (GC resolves
+ * its routing roots in SQL instead).
  */
 export function collectRoutingBlobShas(routing: unknown): string[] {
   const shas: string[] = [];

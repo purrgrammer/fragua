@@ -16,22 +16,57 @@
 // routing a `JSON.stringify` through a chain of private helpers, or through a
 // cross-file query function, no longer escapes the rule the way the old
 // same-file-only inliner let it.
+//
+// The store sub-interface modules reach the façade through a `StoreCtx`
+// parameter, so a call like `ctx.validatePayload(p)` resolves to neither a
+// same-file helper nor a named import. Calls on a `StoreCtx`-typed binding are
+// therefore handled explicitly: `ctx.validatePayload` inside a txn body is
+// flagged outright (it serializes), and `ctx.<m>` / `ctx.store.<m>` /
+// `ctx.blobs.<m>` / `ctx.metrics.<m>` are followed into the implementing
+// class method (`SqliteStore` / `BlobFS` / `Metrics`). `ctx.db.*` (bun:sqlite)
+// and the injected `ctx.now` clock have no in-repo body and are not followed.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  type CallInfo,
   callbackBodiesOf,
+  classMethodBodies,
   collectAwaits,
   collectCalls,
   lineOf,
   parseSource,
+  propertyChain,
   resolveImportedFunctionBody,
   sameFileFunctionBodies,
+  typedBindings,
 } from "@fragua/test-utils";
 import ts from "typescript";
 
-const ROOTS = [join(__dirname, "..", "src"), join(__dirname, "..", "..", "daemon", "src")];
+const STORE_SRC = join(__dirname, "..", "src");
+const ROOTS = [STORE_SRC, join(__dirname, "..", "..", "daemon", "src")];
+
+const CTX_TYPE = "StoreCtx";
+
+/** `StoreCtx` methods that serialize and so must run before the txn opens. */
+const BANNED_CTX_METHODS = new Set(["validatePayload"]);
+
+interface ClassImpl {
+  file: string;
+  className: string;
+}
+
+const SQLITE_STORE: ClassImpl = { file: join(STORE_SRC, "store.ts"), className: "SqliteStore" };
+
+/** `StoreCtx` member ("" = a method on the ctx itself) → the class whose method
+ * bodies implement it. `db` and `now` are deliberately absent. */
+const CTX_MEMBER_IMPLS: Record<string, ClassImpl> = {
+  "": SQLITE_STORE,
+  store: SQLITE_STORE,
+  blobs: { file: join(STORE_SRC, "blob-fs.ts"), className: "BlobFS" },
+  metrics: { file: join(STORE_SRC, "metrics.ts"), className: "Metrics" },
+};
 
 const TXN_CALLEES = ["writeTxn", "transaction"];
 
@@ -101,14 +136,27 @@ function collectTxnScopeBodies(sf: ts.SourceFile): ts.Node[] {
   return [...callbackBodiesOf(sf, TXN_CALLEES), ...savepointCallbackBodies(sf, savepointWrapperNames(sf))];
 }
 
+/** A call on a `StoreCtx` binding: `ctx.m()` → `{ member: "", method: "m" }`,
+ * `ctx.blobs.put()` → `{ member: "blobs", method: "put" }`. */
+function ctxCall(call: CallInfo, ctxNames: Set<string>): { member: string; method: string } | undefined {
+  const chain = propertyChain(call.node.expression);
+  if (chain === undefined || !ctxNames.has(chain[0] ?? "")) return undefined;
+  if (chain.length === 2) return { member: "", method: chain[1]! };
+  if (chain.length === 3) return { member: chain[1]!, method: chain[2]! };
+  return undefined;
+}
+
 /** Scan one node (a transaction body or an inlined helper body) for the banned
  * constructs, excluding nested deferred functions. */
-function scanBody(body: ts.Node, sf: ts.SourceFile, file: string): Offender[] {
+function scanBody(body: ts.Node, sf: ts.SourceFile, file: string, ctxNames: Set<string>): Offender[] {
   const offenders: Offender[] = [];
   for (const a of collectAwaits(body)) offenders.push({ file, kind: "await", line: lineOf(sf, a) });
   for (const call of collectCalls(body, sf, true)) {
+    const onCtx = ctxCall(call, ctxNames);
     if (call.name === "fetch") offenders.push({ file, kind: "fetch", line: lineOf(sf, call.node) });
     else if (BANNED_CALL_TEXT.has(call.text)) offenders.push({ file, kind: call.text, line: lineOf(sf, call.node) });
+    else if (onCtx?.member === "" && BANNED_CTX_METHODS.has(onCtx.method))
+      offenders.push({ file, kind: call.text, line: lineOf(sf, call.node) });
   }
   return offenders;
 }
@@ -137,10 +185,31 @@ function scanScope(rootBody: ts.Node, rootSf: ts.SourceFile, rootFile: string): 
     }
     return h;
   };
+  const ctxNamesCache = new Map<string, Set<string>>();
+  const ctxNamesFor = (file: string, sf: ts.SourceFile): Set<string> => {
+    let names = ctxNamesCache.get(file);
+    if (names === undefined) {
+      names = typedBindings(sf, CTX_TYPE);
+      ctxNamesCache.set(file, names);
+    }
+    return names;
+  };
+  const implCache = new Map<string, { sf: ts.SourceFile; methods: Map<string, ts.Node> }>();
+  const implFor = (impl: ClassImpl): { sf: ts.SourceFile; methods: Map<string, ts.Node> } => {
+    const key = `${impl.file}::${impl.className}`;
+    let entry = implCache.get(key);
+    if (entry === undefined) {
+      const sf = parseSource(impl.file);
+      entry = { sf, methods: classMethodBodies(sf, impl.className) };
+      implCache.set(key, entry);
+    }
+    return entry;
+  };
   const stack: Frame[] = [{ body: rootBody, sf: rootSf, file: rootFile }];
   while (stack.length > 0) {
     const { body, sf, file } = stack.pop()!;
-    offenders.push(...scanBody(body, sf, file));
+    const ctxNames = ctxNamesFor(file, sf);
+    offenders.push(...scanBody(body, sf, file, ctxNames));
     const dir = dirname(file);
     const helpers = helpersFor(file, sf);
     for (const call of collectCalls(body, sf, true)) {
@@ -158,6 +227,17 @@ function scanScope(rootBody: ts.Node, rootSf: ts.SourceFile, rootFile: string): 
           seen.add(crossKey);
           stack.push({ body: imported.body, sf: imported.sf, file: imported.sf.fileName });
         }
+        continue;
+      }
+      const onCtx = ctxCall(call, ctxNames);
+      const impl = onCtx === undefined ? undefined : CTX_MEMBER_IMPLS[onCtx.member];
+      if (onCtx === undefined || impl === undefined) continue;
+      const { sf: implSf, methods } = implFor(impl);
+      const methodBody = methods.get(onCtx.method);
+      const implKey = `${impl.file}::${impl.className}.${onCtx.method}`;
+      if (methodBody !== undefined && !seen.has(implKey)) {
+        seen.add(implKey);
+        stack.push({ body: methodBody, sf: implSf, file: impl.file });
       }
     }
   }
@@ -236,6 +316,32 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
       sweepRun("r", () => { insert(JSON.stringify(p)); });
     `;
     expect(scanSynthetic(src).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches ctx.validatePayload called inside a txn body", () => {
+    const caller = join(__dirname, "fixtures", "txn-ctx", "caller.ts");
+    const kinds = scanFile(caller).map((o) => o.kind);
+    expect(kinds).toContain("ctx.validatePayload");
+    expect(kinds).toContain("JSON.stringify");
+  });
+
+  test("follows ctx.blobs / ctx.metrics into their implementations without false positives", () => {
+    const src = `
+      function f(ctx: StoreCtx) {
+        ctx.writeTxn(() => { ctx.blobs.put(s, b); ctx.metrics.recordOccConflict(); ctx.now(); ctx.db.exec("x"); });
+      }
+    `;
+    expect(scanSynthetic(src)).toHaveLength(0);
+  });
+
+  test("does not flag ctx.validatePayload outside the txn body", () => {
+    const src = `
+      function f(ctx: StoreCtx) {
+        const p = ctx.validatePayload(x);
+        ctx.writeTxn(() => { insert(p); });
+      }
+    `;
+    expect(scanSynthetic(src)).toHaveLength(0);
   });
 
   test("does not flag a JSON.stringify in the sweepRun wrapper's own catch (outside the savepoint)", () => {
