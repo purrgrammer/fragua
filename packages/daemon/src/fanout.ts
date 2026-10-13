@@ -36,6 +36,7 @@ import {
 import {
   BUDGET_WARNED_KEY,
   classifyAbortCause,
+  fireNodeExited,
   nodeRetryCount,
   passField,
   readBudgetOverrides,
@@ -510,6 +511,7 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
         foldCommittedRetryCounts(ctx);
         clearBranchAbort(ts, outcome.nodeId);
         captureDisposition(ctx);
+        if (successor !== outcome.nodeId) fireNodeExited(deps.opts.onNodeExited, deps.runId, outcome.nodeId);
         if (successor !== undefined && ctx.disposition === undefined) poolDispatch(ctx, successor);
       },
     },

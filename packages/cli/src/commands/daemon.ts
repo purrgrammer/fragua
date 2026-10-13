@@ -316,8 +316,17 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       if (deps.steeringRegistry !== undefined) {
         daemonOpts.onSteer = buildSteerDelivery({ store, registry: deps.steeringRegistry });
       }
+      const mcpConnector = deps.mcpConnector;
+      if (mcpConnector !== undefined) {
+        daemonOpts.onNodeExited = (runId, nodeId) => void mcpConnector.release(runId, nodeId);
+        daemonOpts.onRunTerminal = (runId) => void mcpConnector.release(runId);
+      }
       const handleRef = startDaemon(daemonOpts);
-      await handleRef.done;
+      try {
+        await handleRef.done;
+      } finally {
+        await mcpConnector?.closeAll();
+      }
     } catch (err) {
       console.error(chalk.red(`daemon error: ${(err as Error).message}`));
       exitCode = 1;

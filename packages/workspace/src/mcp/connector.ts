@@ -5,14 +5,20 @@
 // them exactly like `read` / `bash`; a call is routed back through the live MCP
 // client's `callTool`.
 //
-// Lazy + per-step: `materialize` connects, the caller runs the step, then calls
-// `dispose()` to tear every connection down. Connect is bounded by a timeout so
-// a broken server can never hang the daemon; a missing credential or a failed
-// connect skips that server (its tools don't appear) and is reported in
-// `errors` rather than thrown.
+// Lazy + pooled per (run, node): a `materialize` call carrying a `scope` reuses a
+// live connection keyed by (runId, nodeId, server, hash of the resolved config),
+// so a retried or self-looping llm node spawns, handshakes and lists once.
+// `dispose()` only returns the lease; the connection closes on `release` (the
+// run's cursor left the node, or the run terminated), `closeAll` (shutdown), an
+// idle timeout, or the child dying (re-spawned on the next acquire). An unscoped
+// call connects fresh and closes on `dispose()`. Connect is bounded by a timeout
+// so a broken server can never hang the daemon; a missing credential or a failed
+// connect skips that server (its tools don't appear) and is reported in `errors`
+// rather than thrown — and is never pooled, so it is re-checked every dispatch.
 //
 // See docs/proposals/mcp-tools.md.
 
+import { createHash } from "node:crypto";
 import {
   type CallToolResult,
   McpClient,
@@ -42,6 +48,13 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_LIST_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 const CLOSE_DEADLINE_MS = 5_000;
+// A pooled connection is pinged before reuse; a hung-but-alive child must not
+// stall the dispatch for the full list budget before we give up and respawn.
+const POOL_PING_TIMEOUT_MS = 5_000;
+// Backstop for a run parked on an llm node (operator pause, provider pause,
+// retry backoff): no release hook fires while it waits, so an unleased
+// connection closes on its own after this long.
+const DEFAULT_POOL_IDLE_MS = 10 * 60_000;
 const MAX_TOOL_NAME_LEN = 128;
 const MCP_OUTPUT_MAX_CHARS = 100_000;
 const STDERR_TAIL_MAX = 2_000;
@@ -90,6 +103,15 @@ export interface McpMaterializeOptions {
   signal?: AbortSignal;
   connectTimeoutMs?: number;
   callTimeoutMs?: number;
+  /** Pool scope. When set, connections are reused across calls with the same
+   * scope + resolved server config and `dispose()` only returns the lease.
+   * Omit for a one-shot connection closed by `dispose()`. */
+  scope?: McpPoolScope;
+}
+
+export interface McpPoolScope {
+  runId: string;
+  nodeId: string;
 }
 
 /** A requested server that produced no tools (`unavailable`), or one whose
@@ -106,12 +128,18 @@ export interface McpToolset {
   tools: AnyTool[];
   /** Requested servers that were skipped, with why. Never fatal. */
   errors: McpServerError[];
-  /** Release every open connection. Idempotent. */
+  /** Return this toolset's hold on its connections: closes unscoped ones,
+   * returns the lease on pooled ones. Idempotent. */
   dispose(): Promise<void>;
 }
 
 export interface McpConnector {
   materialize(serverNames: readonly string[], opts: McpMaterializeOptions): Promise<McpToolset>;
+  /** Close every pooled connection for `runId` (narrowed to `nodeId` when
+   * given), leased or not. */
+  release(runId: string, nodeId?: string): Promise<void>;
+  /** Close every pooled connection; later scoped calls connect unpooled. */
+  closeAll(): Promise<void>;
 }
 
 /** Injected dependencies for the connector. Kept store-free — the connector
@@ -122,6 +150,8 @@ export interface McpConnectorDeps {
    * auth + token persistence, or `undefined` to skip OAuth for it. Consulted
    * only for http servers with no static `Authorization` header. */
   oauthProviderFor?: (url: string) => McpOAuthProvider | undefined;
+  /** How long an unleased pooled connection stays open. */
+  poolIdleMs?: number;
 }
 
 /** Decide whether a resolved server should authenticate through an injected
@@ -265,9 +295,51 @@ interface OpenConnection {
   transport: McpTransport;
 }
 
+/** A connection held by one toolset, with the matching way to give it back:
+ * close it (unscoped) or return the pool lease (scoped). */
+interface Acquired {
+  connection: OpenConnection;
+  descriptors: McpToolDescriptor[];
+  release: () => Promise<void>;
+}
+
+interface PoolEntry {
+  readonly key: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly connection: OpenConnection;
+  descriptors: McpToolDescriptor[];
+  /** Set by a `tools/list_changed` notification; the next acquire re-lists. */
+  stale: boolean;
+  leases: number;
+  closed: boolean;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
+}
+
 type ServerResult =
-  | { name: string; error: string; connection?: undefined; descriptors?: undefined }
-  | { name: string; error?: undefined; connection: OpenConnection; descriptors: McpToolDescriptor[] };
+  | { name: string; error: string; acquired?: undefined }
+  | { name: string; error?: undefined; acquired: Acquired };
+
+/** Key-order-independent JSON, so two equal resolved configs hash alike. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const fields = Object.keys(record)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(record[k])}`);
+    return `{${fields.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+// The resolved config (with `${VAR}` values substituted) is hashed, never kept,
+// so a rotated credential lands on a fresh key — a respawn — without the pool
+// holding the secret itself.
+function poolKey(scope: McpPoolScope, name: string, server: ResolvedMcpServer, cwd: string): string {
+  const digest = createHash("sha256").update(stableJson({ cwd, server })).digest("hex");
+  return [scope.runId, scope.nodeId, name, digest].join("\0");
+}
 
 // `McpClient.connect` takes no timeout/signal, so bound it ourselves: race the
 // connect against the connect-timeout and the run's abort signal. On loss the
@@ -451,7 +523,120 @@ async function closeWithDeadline(client: McpClient): Promise<void> {
 }
 
 export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
+  const poolIdleMs = deps?.poolIdleMs ?? DEFAULT_POOL_IDLE_MS;
+  const pool = new Map<string, PoolEntry>();
+  const connecting = new Map<string, McpPoolScope & { promise: Promise<PoolEntry> }>();
+  let shutDown = false;
+
+  const closeEntry = async (entry: PoolEntry): Promise<void> => {
+    if (entry.closed) return;
+    entry.closed = true;
+    if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
+    if (pool.get(entry.key) === entry) pool.delete(entry.key);
+    await closeWithDeadline(entry.connection.client);
+  };
+
+  const lease = (entry: PoolEntry): (() => Promise<void>) => {
+    entry.leases += 1;
+    if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
+    let returned = false;
+    return async () => {
+      if (returned) return;
+      returned = true;
+      entry.leases -= 1;
+      if (entry.leases > 0 || entry.closed) return;
+      entry.idleTimer = setTimeout(() => void closeEntry(entry), poolIdleMs);
+      entry.idleTimer.unref?.();
+    };
+  };
+
+  const register = (
+    key: string,
+    scope: McpPoolScope,
+    connection: OpenConnection,
+    descriptors: McpToolDescriptor[],
+  ): PoolEntry => {
+    const entry: PoolEntry = {
+      key,
+      runId: scope.runId,
+      nodeId: scope.nodeId,
+      connection,
+      descriptors,
+      stale: false,
+      leases: 0,
+      closed: false,
+      idleTimer: undefined,
+    };
+    pool.set(key, entry);
+    connection.client.onClose(() => void closeEntry(entry));
+    connection.client.onNotification("notifications/tools/list_changed", () => {
+      entry.stale = true;
+    });
+    return entry;
+  };
+
+  // Lease first so the idle timer can't close the entry mid-probe. Any probe
+  // failure (closed client, dead or hung child, failed re-list) drops the entry
+  // and the caller falls through to a fresh connect.
+  const reuse = async (entry: PoolEntry): Promise<Acquired | undefined> => {
+    const release = lease(entry);
+    try {
+      const client = entry.connection.client;
+      if (entry.closed || client.connectionState !== "connected") throw new Error("connection closed");
+      await client.ping({ timeoutMs: POOL_PING_TIMEOUT_MS });
+      if (entry.stale) {
+        entry.stale = false;
+        entry.descriptors = await client.listTools({ timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
+      }
+      return { connection: entry.connection, descriptors: entry.descriptors, release };
+    } catch {
+      await closeEntry(entry);
+      await release();
+      return undefined;
+    }
+  };
+
+  const acquire = async (
+    key: string,
+    scope: McpPoolScope,
+    open: () => Promise<{ connection: OpenConnection; tools: McpToolDescriptor[] }>,
+  ): Promise<Acquired> => {
+    const existing = pool.get(key);
+    if (existing !== undefined) {
+      const reused = await reuse(existing);
+      if (reused !== undefined) return reused;
+    }
+    let pending = connecting.get(key);
+    if (pending === undefined) {
+      const promise = open().then(({ connection, tools }) => register(key, scope, connection, tools));
+      const slot = { ...scope, promise };
+      connecting.set(key, slot);
+      pending = slot;
+      promise
+        .finally(() => {
+          if (connecting.get(key) === slot) connecting.delete(key);
+        })
+        .catch(() => {});
+    }
+    const entry = await pending.promise;
+    if (entry.closed) throw new Error("connection released while connecting");
+    return { connection: entry.connection, descriptors: entry.descriptors, release: lease(entry) };
+  };
+
+  const settleAndClose = async (match: (s: McpPoolScope) => boolean): Promise<void> => {
+    await Promise.allSettled([...connecting.values()].filter(match).map((p) => p.promise));
+    await Promise.allSettled([...pool.values()].filter(match).map(closeEntry));
+  };
+
   return {
+    release(runId, nodeId) {
+      return settleAndClose((s) => s.runId === runId && (nodeId === undefined || s.nodeId === nodeId));
+    },
+    closeAll() {
+      shutDown = true;
+      return settleAndClose(() => true);
+    },
     async materialize(serverNames, opts): Promise<McpToolset> {
       // Resolve `${VAR}` against the project's .env/.env.local overlaid by
       // process.env (exported vars win) — so a token in .env.local reaches a
@@ -462,7 +647,8 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
       const requested = [...new Set(serverNames)];
       const tools: AnyTool[] = [];
       const errors: McpServerError[] = [];
-      const open: OpenConnection[] = [];
+      const releases: Array<() => Promise<void>> = [];
+      const scope = shutDown ? undefined : opts.scope;
 
       const config = loadMcpConfig(opts.cwd);
       if (!config.ok) {
@@ -485,17 +671,23 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
           }
           const resolved = resolveMcpServer(raw, env);
           if (!resolved.ok) return { name, error: `missing environment variable(s): ${resolved.missing.join(", ")}` };
-          try {
-            const { connection, tools: descriptors } = await connectServer(
+          const server = resolved.server;
+          const open = () =>
+            connectServer(
               name,
-              resolved.server,
+              server,
               connectTimeoutMs,
               DEFAULT_LIST_TIMEOUT_MS,
               opts.cwd,
               opts.signal,
               deps?.oauthProviderFor,
             );
-            return { name, connection, descriptors };
+          try {
+            if (scope !== undefined) {
+              return { name, acquired: await acquire(poolKey(scope, name, server, opts.cwd), scope, open) };
+            }
+            const { connection, tools: descriptors } = await open();
+            return { name, acquired: { connection, descriptors, release: () => closeWithDeadline(connection.client) } };
           } catch (err) {
             return { name, error: `failed to connect: ${(err as Error).message}` };
           }
@@ -515,7 +707,7 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
           errors.push({ server: r.name, message: r.error, kind: "unavailable" });
           continue;
         }
-        open.push(r.connection);
+        releases.push(r.acquired.release);
         // Sort before materialising, so the first-wins dedup below is
         // deterministic: `tools/list` order is the server's choice and can
         // change under us (a version bump inserting a tool mid-list is
@@ -532,14 +724,14 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
         // falls back to the server's response order, reintroducing the
         // non-determinism this sort exists to remove. The raw-name tiebreak
         // is what actually pins the winner.
-        const descriptors = [...r.descriptors].sort((a, b) => {
+        const descriptors = [...r.acquired.descriptors].sort((a, b) => {
           const sa = mcpToolName(r.name, a.name);
           const sb = mcpToolName(r.name, b.name);
           if (sa !== sb) return sa < sb ? -1 : 1;
           return byName(a, b);
         });
         for (const d of descriptors) {
-          const tool = toFraguaTool(r.name, d, r.connection.client, callTimeoutMs);
+          const tool = toFraguaTool(r.name, d, r.acquired.connection.client, callTimeoutMs);
           const winner = claimedBy.get(tool.name);
           if (winner !== undefined) {
             errors.push({
@@ -561,7 +753,7 @@ export function createMcpConnector(deps?: McpConnectorDeps): McpConnector {
         dispose: async () => {
           if (disposed) return;
           disposed = true;
-          await Promise.allSettled(open.map((c) => closeWithDeadline(c.client)));
+          await Promise.allSettled(releases.map((release) => release()));
         },
       };
     },

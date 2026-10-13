@@ -168,6 +168,38 @@ snapshot.
 
 ---
 
+## 2d. MCP connections are pooled per (run, node)
+
+An `llm` step's `mcp-servers:` connect lazily the first time the step
+dispatches, and the connection is kept for the next dispatch **of the same step
+in the same run**. The pool key is (run id, node id, server name, hash of the
+resolved server config), so a scheduled retry, a provider-error resume or a
+self-loop reuses the stdio child and its handshake + `tools/list` result instead
+of respawning. Before reuse the connection is pinged; a closed or unresponsive
+one is dropped and the server is re-spawned. A `tools/list_changed`
+notification makes the next dispatch re-list.
+
+A pooled connection closes when:
+
+- a committed transition moves the run's cursor off the step (a multi-step loop
+  `A → B → A` therefore reconnects `A` on return);
+- the run reaches a hard-terminal status (completed / cancelled / halted /
+  quarantined), never on a pause;
+- it has sat unleased for 10 minutes (a run parked on the step);
+- the daemon (or `fragua ci`) shuts down.
+
+Connections are never shared across runs. Pooling does not change how a server
+is reached: a stdio child still gets only the allow-listed base env plus its
+`.mcp.json` `env`, a credential over plaintext `http://` to a non-loopback host
+is still refused, and a failed or refused connect is never pooled, so it is
+re-checked on every dispatch. Changing a `${VAR}` a server resolves (e.g. a
+rotated token in `.env.local`) changes the config hash, so the next dispatch
+spawns a fresh child. OAuth tokens are read from the store before every request,
+so a refreshed or re-logged-in token reaches a pooled http connection without
+reconnecting.
+
+---
+
 ## 3. Worktree lifecycle
 
 | Phase | What happens |

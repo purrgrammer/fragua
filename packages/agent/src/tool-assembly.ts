@@ -171,8 +171,9 @@ export function resolveEnvAndSkills(
 }
 
 /** Materialise MCP-server tools for the node and merge them into `finalTools`,
- * subject to `denied_tools` / an mcp-only `allowed_tools`. Registers teardown
- * on `disposers`. Returns an early `outcome` when an mcp-only allowlist
+ * subject to `denied_tools` / an mcp-only `allowed_tools`. Connections are
+ * pooled per (run, node), so `disposers` gets the lease return, not a close.
+ * The connector closes them when the daemon releases the node or run. Returns an early `outcome` when an mcp-only allowlist
  * materialised nothing. A no-connector / no-servers node is a pass-through. */
 export async function materializeMcpTools(
   deps: ToolAssemblyDeps,
@@ -189,7 +190,10 @@ export async function materializeMcpTools(
   const { input, declaredMcpServers, mcpOnlyAllowlist, allow, runProjectCwd, disposers } = args;
   let finalTools = args.finalTools;
   if (!deps.mcpConnector || declaredMcpServers.length === 0) return { finalTools };
-  const materializeOpts: Parameters<McpConnector["materialize"]>[1] = { cwd: runProjectCwd };
+  const materializeOpts: Parameters<McpConnector["materialize"]>[1] = {
+    cwd: runProjectCwd,
+    scope: { runId: input.run_id, nodeId: input.node.id },
+  };
   if (input.signal) materializeOpts.signal = input.signal;
   const toolset = await deps.mcpConnector.materialize(declaredMcpServers, materializeOpts);
   disposers.push(() => toolset.dispose());

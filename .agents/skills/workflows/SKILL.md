@@ -376,10 +376,10 @@ steps:
 
   `${VAR}` is resolved from the project's `.env`/`.env.local` overlaid by the process environment (a token in `.env.local` works without exporting it or restarting the daemon). A server whose credential is unset — or that fails to connect — is **skipped with a warning**, and the step runs with whatever tools did materialise; it never hangs or fails the step for a missing server. **Exception:** if `allowed-tools` names *only* `mcp__*` tools and none materialise, the step fails (non-retryable) instead of running tool-less — keep a core tool in `allowed-tools` for the never-fatal behaviour.
 - **Transports:** **stdio** (`command`/`args`) and **Streamable HTTP** (`{ "type": "http", "url", "headers" }`). A remote HTTP server with no static `Authorization` header authenticates via stored OAuth — `fragua mcp login <server>` runs the browser flow once, then the daemon reads the token headlessly (a static bearer over plaintext `http://` is refused; use `https`).
-- **`llm` only.** `mcp-servers` on a `tool`/`human` step is a parse error. Connections open lazily when the step runs and close when it finishes.
+- **`llm` only.** `mcp-servers` on a `tool`/`human` step is a parse error. Connections open lazily when the step first runs and are pooled per (run, step): a retried, resumed or self-looping step reuses the same server process, and it closes when the run moves to another step, finishes, sits idle 10 minutes, or the daemon stops. A loop through other steps (`A → B → A`) reconnects on return. Editing `.mcp.json` or a `${VAR}` it uses takes effect on the next dispatch.
 - **Inspect before you author:** `fragua mcp ls` lists the project's servers with their credential/OAuth state; `fragua mcp check [server]` connects and prints the exact tool names to reference in `allowed-tools`/`denied-tools`.
 
-Not yet supported: progressive disclosure and a web server-state UI — see `docs/proposals/mcp-tools.md §7`.
+Not yet supported: progressive disclosure and a web server-state UI — see `docs/proposals/archive/mcp-tools.md §7`.
 
 ### Tool steps
 

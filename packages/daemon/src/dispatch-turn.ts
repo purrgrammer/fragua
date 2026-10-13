@@ -40,6 +40,7 @@ import {
   classifyAbortCause,
   deriveResumeOf,
   errorMessage,
+  fireNodeExited,
   nodeRetryCount,
   readBudgetOverrides,
   readBudgetWarned,
@@ -720,6 +721,12 @@ interface TransitionArgs {
   recorder: { version: () => number };
 }
 
+function notifyNodeExited(deps: RunDeps, nodeId: string): void {
+  if (deps.opts.onNodeExited === undefined) return;
+  if (deps.opts.store.getState(deps.runId)?.currentNode === nodeId) return;
+  fireNodeExited(deps.opts.onNodeExited, deps.runId, nodeId);
+}
+
 /** Transition arm: the pure plan (edge selection → facts → routing patch)
  * applied under OCC, then the boundary snapshot. */
 async function commitTransition(
@@ -766,6 +773,7 @@ async function commitTransition(
         deps.occ.onResolved(currentNode, turnIteration);
         invalidateOutputsCacheIf(ts, facts);
         await captureBoundarySnapshot(opts, deps.runId, facts, currentNode);
+        notifyNodeExited(deps, currentNode);
       },
     },
     facts,

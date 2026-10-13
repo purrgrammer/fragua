@@ -307,6 +307,11 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       graphLoader: deps.graphLoader,
     };
     if (timeouts.leakGrace !== undefined) execOpts.leakGraceMs = timeouts.leakGrace;
+    const mcpConnector = deps.mcpConnector;
+    if (mcpConnector !== undefined) {
+      execOpts.onNodeExited = (runId, nodeId) => void mcpConnector.release(runId, nodeId);
+      execOpts.onRunTerminal = (runId) => void mcpConnector.release(runId);
+    }
 
     // Fiber A: drive the run (see `driveCiRun` — continues paused_auto, stops
     // on terminal/unanswerable-pause). Fiber B (this loop): tail the store and
@@ -328,7 +333,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       autoResumeAt: () => autoResumeAt(store, rid),
       sleepUntil: (wakeAt) => sleepUntil(wakeAt, shutdown.signal),
     });
-    const execSettled = exec.finally(() => {
+    const execSettled = exec.finally(async () => {
+      await mcpConnector?.closeAll();
       execDone = true;
     });
 

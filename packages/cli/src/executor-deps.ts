@@ -41,6 +41,7 @@ import {
   CORE_TOOLS,
   createMcpConnector,
   discoverSkills,
+  type McpConnector,
   makeHeadlessMcpProvider,
   ToolRegistry,
 } from "@fragua/workspace";
@@ -87,6 +88,11 @@ export interface ExecutorDeps {
   authStorage: AuthStorage;
   /** Steer-buffer registry — set only when the real llm path is wired. */
   steeringRegistry: SteeringRegistry | undefined;
+  /** The shared MCP connector (and its connection pool) — set only when the
+   * real llm path is wired. Callers release its pooled connections from the
+   * executor's `onNodeExited` / `onRunTerminal` hooks and `closeAll` it on
+   * shutdown. */
+  mcpConnector: McpConnector | undefined;
   /** Shared summariser (auto-title + per-node `summary=`), or a reason it's off. */
   summariser: SummariserInfo;
   /** Resolved llm target + provenance, for the caller's startup logging. */
@@ -216,6 +222,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   let steeringRegistry: SteeringRegistry | undefined;
+  let mcpConnector: McpConnector | undefined;
   if (useLlm) {
     // Register the four core tools (read / write / edit / bash) on the backend
     // registry. Without this the registry is empty, pi-agent-core gets
@@ -238,6 +245,17 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
     // `steeringQueue` (drained at end-of-turn) rather than tripping the abort
     // controller.
     steeringRegistry = new SteeringRegistry();
+    // Materialises MCP-server tools for nodes that declare `mcp-servers:`.
+    // Reads `<run cwd>/.mcp.json` lazily per node and pools connections per
+    // (run, node) — one connector shared by every backend so the pool is too.
+    // Remote http servers with no static `Authorization` header authenticate
+    // through a stored OAuth token; the daemon's `onRedirect` throws (never
+    // opens a browser) so an un-authed server is skipped via the
+    // connect-failure path with a clear "run `fragua mcp login`" message
+    // rather than hanging startup.
+    mcpConnector = createMcpConnector({
+      oauthProviderFor: (url) => makeHeadlessMcpProvider(url, makeMcpOAuthStore(store)),
+    });
     const backendOpts = {
       registry,
       defaultModel: { provider: provider!, model: model! },
@@ -255,15 +273,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
       // Tier-1 skills catalog — rendered into the system prompt of every llm
       // call, filtered per-node by `attrs.skills` / `skills_disabled`.
       skills: discoveredSkills,
-      // Materialises MCP-server tools for nodes that declare `mcp-servers:`.
-      // Reads `<run cwd>/.mcp.json` lazily per node. Remote http servers
-      // with no static `Authorization` header authenticate through a stored
-      // OAuth token; the daemon's `onRedirect` throws (never opens a browser)
-      // so an un-authed server is skipped via the connect-failure path with a
-      // clear "run `fragua mcp login`" message rather than hanging startup.
-      mcpConnector: createMcpConnector({
-        oauthProviderFor: (url) => makeHeadlessMcpProvider(url, makeMcpOAuthStore(store)),
-      }),
+      mcpConnector,
       ...(summariser.backend ? { summariser: summariser.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeLlmHandler — for llm
@@ -336,6 +346,7 @@ export async function buildExecutorDeps(input: ExecutorDepsInput): Promise<Execu
     modelRegistry,
     authStorage,
     steeringRegistry,
+    mcpConnector,
     summariser,
     llm: { provider, model, source: llmSource, useLlm },
   };
