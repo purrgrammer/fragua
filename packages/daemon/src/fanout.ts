@@ -38,7 +38,6 @@ import {
   classifyAbortCause,
   fireNodeExited,
   nodeRetryCount,
-  passField,
   readBudgetOverrides,
   readBudgetWarned,
   sleep,
@@ -55,8 +54,9 @@ import {
   planSeedFanout,
 } from "./fanout-planner.ts";
 import { invokeHandler } from "./invoke-handler.ts";
+import { planDispatchStarted } from "./lifecycle-planner.ts";
 import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
-import { maxLoopsPause, planLeakHalt } from "./predispatch-planner.ts";
+import { planLeakHalt, planLoopCeiling } from "./predispatch-planner.ts";
 import { abortResultToFacts } from "./result-to-facts.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
@@ -396,11 +396,9 @@ function captureDisposition(ctx: FanoutCtx): void {
 /** Drive one sub-node into the reactive pool (bounded by the semaphore and the
  * loop budget). */
 function poolDispatch(ctx: FanoutCtx, nodeId: string): void {
-  if (ctx.ts.dispatches >= ctx.effectiveMaxLoops) {
-    ctx.disposition = noteDisposition(
-      ctx.disposition,
-      maxLoopsPause({ currentLimit: ctx.effectiveMaxLoops, dispatches: ctx.ts.dispatches }),
-    );
+  const ceiling = planLoopCeiling({ dispatches: ctx.ts.dispatches, effectiveMaxLoops: ctx.effectiveMaxLoops });
+  if (ceiling !== undefined) {
+    ctx.disposition = noteDisposition(ctx.disposition, ceiling);
     return;
   }
   countDispatch(ctx.ts);
@@ -592,10 +590,11 @@ async function redispatchAborted(
   const { deps, pass } = ctx;
   const reDispatched = plan.redispatch;
   if (reDispatched.length === 0) return undefined;
-  const facts: FactEvent[] = reDispatched.map((n) => ({
-    type: "fact.dispatch_started",
-    payload: { nodeId: n, iteration: nodeRetryCount(ctx.runState.routing, n), ...passField(pass), resumeOf: "paused" },
-  }));
+  const facts: FactEvent[] = reDispatched.flatMap(
+    (n) =>
+      planDispatchStarted({ nodeId: n, iteration: nodeRetryCount(ctx.runState.routing, n), pass, resumeOf: "paused" })
+        .facts,
+  );
   const first = reDispatched[0]!;
   return commitWithOcc(
     {

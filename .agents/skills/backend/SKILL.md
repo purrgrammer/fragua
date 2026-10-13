@@ -236,6 +236,9 @@ app.get("/runs/:id/steps", (c) => {
 - A reducer that calls `Date.now()`, `crypto.randomUUID()`, `fetch()`, or imports `process` — not pure.
 - A new event type that emits via `appendFact` but doesn't change `run_state.version` — picked the wrong lane.
 - A column added to schema.sql with no migration entry — fresh DBs work, existing ones drift.
+- Building a `fact.*` payload inline in a daemon driver (`fanout.ts` / `dispatch-turn.ts`) — call the planner producer (`planDispatchStarted`, `planLoopCeiling`, …) so the payload has one source and stays under the decision-core purity scan.
+- Hand-listing a literal set (`"success" | "fail" | "retry"`, a `Type.Union` of `Type.Literal`s, a `new Set([...])`) that a runtime tuple already owns.
+- Re-declaring a host-side id minter (`newRunId`, `newScheduleId`) in a composition root — import the one in `@fragua/store`.
 
 ---
 
@@ -247,4 +250,5 @@ app.get("/runs/:id/steps", (c) => {
 - [ ] Routes are thin — no SQL, no large reducers inline.
 - [ ] If you added an observability field that consumers depend on, you also added it to the truncation marker.
 - [ ] If you added a fact event type, you bumped reducer logic AND the event taxonomy in `packages/types`.
+- [ ] A literal union with a runtime use derives from one `as const` tuple (`RUN_STATUSES`, `HALT_REASONS`, `OUTCOME_STATUSES`) — type, TypeBox union, and value guard alike; sites that can't import it are pinned by an `enum-consumers` lint test.
 - [ ] `bun run --filter='@fragua/<pkg>' typecheck` clean. Schema changes have a migration.

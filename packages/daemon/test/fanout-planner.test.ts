@@ -16,6 +16,7 @@ import {
   planJoin,
   planSeedFanout,
 } from "../src/fanout-planner.ts";
+import { planDispatchStarted } from "../src/lifecycle-planner.ts";
 
 const frontier = (over: Partial<FanoutFrontier>): FanoutFrontier => ({
   active: null,
@@ -308,6 +309,14 @@ describe("planBranchSettlement", () => {
       type: "fact.dispatch_started",
       payload: { nodeId: "n1", iteration: 5, resumeOf: "fresh" },
     });
+  });
+
+  test("planBranchSettlement successor marker equals planDispatchStarted output", () => {
+    for (const pass of [0, 3]) {
+      const r = planBranchSettlement(args({ facts: [nodeCompleted("b0", "n1")], nextNode: "n1", pass }));
+      const expected = planDispatchStarted({ nodeId: "n1", iteration: 0, pass, resumeOf: "fresh" }).facts[0];
+      expect(JSON.stringify(r.branchFacts[1])).toBe(JSON.stringify(expected));
+    }
   });
 
   test("successor missing from the graph → fail closed to branchTerminal", () => {

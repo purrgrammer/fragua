@@ -8,6 +8,7 @@
 import type { AgentMessage, Message as PiMessage } from "@fragua/types";
 import type { SubstitutionArgs } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
+import type { OutcomeStatus } from "../types/outcome.ts";
 import type { OutputsValue } from "../types/outputs.ts";
 import type { JudgeClient } from "./judge-contract.ts";
 
@@ -233,7 +234,7 @@ export type HandlerResult =
       /** Outcome status — matched against edge `outcome=` attributes by
        * the executor's edge selector. Defaults to "success". Unannotated
        * edges default to `outcome=success`. */
-      outcomeStatus?: "success" | "fail" | "retry";
+      outcomeStatus?: OutcomeStatus;
       /** Set by the llm backend when the agent exited the node via
        * the synthesised `route` tool. The engine's route-case edge
        * selector keys on this; the daemon persists it onto

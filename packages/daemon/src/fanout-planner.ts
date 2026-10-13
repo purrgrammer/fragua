@@ -16,6 +16,7 @@
 import type { BudgetDecision } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import { nodeRetryCount, passField } from "./executor-helpers.ts";
+import { planDispatchStarted } from "./lifecycle-planner.ts";
 
 /** The frontier of one `type: parallel` node at the start of a fan-out turn,
  * as plain data. `active`/`redispatch` are already folded by the caller — the
@@ -231,15 +232,14 @@ export function planBranchSettlement(args: {
   if (successor !== undefined) {
     const successorRouting =
       args.routingPatch !== undefined ? { ...args.liveRouting, ...args.routingPatch } : args.liveRouting;
-    branchFacts.push({
-      type: "fact.dispatch_started",
-      payload: {
+    branchFacts.push(
+      ...planDispatchStarted({
         nodeId: successor,
         iteration: nodeRetryCount(successorRouting, successor),
-        ...passField(args.pass),
+        pass: args.pass,
         resumeOf: "fresh",
-      },
-    });
+      }).facts,
+    );
   }
   return { branchFacts, disposition, successor, terminal };
 }

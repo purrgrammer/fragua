@@ -12,7 +12,8 @@ import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
-import { planLeakHalt } from "../src/predispatch-planner.ts";
+import { planDispatchStarted } from "../src/lifecycle-planner.ts";
+import { planLeakHalt, planPreDispatch } from "../src/predispatch-planner.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
@@ -307,14 +308,17 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     expect(types).toContain("fact.fanout_joined");
     // The re-drive of b_scan emits a dispatch_started — the durable failed→running
     // transition fact (so the projection doesn't read it as failed mid-re-run).
-    expect(
-      events.some(
-        (e) =>
-          e.type === "fact.dispatch_started" &&
-          (e.payload as { nodeId?: string; resumeOf?: string }).nodeId === "b_scan" &&
-          (e.payload as { resumeOf?: string }).resumeOf === "paused",
-      ),
-    ).toBe(true);
+    const reDispatch = events.find(
+      (e) =>
+        e.type === "fact.dispatch_started" &&
+        (e.payload as { nodeId?: string; resumeOf?: string }).nodeId === "b_scan" &&
+        (e.payload as { resumeOf?: string }).resumeOf === "paused",
+    );
+    expect(reDispatch).toBeDefined();
+    // Byte-identical to the linear path's single producer.
+    expect(JSON.stringify({ type: reDispatch!.type, payload: reDispatch!.payload })).toBe(
+      JSON.stringify(planDispatchStarted({ nodeId: "b_scan", iteration: 0, pass: 0, resumeOf: "paused" }).facts[0]),
+    );
 
     // Replay matches the live projection after the abort + re-drive.
     const replayed = deriveRunState("fo3", r.store.getEvents("fo3"));
@@ -1730,9 +1734,17 @@ steps:
     const final = r.store.getState("spin1")!;
     expect(final.status).toBe("paused");
     const pause = r.store.getEvents("spin1").find((e) => e.type === "fact.run_paused");
-    const p = pause?.payload as { reason?: string; currentLimit?: number };
+    const p = pause?.payload as { reason?: string; currentLimit?: number; dispatches: number };
     expect(p.reason).toBe("max_loops");
     expect(p.currentLimit).toBe(8);
+    // Byte-identical to the linear pre-dispatch arm's fact.
+    const linear = planPreDispatch({
+      state: final,
+      contractWindow: { min: final.contractVersion, max: final.contractVersion },
+      dispatches: p.dispatches,
+      effectiveMaxLoops: 8,
+    }).facts[0];
+    expect(JSON.stringify({ type: pause!.type, payload: pause!.payload })).toBe(JSON.stringify(linear));
     // Every sub-node dispatch consumed loop budget: the cycle is bounded.
     expect((seen["spin_a"] ?? 0) + (seen["spin_b"] ?? 0)).toBeLessThanOrEqual(8);
     r.store.close();
