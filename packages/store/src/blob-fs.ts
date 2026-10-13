@@ -8,13 +8,17 @@
 //
 //   put  → write to `<root>/.tmp/<rand>` → fsync → atomic rename → THEN
 //          the caller inserts the `blobs` row. A crash between rename and
-//          row insert leaves an orphan file (GC will sweep it).
+//          row insert leaves an orphan file (GC will sweep it). put() is a
+//          no-op on an existing file, so a writer whose put() deduped onto an
+//          orphan that GC then reaped re-puts after its row commits.
 //
 //   get  → direct file read. Callers should have confirmed the row exists
 //          first so a missing file signals genuine inconsistency.
 //
-//   del  → the caller DELETEs the row first, then calls `delete` here. A
-//          crash between the two leaves an orphan file (GC sweeps).
+//   del  → GC DELETEs the row and calls `delete` here inside one write
+//          transaction, so no writer's row can commit between the two. A
+//          crash after the unlink but before COMMIT leaves a row with no
+//          referrer and no file; the next sweep drops it.
 //
 // Why content lives on disk rather than in SQLite: every blob write on
 // WAL SQLite frames the full BLOB into the write-ahead log. With live SSE

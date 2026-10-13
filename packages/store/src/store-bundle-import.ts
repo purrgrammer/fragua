@@ -26,6 +26,7 @@ import { assertSafeRunId } from "./run-id.ts";
 import { insertRunState, markRunImported, setRunStateNextSeq, writeRunStateProjection } from "./run-state-queries.ts";
 import { sha256Hex } from "./sha256.ts";
 import type { StoreCtx } from "./store-ctx.ts";
+import { reputBlobs } from "./store-writer.ts";
 import type { ArtifactListRow, EventWriter, ImportBundleResult } from "./types.ts";
 import { insertWorkflowIfAbsent } from "./workflow-queries.ts";
 
@@ -216,6 +217,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
     // `length < 4096` guard skipped such a row, leaving the index incomplete).
     const outputsRows: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
     const outputsSpilledBlobs: Array<{ sha: string; bytes: number }> = [];
+    const outputsSpilledData: Array<{ sha: string; data: Uint8Array }> = [];
     for (const ev of events) {
       if (ev.type !== "fact.node_completed") continue;
       const p = ev.payload as { nodeId?: unknown; iteration?: unknown; outputs?: unknown };
@@ -225,7 +227,10 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
         continue;
       }
       const structJson = JSON.stringify(p.outputs);
-      const ref = maybeSpillStruct(structJson, (sha, bytes) => ctx.blobs.put(sha, bytes));
+      const ref = maybeSpillStruct(structJson, (sha, bytes) => {
+        ctx.blobs.put(sha, bytes);
+        outputsSpilledData.push({ sha, data: bytes });
+      });
       if (ref !== null) {
         outputsRows.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(ref) });
         outputsSpilledBlobs.push({ sha: ref.$fragua_blob, bytes: ref.bytes });
@@ -237,6 +242,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
       derived,
       outputsRows,
       outputsSpilledBlobs,
+      outputsSpilledData,
       routingJson: JSON.stringify(derived.routing),
       metricsJson: JSON.stringify(derived.metrics),
       changeStatJson: derived.changeStat != null ? JSON.stringify(derived.changeStat) : null,
@@ -384,6 +390,11 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
     }
     throw err;
   }
+  reputBlobs(
+    ctx,
+    blobs.map((b) => ({ sha: b.sha256, data: b.data })),
+  );
+  for (const r of runsToImport) reputBlobs(ctx, r.outputsSpilledData);
 
   return { runs: result, resumeCompatible };
 }

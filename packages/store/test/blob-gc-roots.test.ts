@@ -7,13 +7,20 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { deleteOrphanBlobs, insertBlobIfAbsent, selectBlobRootShas } from "../src/artifact-queries.ts";
+import {
+  deleteOrphanBlobs,
+  insertBlobIfAbsent,
+  selectBlobRootShas,
+  selectDeletableOrphanFiles,
+} from "../src/artifact-queries.ts";
 import { insertOutput } from "../src/outputs-queries.ts";
 import { freshStore, seedRun } from "./helpers.ts";
 
 const ROUTED = "a".repeat(64);
 const EMITTED = "b".repeat(64);
 const ORPHAN = "c".repeat(64);
+const ROWED = "d".repeat(64);
+const BARE = "e".repeat(64);
 
 describe("blob GC roots", () => {
   test("routing refs (nested) and outputs refs survive; the orphan is returned", async () => {
@@ -35,6 +42,22 @@ describe("blob GC roots", () => {
       .all()
       .map((r) => r.sha256);
     expect(remaining).toEqual([ROUTED, EMITTED]);
+    store.close();
+  });
+
+  test("selectDeletableOrphanFiles returns only candidates with neither a row nor a root", async () => {
+    const store = freshStore();
+    const db = (store as unknown as { db: Database }).db;
+    const runId = await seedRun(store);
+    insertBlobIfAbsent(db, ROWED, 1, 1);
+    db.query("UPDATE run_state SET routing = ? WHERE run_id = ?").run(
+      JSON.stringify({ inputs: { brief: { $fragua_blob: ROUTED, bytes: 2048 } } }),
+      runId,
+    );
+    insertOutput(db, runId, "scope", 0, JSON.stringify({ $fragua_blob: EMITTED, bytes: 9000 }));
+
+    expect(selectDeletableOrphanFiles(db, JSON.stringify([ROUTED, EMITTED, ROWED, BARE]))).toEqual([BARE]);
+    expect(selectDeletableOrphanFiles(db, "[]")).toEqual([]);
     store.close();
   });
 
