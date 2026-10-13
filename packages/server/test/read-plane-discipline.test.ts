@@ -9,37 +9,52 @@
 // has no primitive for yet) carries the `read-discipline-allow:` marker so the
 // blind spot is auditable rather than silent.
 //
-// Scoped to the run-focused route files. `schedule-routes.ts` /
-// `analytics-routes.ts` / `routes/health.ts` read over `IDaemonCoordinator` /
-// `IAnalyticsReader` surfaces the run-read plane does not front (health reads
-// `currentDaemonLock` / `runStateCounts` and delegates its only write to the
-// reaper), so they are out of scope here — the reaper's `evictDaemonLockIfStale`
-// write is guarded against inline route use by the intent-plane lint instead.
-// `routes/workflows.ts` (`getWorkflow` by sha) and `store/skills-routes.ts`
-// (`listCwds`) read the workflow catalogue and the known project roots, neither
-// a run read, so they stay out of scope too; `routes/providers.ts` never touches
-// the store.
+// Directory-scoped: every `.ts` under packages/server/src is scanned, so a new
+// route file is covered the moment it exists. The files that legitimately read
+// a store surface the run-read plane does not front are listed in `EXEMPT`,
+// each with its reason — the exemptions are data, and a test fails when one no
+// longer needs exempting.
 //
 // This is an AST scan (not a regex over source text), so a forbidden call can't
 // slip past by renaming or aliasing `deps.store`. Shape mirrors
 // packages/server/test/inline-import-discipline.test.ts.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { allowMarked, collectCalls, lineOf, parseSource, walk } from "@fragua/test-utils";
 import ts from "typescript";
 
 const SRC_DIR = join(import.meta.dir, "..", "src");
-const SCANNED_FILES = [
-  join(SRC_DIR, "store", "routes.ts"),
-  join(SRC_DIR, "store", "runs-routes.ts"),
-  join(SRC_DIR, "store", "sse.ts"),
-  join(SRC_DIR, "routes", "run-files.ts"),
-  join(SRC_DIR, "routes", "run-snapshots.ts"),
-  join(SRC_DIR, "routes", "projects.ts"),
-];
+const FIXTURE_DIR = join(import.meta.dir, "fixtures", "read-plane");
 const ALLOW_MARKER = "read-discipline-allow:";
+
+/** Files (relative to src/) that read a non-run store surface, with the reason. */
+const EXEMPT: Record<string, string> = {
+  "routes/health.ts": "daemon liveness (`currentDaemonLock`) + `runStateCounts` over IDaemonCoordinator",
+  "routes/workflows.ts": "workflow catalogue lookup (`getWorkflow`); not a run read",
+  "store/schedule-routes.ts": "schedule CRUD reads (`listSchedules`/`getSchedule`/`getScheduleRuns`)",
+  "store/analytics-routes.ts":
+    "IAnalyticsReader aggregates; KNOWN BYPASS: the drilldown hydrates rows with raw `getState`/`getEvents`/`getWorkflow`",
+  "store/skills-routes.ts": "known project roots (`listCwds`); not a run read",
+  "adapters/multi-source-workflow-reader.ts": "known project roots (`listCwds`) for workflow discovery",
+};
+
+/** Every non-declaration `.ts` under `root`, minus the {@link EXEMPT} entries. */
+function scannedFiles(root: string): string[] {
+  const out: string[] = [];
+  const walkDir = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walkDir(full);
+      else if (name.endsWith(".ts") && !name.endsWith(".d.ts") && !(relative(root, full) in EXEMPT)) out.push(full);
+    }
+  };
+  walkDir(root);
+  return out;
+}
+
+const SCANNED_FILES = scannedFiles(SRC_DIR);
 
 /** The deps-record identifiers a run-read route body destructures / reads its
  * store from. The store routes carry `deps`; the run-file / project routes
@@ -123,12 +138,25 @@ function scanString(src: string): Offense[] {
 }
 
 describe("read-plane discipline — no raw deps.store reads in run-read route bodies", () => {
-  test("scans the run-read route files", () => {
-    expect(SCANNED_FILES.every((f) => existsSync(f))).toBe(true);
-    expect(SCANNED_FILES).toContain(join(SRC_DIR, "store", "routes.ts"));
-    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "run-files.ts"));
+  test("scans every server/src file except the named exemptions", () => {
     expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "run-snapshots.ts"));
-    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "projects.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "routes", "providers.ts"));
+    expect(SCANNED_FILES).toContain(join(SRC_DIR, "store", "runs-routes.ts"));
+    for (const exempt of Object.keys(EXEMPT)) expect(SCANNED_FILES).not.toContain(join(SRC_DIR, exempt));
+  });
+
+  test("every exemption exists and still needs exempting", () => {
+    for (const exempt of Object.keys(EXEMPT)) {
+      const path = join(SRC_DIR, exempt);
+      expect(existsSync(path), `${exempt} is exempt but missing`).toBe(true);
+      expect(scan(parseSource(path)).length, `${exempt} is exempt but no longer reads the store`).toBeGreaterThan(0);
+    }
+  });
+
+  test("a new route file is scanned by default and its raw store.getState is flagged", () => {
+    const fixture = join(FIXTURE_DIR, "new-route.ts");
+    expect(scannedFiles(FIXTURE_DIR)).toContain(fixture);
+    expect(scan(parseSource(fixture)).map((o) => o.callee)).toEqual(["store.getState"]);
   });
 
   test("no raw deps.store reader call outside the read plane and the allow marker", () => {
