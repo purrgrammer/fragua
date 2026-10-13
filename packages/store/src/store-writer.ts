@@ -5,6 +5,7 @@ import {
   deleteOrphanBlobs,
   insertBlobIfAbsent,
   selectBlobRootShas,
+  selectDeletableOrphanFiles,
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { insertEventDaemon, insertEventRunEnqueued, insertEventWeb } from "./event-queries.ts";
@@ -171,12 +172,16 @@ export function appendFact(
   // no longer a node failure.
   const outputsInserts: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
   const outputsSpilledBlobs: Array<{ sha: string; bytes: number }> = [];
+  const outputsSpilledData: Array<{ sha: string; data: Uint8Array }> = [];
   for (const event of events) {
     if (event.type === "fact.node_completed") {
       const p = event.payload as { nodeId: string; iteration: number; outputs?: Record<string, unknown> };
       if (p.outputs !== undefined) {
         const structJson = JSON.stringify(p.outputs);
-        const ref = maybeSpillStruct(structJson, (sha, bytes) => ctx.blobs.put(sha, bytes));
+        const ref = maybeSpillStruct(structJson, (sha, bytes) => {
+          ctx.blobs.put(sha, bytes);
+          outputsSpilledData.push({ sha, data: bytes });
+        });
         if (ref !== null) {
           // Replace the inline struct in the event payload with the ref so the
           // event stays under the 4 KiB cap; the index stores the same ref.
@@ -264,6 +269,7 @@ export function appendFact(
     if (err instanceof ConcurrencyError) ctx.metrics.recordOccConflict();
     throw err;
   }
+  reputBlobs(ctx, outputsSpilledData);
 
   return { committed: true, newVersion, seqs, ...(committedState !== undefined ? { state: committedState } : {}) };
 }
@@ -399,9 +405,11 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
   // is safer than the inverse. The rows are inserted inside writeTxn below.
   let effectiveRouting = params.initialRouting ?? {};
   let spilledBlobs: Array<{ key: string; sha: string; bytes: number }> = [];
+  const spilledData: Array<{ sha: string; data: Uint8Array }> = [];
   if (readRawInputs(effectiveRouting) !== undefined) {
     const result = spillRoutingInputs(effectiveRouting, (sha, bytes) => {
       ctx.blobs.put(sha, bytes);
+      spilledData.push({ sha, data: bytes });
     });
     effectiveRouting = result.routing;
     spilledBlobs = result.spilled;
@@ -495,6 +503,7 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
     const seq = bumpRunSeq(ctx.db, params.runId);
     insertEventRunEnqueued(ctx.db, params.runId, seq, genesisPayload, now);
   });
+  reputBlobs(ctx, spilledData);
 }
 
 export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: string } | null {
@@ -650,6 +659,7 @@ export function putArtifact(
       now,
     });
   });
+  reputBlobs(ctx, [{ sha, data: content }]);
 
   return {
     ...scope,
@@ -677,6 +687,23 @@ export function vacuum(ctx: StoreCtx): void {
   ctx.db.exec("VACUUM");
 }
 
+/** Re-put blob files after the transaction that committed their rows. A
+ * pre-txn `put()` that deduped onto an existing orphan file can race a GC in
+ * another process that deletes that file before this commit lands; once the
+ * row is committed GC can no longer collect it, so writing the content again
+ * here (a no-op when the file is present) closes that window. Best-effort: the
+ * write has already committed, so a failure here must not turn it into an
+ * error the caller would treat as a failed (and retryable) write. */
+export function reputBlobs(ctx: StoreCtx, blobs: ReadonlyArray<{ sha: string; data: Uint8Array }>): void {
+  for (const { sha, data } of blobs) {
+    try {
+      ctx.blobs.put(sha, data);
+    } catch (err) {
+      console.warn(`[store] post-commit blob re-put failed for ${sha}:`, err);
+    }
+  }
+}
+
 /** A blob file younger than this is left alone by the file-side pass even
  * when no row names it: `putArtifact` and the routing spill write the file,
  * fsync, and only then commit the row, so a file this fresh is most likely a
@@ -688,32 +715,41 @@ export function gcBlobs(ctx: StoreCtx, maxRows?: number): { deleted: number } {
 
   // Pass 1: drop `blobs` rows with no artifact referent and not a routing /
   // outputs root. The roots are resolved inside the DELETE statement itself,
-  // so nothing can become a root between the scan and the delete. RETURNING
-  // feeds the file-delete pass so row-without-file is impossible mid-sweep.
+  // so nothing can become a root between the scan and the delete. The files go
+  // under the same write lock: a writer in another process whose put() deduped
+  // onto one of these files cannot commit its row until they are gone, and its
+  // post-commit re-put then restores the content.
   let orphanShas: string[] = [];
   ctx.writeTxn(() => {
     orphanShas = deleteOrphanBlobs(ctx.db, limit);
+    for (const sha of orphanShas) ctx.blobs.delete(sha);
   });
-  for (const sha of orphanShas) ctx.blobs.delete(sha);
 
   // Pass 2: remove blob files with no matching row — left behind when a row
   // was deleted directly (cascade) or when a crash between put() and INSERT
   // orphaned the file. Bounded by the same per-sweep limit to keep tail
   // latency predictable. Root files (even those without a row, e.g. a
   // mid-write crash) are preserved, and so is any file still inside the
-  // write-in-flight grace window.
+  // write-in-flight grace window. The directory walk and a racy pre-filter run
+  // outside the lock; the authoritative row + root re-check and the deletes
+  // run inside it, so a row committed after the walk still protects its file.
   let extraDeleted = 0;
   const budget = limit - orphanShas.length;
   if (budget > 0) {
     const roots = selectBlobRootShas(ctx.db);
-    const shas = ctx.blobs.listAllShas({ modifiedBefore: ctx.now() - ORPHAN_FILE_GRACE_MS });
-    for (const sha of shas) {
-      if (extraDeleted >= budget) break;
-      if (roots.has(sha)) continue;
-      if (!blobRowExists(ctx.db, sha)) {
-        ctx.blobs.delete(sha);
-        extraDeleted++;
-      }
+    const candidates: string[] = [];
+    for (const sha of ctx.blobs.listAllShas({ modifiedBefore: ctx.now() - ORPHAN_FILE_GRACE_MS })) {
+      if (candidates.length >= budget) break;
+      if (roots.has(sha) || blobRowExists(ctx.db, sha)) continue;
+      candidates.push(sha);
+    }
+    if (candidates.length > 0) {
+      const candidatesJson = JSON.stringify(candidates);
+      ctx.writeTxn(() => {
+        const deletable = selectDeletableOrphanFiles(ctx.db, candidatesJson);
+        for (const sha of deletable) ctx.blobs.delete(sha);
+        extraDeleted = deletable.length;
+      });
     }
   }
 

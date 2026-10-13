@@ -25,6 +25,7 @@ guarantee.
 
 - **`fragua import` validates every artifact row.** A bundle's `artifacts.jsonl` is shape-checked before the write, its `blobSha` must be a sha256, and it must name a blob the bundle itself carries. A crafted sha can no longer land a path in the artifact index, and an imported run can no longer point at another run's blob already in the store.
 - **Negative numeric query params fall back to their defaults.** `GET /runs/:id/events?limit=-1` now returns the default 1000-event page instead of an unbounded scan, `?since=-1` reads from the start, and `/metrics/global?windowHours=-1` uses the 30-day default window instead of an empty future one.
+- **Blob GC no longer strands a concurrent writer's blob.** A GC sweep racing another process's run enqueue, output spill, artifact write or import can no longer delete the file of a blob that write then references; GC unlinks orphan files under its write lock and writers restore their content after committing.
 
 ## [0.12.0] — 2026-10-12
 
