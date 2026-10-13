@@ -174,6 +174,12 @@ describe("handler discipline", () => {
     expect(offenses[0]?.file.endsWith("helper.ts")).toBe(true);
   });
 
+  test("a raw fetch / Bun.* delegated to a helper outside the handler file is flagged", () => {
+    const offenses = handlerIoOffenses(join(IO_FIXTURES, "fetching.ts"));
+    expect(offenses.map((o) => o.offense.rule)).toEqual(["raw fetch", "Bun.*"]);
+    expect(offenses.every((o) => o.file.endsWith("fetch-helper.ts"))).toBe(true);
+  });
+
   test("ctx.http.fetch is not flagged", () => {
     expect(scanString(`const r = await ctx.http.fetch("https://example.test");\n`)).toHaveLength(0);
   });

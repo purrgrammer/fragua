@@ -182,7 +182,7 @@ await fetch("https://example.test");
 ```
 
 ### 2. No direct I/O — use `ctx`
-Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici`; they must not call bare `fetch`. The handler-discipline lint (`packages/core/test/handler/discipline.test.ts`) will fail CI if any of those appear under `packages/core/src/handler/handlers/`.
+Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici`; they must not call bare `fetch`. The handler-discipline lint (`packages/core/test/handler/discipline.test.ts`) will fail CI if any of those appear under `packages/core/src/handler/handlers/` or in any module reachable from a handler over relative value imports — delegating the call to a helper outside `handlers/` does not escape it.
 
 Persistent state goes through:
 

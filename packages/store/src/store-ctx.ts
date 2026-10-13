@@ -10,6 +10,9 @@ import type { IEventStore } from "./types.ts";
  * and `validatePayload` stay façade-owned (so the I1 transaction lint keeps
  * matching `writeTxn` by name across every module); `store` is the façade
  * itself, used when a method on one sub-interface calls a sibling on another.
+ * The I1 lint resolves calls on a `StoreCtx`-typed binding (`ctx.<m>`,
+ * `ctx.store.<m>`, `ctx.blobs.<m>`, `ctx.metrics.<m>`) to their implementing
+ * class methods, so keep the parameter annotated `StoreCtx`.
  */
 export interface StoreCtx {
   readonly db: Database;
