@@ -22,7 +22,7 @@
 // touches `internal.active_nodes` — so relocating it is a no-bump contract change.
 
 import { type Static, Type } from "@sinclair/typebox";
-import type { OutcomeStatus } from "./types/outcome.ts";
+import { isOutcomeStatus, OUTCOME_STATUS, type OutcomeStatus } from "./types/outcome.ts";
 
 // ── Key constants / builders ────────────────────────────────────────────────
 // The dotted-key vocabulary. Gathered here so writers (patch construction) and
@@ -120,17 +120,6 @@ export const PENDING_STEER_KEY = "internal.pending_steer";
  * next turn — the first running-turn dispatch reads it (twin of how later turns
  * consult `decision.shouldPauseAfterDispatch`) and clears it. */
 export const PAUSE_AFTER_DISPATCH_KEY = "internal.pause_after_dispatch";
-
-// ── Value-checked union + documentary schema ─────────────────────────────────
-
-/** The goal-gate outcome union. A value-checked TypeBox union exercised by
- * `getGoalGate` (per-gate outcome records validate against it). */
-export const OUTCOME_STATUS = Type.Union([Type.Literal("success"), Type.Literal("fail"), Type.Literal("retry")]);
-
-const OUTCOME_VALUES = new Set<OutcomeStatus>(["success", "fail", "retry"]);
-function isOutcomeStatus(v: unknown): v is OutcomeStatus {
-  return typeof v === "string" && OUTCOME_VALUES.has(v as OutcomeStatus);
-}
 
 // ── Write-time routing-key gate ──────────────────────────────────────────────
 // The READ accessors above degrade silently — a mis-typed or unknown key reads

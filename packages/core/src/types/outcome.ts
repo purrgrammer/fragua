@@ -4,14 +4,30 @@ import type { HaltReason } from "@fragua/types";
 import { type Static, Type } from "@sinclair/typebox";
 import type { OutputsValue } from "./outputs.ts";
 
-export type OutcomeStatus = "success" | "fail" | "retry";
+/** The runtime tuple is the single source of truth for outcome statuses: the
+ * `OutcomeStatus` type, the {@link OUTCOME_STATUS} TypeBox union, and
+ * {@link isOutcomeStatus} all derive from it. Sites that cannot import it
+ * (the `@fragua/types` event payload) are pinned by the enum-consumers lint. */
+export const OUTCOME_STATUSES = ["success", "fail", "retry"] as const;
+
+export type OutcomeStatus = (typeof OUTCOME_STATUSES)[number];
+
+/** Value-checked TypeBox union over {@link OUTCOME_STATUSES} — the handler
+ * outcome `status` and the goal-gate per-gate outcome records validate against it. */
+export const OUTCOME_STATUS = Type.Union(OUTCOME_STATUSES.map((s) => Type.Literal(s)));
+
+const OUTCOME_VALUES: ReadonlySet<string> = new Set<string>(OUTCOME_STATUSES);
+
+export function isOutcomeStatus(v: unknown): v is OutcomeStatus {
+  return typeof v === "string" && OUTCOME_VALUES.has(v);
+}
 
 export type ContextValue = string | number | boolean | null | ContextValue[] | { [k: string]: ContextValue };
 
 /** Runtime schema kept for checkpoint validation; derived Outcome type matches. */
 export const OutcomeSchema = Type.Object(
   {
-    status: Type.Union([Type.Literal("success"), Type.Literal("fail"), Type.Literal("retry")]),
+    status: OUTCOME_STATUS,
     notes: Type.String(),
     failure_reason: Type.Optional(Type.String()),
     /**

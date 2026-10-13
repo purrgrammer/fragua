@@ -31,6 +31,14 @@ export function maxLoopsPause(input: { currentLimit: number; dispatches: number 
   };
 }
 
+/** The per-run `max_loops` dispatch ceiling check. The one comparison behind
+ * both the linear pre-dispatch arm and the fan-out pool's per-branch gate, which
+ * must not run the rest of {@link planPreDispatch} on every branch dispatch. */
+export function planLoopCeiling(input: { dispatches: number; effectiveMaxLoops: number }): FactEvent | undefined {
+  if (input.dispatches < input.effectiveMaxLoops) return undefined;
+  return maxLoopsPause({ currentLimit: input.effectiveMaxLoops, dispatches: input.dispatches });
+}
+
 export interface PreDispatchInput {
   /** Pre-dispatch run projection — the contract-version pin lives here. */
   state: RunState;
@@ -110,12 +118,8 @@ export function planPreDispatch(input: PreDispatchInput): PreDispatchPlan {
     };
   }
 
-  if (input.dispatches >= input.effectiveMaxLoops) {
-    return {
-      terminal: true,
-      facts: [maxLoopsPause({ currentLimit: input.effectiveMaxLoops, dispatches: input.dispatches })],
-    };
-  }
+  const ceiling = planLoopCeiling(input);
+  if (ceiling !== undefined) return { terminal: true, facts: [ceiling] };
 
   return { terminal: false, facts: [] };
 }

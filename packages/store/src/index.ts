@@ -60,6 +60,7 @@ export {
   spillRoutingInputs,
 } from "./routing-blobs.ts";
 export { newRunId } from "./run-id.ts";
+export { newScheduleId } from "./schedule-id.ts";
 export {
   buildExportRegistry,
   extractCredentialLiterals,

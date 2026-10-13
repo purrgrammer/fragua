@@ -8,13 +8,12 @@
 // owns migration. On a missing or schema-mismatched store the open throws,
 // which `withStoreClient` turns into an actionable CLI error.
 
-import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { getFraguaHome } from "@fragua/agent";
 import { type IntentPlane, makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane, type ReadPlane } from "@fragua/core/read-plane";
-import { newRunId, SqliteStore, type SqliteStore as SqliteStoreType } from "@fragua/store";
+import { newRunId, newScheduleId, SqliteStore, type SqliteStore as SqliteStoreType } from "@fragua/store";
 import chalk from "chalk";
 
 export interface StoreClientOpts {
@@ -79,14 +78,4 @@ export async function withStoreClient(
   } finally {
     client.close();
   }
-}
-
-/** Mint a schedule id — Crockford-ish `sch_<rand>`. Injected into the intent
- * plane so schedule-id minting stays a host-side seam (core is browser-safe). */
-function newScheduleId(): string {
-  const buf = randomBytes(6);
-  const alph = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let s = "";
-  for (let i = 0; i < buf.length; i++) s += alph[buf[i]! % 36];
-  return `sch_${s}`;
 }

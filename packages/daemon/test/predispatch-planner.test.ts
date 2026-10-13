@@ -4,7 +4,13 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FactEvent, RunState } from "@fragua/store";
-import { maxLoopsPause, planLeakHalt, planPreDispatch, workflowParseFailedDetail } from "../src/predispatch-planner.ts";
+import {
+  maxLoopsPause,
+  planLeakHalt,
+  planLoopCeiling,
+  planPreDispatch,
+  workflowParseFailedDetail,
+} from "../src/predispatch-planner.ts";
 import { resultToFacts } from "../src/result-to-facts.ts";
 
 const WINDOW = { min: 1, max: 6 };
@@ -103,6 +109,16 @@ describe("planPreDispatch", () => {
     );
     expect(planned).toEqual([expected]);
     expect(translated).toEqual([expected]);
+  });
+
+  test("planLoopCeiling is the max_loops arm of planPreDispatch", () => {
+    expect(planLoopCeiling({ dispatches: 7, effectiveMaxLoops: 8 })).toBeUndefined();
+    for (const dispatches of [8, 9]) {
+      const ceiling = planLoopCeiling({ dispatches, effectiveMaxLoops: 8 });
+      const planned = planPreDispatch({ state: mkState(), contractWindow: WINDOW, dispatches, effectiveMaxLoops: 8 });
+      expect([ceiling]).toEqual(planned.facts);
+      expect(ceiling).toEqual(maxLoopsPause({ currentLimit: 8, dispatches }));
+    }
   });
 
   test("a healthy pre-dispatch input plans no facts", () => {
