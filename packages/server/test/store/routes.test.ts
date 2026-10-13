@@ -1209,6 +1209,23 @@ describe("reads", () => {
     expect(bad).toEqual(good);
     expect(bad.length).toBeGreaterThan(0);
   });
+
+  test("a negative limit falls back to the default cap instead of an unbounded LIMIT", async () => {
+    store.enqueueRun({ runId: "rneg", workflowSha: "wf" });
+    store.appendIntent("rneg", { type: "intent.pause_requested", payload: {} });
+    const good = (await (await req("GET", "/runs/rneg/events")).json()) as { seq: number }[];
+    const neg = (await (await req("GET", "/runs/rneg/events?limit=-1")).json()) as { seq: number }[];
+    expect(neg).toEqual(good);
+    expect(neg.length).toBeGreaterThan(0);
+  });
+
+  test("a negative since is treated as the default (0)", async () => {
+    store.enqueueRun({ runId: "rsn", workflowSha: "wf" });
+    store.appendIntent("rsn", { type: "intent.pause_requested", payload: {} });
+    const good = (await (await req("GET", "/runs/rsn/events")).json()) as { seq: number }[];
+    const neg = (await (await req("GET", "/runs/rsn/events?since=-1")).json()) as { seq: number }[];
+    expect(neg).toEqual(good);
+  });
 });
 
 describe("GET /metrics/global", () => {

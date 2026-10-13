@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import type { GetEventsOpts, GetMessagesOpts, IEventReader } from "@fragua/store";
 import { SqliteStore } from "@fragua/store";
-import { createRoutes } from "../src/store/routes.ts";
+import { createRoutes, type ServerDeps } from "../src/store/routes.ts";
 import { storeRunsRoutes } from "../src/store/runs-routes.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
@@ -60,18 +60,37 @@ describe("GET /metrics/global — windowHours clamp", () => {
     expect(body.total_runs).toBe(1);
     store.close();
   });
+
+  test("a negative windowHours falls back to the 30-day default, not a future cutoff", async () => {
+    const { store: real, now } = seed();
+    const { store, seen } = recordingStore(real);
+    const app = createRoutes({ store: store as ServerDeps["store"], now: () => now });
+    const res = await app.request("/metrics/global?windowHours=-1");
+    expect(res.status).toBe(200);
+    expect(seen.sinceMs).toBe(now - 24 * 30 * 3_600_000);
+    const body = (await res.json()) as { total_runs: number };
+    expect(body.total_runs).toBe(1);
+    real.close();
+  });
 });
 
 /** Wrap a real store, delegating every method, but record the `limit` that
- * reaches `getEvents` / `getMessagesNarrow` so the route-level clamp is
- * observable without seeding thousands of rows. */
+ * reaches `getEvents` / `getMessagesNarrow` and the `sinceMs` that reaches
+ * `getGlobalMetricsTotals`, so the route-level clamp is observable without
+ * seeding thousands of rows. */
 function recordingStore(real: SqliteStore): {
   store: IEventReader;
-  seen: { events?: number | undefined; messages?: number | undefined };
+  seen: { events?: number | undefined; messages?: number | undefined; sinceMs?: number | undefined };
 } {
-  const seen: { events?: number | undefined; messages?: number | undefined } = {};
+  const seen: { events?: number | undefined; messages?: number | undefined; sinceMs?: number | undefined } = {};
   const store = new Proxy(real, {
     get(target, prop, receiver) {
+      if (prop === "getGlobalMetricsTotals") {
+        return (opts: { sinceMs: number }) => {
+          seen.sinceMs = opts.sinceMs;
+          return target.getGlobalMetricsTotals(opts);
+        };
+      }
       if (prop === "getEvents") {
         return (runId: string, opts?: GetEventsOpts) => {
           seen.events = opts?.limit;
@@ -97,6 +116,18 @@ function seedRun(): SqliteStore {
   store.enqueueRun({ runId: "r1", workflowSha: "wf1" });
   return store;
 }
+
+describe("GET /runs/:id/events — negative limit", () => {
+  test("?limit=-1 reaches the store as the 1000 default, not -1", async () => {
+    const real = seedRun();
+    const { store, seen } = recordingStore(real);
+    const app = createRoutes({ store: store as ServerDeps["store"] });
+    const res = await app.request("/runs/r1/events?limit=-1");
+    expect(res.status).toBe(200);
+    expect(seen.events).toBe(1000);
+    real.close();
+  });
+});
 
 describe("GET /runs/:id/events.json — limit ceiling", () => {
   test("a huge ?limit is clamped to 5000", async () => {
