@@ -18,6 +18,7 @@ guarantee.
 
 ### Changed
 
+- **MCP connections are reused across dispatches of the same step.** A retried, resumed or self-looping `llm` step with `mcp-servers:` keeps its server connection instead of respawning and re-handshaking on every dispatch; it closes when the run moves to another step, terminates, idles 10 minutes, or the daemon stops. A dead server is re-spawned on the next dispatch.
 - **Event contract v7, schema v7.** The genesis `intent.run_enqueued` gains an optional `baseHeadSha`, seeded onto the new `run_state.base_head_sha` column, and an optional `inCheckout`. `intent.accept_run` / `fact.run_accepted` gain an optional `landedUnstaged`; `fact.run_started` gains an optional `baseHeadSha`; the new `intent.checkout_release` / `fact.checkout_released` pair records a release. Schema v7 adds `run_state.in_checkout`, `checkout_path` and `checkout_released`. Runs pinned at v1–v6 fold unchanged.
 - **Snapshot capture uses a per-call sentinel index** (`fragua-index-<run>-<nonce>`) instead of a fixed name, so a capture killed mid-way no longer leaves a lock that blocks later snapshots.
 

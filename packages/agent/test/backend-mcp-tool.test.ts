@@ -2,14 +2,19 @@
 // `mcp_servers` are materialised through the injected `McpConnector` and added to
 // the tool set; `allowed_tools` narrows the MCP set only when it names `mcp__*`
 // tools, `denied_tools` subtracts, connector `errors` surface as `agent.warning`,
-// and the connection is disposed on run completion. Driven against the faux
-// provider with a stub connector so no real subprocess is spawned.
+// and the toolset's pool lease is returned when the dispatch ends. Driven against
+// the faux provider with a stub connector so no real subprocess is spawned —
+// except the looping-node test, which spawns the workspace echo fixture to prove
+// a real stdio child survives across dispatches of the same node.
 //
 // Note on names: a materialised tool's fragua name is `mcp__<server>__<tool>`;
 // the event `tool_name` is the unsanitised form (`__` → `:`), so the echo tool
 // surfaces as `mcp:srv:echo` in `tool.execution_*`.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -17,8 +22,10 @@ import type { EventType, NodeAttrs } from "@fragua/core";
 import {
   type AnyTool,
   CORE_TOOLS,
+  createMcpConnector,
   LocalEnvironment,
   type McpConnector,
+  type McpPoolScope,
   type McpServerError,
   ToolRegistry,
 } from "@fragua/workspace";
@@ -43,10 +50,19 @@ function mcpStubTool(name: string, reply: string): AnyTool {
   };
 }
 
-/** A connector that returns a fixed toolset + errors and counts disposals. */
-function stubConnector(spec: { tools: AnyTool[]; errors: McpServerError[]; disposed: { n: number } }): McpConnector {
+/** A connector that returns a fixed toolset + errors, counts lease returns
+ * (`disposed`), and records the pool scope each materialise was asked for. */
+function stubConnector(spec: {
+  tools: AnyTool[];
+  errors: McpServerError[];
+  disposed: { n: number };
+  scopes?: Array<McpPoolScope | undefined>;
+}): McpConnector {
   return {
-    async materialize() {
+    async release() {},
+    async closeAll() {},
+    async materialize(_servers, opts) {
+      spec.scopes?.push(opts.scope);
       return {
         tools: spec.tools,
         errors: spec.errors,
@@ -101,7 +117,76 @@ async function runMcp(opts: {
 const stop = fauxAssistantMessage([fauxText("done")], { stopReason: "stop" });
 
 describe("PiLlmBackend MCP materialisation", () => {
-  test("a materialised MCP tool reaches the agent and executes; dispose runs after", async () => {
+  test("backend passes (run_id, node.id) as the MCP pool scope", async () => {
+    const disposed = { n: 0 };
+    const scopes: Array<McpPoolScope | undefined> = [];
+    const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "hi")], errors: [], disposed, scopes });
+    await runMcp({ attrs: { mcp_servers: ["srv"] }, connector, script: [stop] });
+    expect(scopes).toEqual([{ runId: "test-mcp", nodeId: "n1" }]);
+  });
+
+  test("a looping llm node spawns its stdio MCP child once across N iterations", async () => {
+    const echoServer = join(import.meta.dir, "..", "..", "workspace", "test", "mcp", "echo-server.ts");
+    const cwd = mkdtempSync(join(tmpdir(), "fragua-agent-mcp-pool-"));
+    const spawnLog = join(cwd, "spawns.log");
+    writeFileSync(
+      join(cwd, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          echo: { command: process.execPath, args: [echoServer], env: { FRAGUA_MCP_SPAWN_LOG: spawnLog } },
+        },
+      }),
+    );
+    const iterations = 3;
+    const connector = createMcpConnector();
+    const faux = registerFauxProvider();
+    try {
+      const model = faux.getModel();
+      const script: AssistantMessage[] = [];
+      for (let i = 0; i < iterations; i++) {
+        script.push(
+          fauxAssistantMessage([fauxToolCall("mcp__echo__echo", { text: `pass ${i}` }, { id: `tc${i}` })], {
+            stopReason: "toolUse",
+          }),
+          stop,
+        );
+      }
+      faux.setResponses(script);
+      const backend = new PiLlmBackend({
+        registry: withRegistry(),
+        env: new LocalEnvironment({ cwd }),
+        resolveModel: () => model,
+        defaultModel: { provider: model.provider, model: model.id },
+        mcpConnector: connector,
+      });
+      const results: string[] = [];
+      for (let i = 0; i < iterations; i++) {
+        await backend.run({
+          node: { id: "loop", type: "llm", attrs: { mcp_servers: ["echo"] } },
+          prompt: "use the mcp tool",
+          thread_id: undefined,
+          signal: new AbortController().signal,
+          run_id: "loop-run",
+          workflow_sha: "sha",
+          iteration: { n: i, max: iterations },
+          emit: async (type, data) => {
+            if (type === "tool.execution_end" && data["tool_name"] === "mcp:echo:echo") {
+              results.push(JSON.stringify(data["result"]));
+            }
+          },
+        });
+      }
+      expect(results).toHaveLength(iterations);
+      for (let i = 0; i < iterations; i++) expect(results[i]).toContain(`echo: pass ${i}`);
+      const spawns = existsSync(spawnLog) ? readFileSync(spawnLog, "utf8").split("\n").filter(Boolean) : [];
+      expect(spawns).toHaveLength(1);
+    } finally {
+      faux.unregister();
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("a materialised MCP tool reaches the agent and executes; its pool lease is returned after", async () => {
     const disposed = { n: 0 };
     const connector = stubConnector({ tools: [mcpStubTool("mcp__srv__echo", "echoed!")], errors: [], disposed });
     const { events, outcome } = await runMcp({
@@ -186,7 +271,7 @@ describe("PiLlmBackend MCP materialisation", () => {
       script: [stop],
     });
     expect(outcome.status).toBe("fail");
-    expect(disposed.n).toBe(1); // dispose still runs on the fail path
+    expect(disposed.n).toBe(1); // the lease is still returned on the fail path
   });
 
   test("allowed_tools MCP entry is slug-normalised to match the materialised name", async () => {
@@ -289,7 +374,7 @@ describe("PiLlmBackend MCP materialisation", () => {
     expect(end?.data["is_error"]).toBeFalsy(); // mcp set not narrowed → echo ran
   });
 
-  test("connector errors surface as agent.warning; dispose still runs", async () => {
+  test("connector errors surface as agent.warning; the lease is still returned", async () => {
     const disposed = { n: 0 };
     const connector = stubConnector({
       tools: [],

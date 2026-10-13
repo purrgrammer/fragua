@@ -91,6 +91,9 @@ for MCP works with fragua unchanged:
 
 ## Connection lifecycle
 
+> Superseded: connections are now pooled per (run, node) — see
+> [`docs/execution-model.md` §2d](../../execution-model.md#2d-mcp-connections-are-pooled-per-run-node).
+
 **Lazy, per-step.** When an `llm` step with a non-empty `mcp-servers` runs, the
 backend connects the requested servers, lists their tools, runs the step, and
 tears the connections down when the step finishes. No connection survives across

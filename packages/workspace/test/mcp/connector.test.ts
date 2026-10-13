@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { McpClient } from "@earendil-works/pi-mcp";
 import type { McpOAuthProvider } from "@earendil-works/pi-mcp/oauth";
 import { LocalEnvironment } from "../../src/local-env.ts";
 import type { ResolvedMcpServer } from "../../src/mcp/config.ts";
@@ -14,6 +15,8 @@ import {
   normalizeMcpToolRef,
 } from "../../src/mcp/connector.ts";
 import { type McpOAuthStore, makeMcpOAuthProvider } from "../../src/mcp/oauth.ts";
+import type { AnyTool } from "../../src/types.ts";
+import { startHttpAuthServer } from "./http-auth-server.ts";
 
 const ECHO_SERVER = join(import.meta.dir, "echo-server.ts");
 const ENV_SERVER = join(import.meta.dir, "env-server.ts");
@@ -420,5 +423,298 @@ describe("createMcpConnector.materialize — oauth provider selection", () => {
     expect(set.errors).toHaveLength(1);
     expect(set.errors[0]?.server).toBe("oauthed");
     await set.dispose();
+  }, 30_000);
+});
+
+interface PooledProject {
+  cwd: string;
+  spawns: () => number[];
+}
+
+/** A project whose `echo` server logs each spawn's pid; `env` is layered into
+ * the server's mcp.json `env` (so `${VAR}` references resolve per call). */
+function pooledEchoProject(env: Record<string, string> = {}): PooledProject {
+  const cwd = mkdtempSync(join(tmpdir(), "fragua-mcp-pool-"));
+  const log = join(cwd, "spawns.log");
+  writeFileSync(
+    join(cwd, ".mcp.json"),
+    JSON.stringify({
+      mcpServers: {
+        echo: { command: process.execPath, args: [ECHO_SERVER], env: { FRAGUA_MCP_SPAWN_LOG: log, ...env } },
+      },
+    }),
+  );
+  return {
+    cwd,
+    spawns: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map(Number) : []),
+  };
+}
+
+function toolNamed(tools: AnyTool[], name: string): AnyTool {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`no ${name} tool materialised`);
+  return tool;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntil(cond: () => boolean, timeoutMs = 10_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return true;
+    await Bun.sleep(25);
+  }
+  return cond();
+}
+
+async function echoOnce(set: { tools: AnyTool[] }, text: string): Promise<string> {
+  return (await toolNamed(set.tools, "mcp__echo__echo").execute({ text }, new LocalEnvironment())).text;
+}
+
+describe("createMcpConnector — pooled (scoped) materialize", () => {
+  const scope = { runId: "run-1", nodeId: "node-1" };
+
+  test("same (run, node, config) across N materialize/dispose cycles spawns the stdio child once", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    try {
+      for (let i = 0; i < 3; i++) {
+        const set = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+        expect(await echoOnce(set, `hi${i}`)).toBe(`echo: hi${i}`);
+        await set.dispose();
+      }
+      expect(project.spawns()).toHaveLength(1);
+    } finally {
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("a retried dispatch reuses the handshake and cached tools/list", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    const connect = spyOn(McpClient.prototype, "connect");
+    const listTools = spyOn(McpClient.prototype, "listTools");
+    try {
+      const first = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      await first.dispose();
+      const retry = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      expect(retry.tools.map((t) => t.name)).toEqual(first.tools.map((t) => t.name));
+      expect(await echoOnce(retry, "again")).toBe("echo: again");
+      await retry.dispose();
+      expect(project.spawns()).toHaveLength(1);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(listTools).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+      listTools.mockRestore();
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("release(runId, nodeId) closes exactly once; a second release is a no-op", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    const close = spyOn(McpClient.prototype, "close");
+    try {
+      const set = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      await set.dispose();
+      expect(close).toHaveBeenCalledTimes(0);
+      await connector.release(scope.runId, scope.nodeId);
+      await connector.release(scope.runId, scope.nodeId);
+      expect(close).toHaveBeenCalledTimes(1);
+      const [pid] = project.spawns();
+      if (pid === undefined) throw new Error("no spawn recorded");
+      expect(await waitUntil(() => !isAlive(pid))).toBe(true);
+    } finally {
+      close.mockRestore();
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("different runIds never share a connection", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    try {
+      const a = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "A", nodeId: "n" } });
+      const b = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "B", nodeId: "n" } });
+      expect(project.spawns()).toHaveLength(2);
+      await a.dispose();
+      await connector.release("A");
+      expect(await echoOnce(b, "still here")).toBe("echo: still here");
+      await b.dispose();
+      const bAgain = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "B", nodeId: "n" } });
+      expect(await echoOnce(bAgain, "reused")).toBe("echo: reused");
+      await bAgain.dispose();
+      expect(project.spawns()).toHaveLength(2);
+    } finally {
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("a changed resolved config (rotated ${VAR}) respawns under a new key", async () => {
+    const project = pooledEchoProject({ POOL_TOKEN: "${FRAGUA_POOL_ROTATE_TOKEN}" });
+    const connector = createMcpConnector();
+    try {
+      writeFileSync(join(project.cwd, ".env.local"), "FRAGUA_POOL_ROTATE_TOKEN=first-token-value\n");
+      const first = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      expect(first.errors).toEqual([]);
+      await first.dispose();
+      writeFileSync(join(project.cwd, ".env.local"), "FRAGUA_POOL_ROTATE_TOKEN=second-token-value\n");
+      const second = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      expect(second.errors).toEqual([]);
+      await second.dispose();
+      expect(project.spawns()).toHaveLength(2);
+    } finally {
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("a dead child is detected and re-spawned on next acquire", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    try {
+      const first = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      const died = await toolNamed(first.tools, "mcp__echo__echo").execute(
+        { text: "__exit__" },
+        new LocalEnvironment(),
+      );
+      expect(died.is_error).toBe(true);
+      await first.dispose();
+      const [pid] = project.spawns();
+      if (pid === undefined) throw new Error("no spawn recorded");
+      expect(await waitUntil(() => !isAlive(pid))).toBe(true);
+
+      const next = await connector.materialize(["echo"], { cwd: project.cwd, scope });
+      expect(next.errors).toEqual([]);
+      expect(await echoOnce(next, "back")).toBe("echo: back");
+      await next.dispose();
+      expect(project.spawns()).toHaveLength(2);
+    } finally {
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("pooled spawn path still withholds daemon secrets from the child", async () => {
+    const secretKey = "FRAGUA_MCP_POOL_LEAK_PROBE";
+    process.env[secretKey] = "super-secret-token";
+    const connector = createMcpConnector();
+    try {
+      const cwd = projectWith({ mcpServers: { env: { command: process.execPath, args: [ENV_SERVER] } } });
+      for (let i = 0; i < 2; i++) {
+        const set = await connector.materialize(["env"], { cwd, scope });
+        const leaked = await toolNamed(set.tools, "mcp__env__getenv").execute(
+          { name: secretKey },
+          new LocalEnvironment(),
+        );
+        expect(leaked.text).toBe("");
+        await set.dispose();
+      }
+    } finally {
+      delete process.env[secretKey];
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("plaintext-http credential refusal is never cached past", async () => {
+    const cwd = projectWith({
+      mcpServers: { proxy: { type: "http", url: "http://insecure.example.com/mcp", headers: { "X-Api-Key": "k" } } },
+    });
+    const connector = createMcpConnector();
+    const close = spyOn(McpClient.prototype, "close");
+    try {
+      for (let i = 0; i < 2; i++) {
+        const set = await connector.materialize(["proxy"], { cwd, scope });
+        expect(set.tools).toEqual([]);
+        expect(set.errors[0]?.message).toMatch(/refusing to send credentials over plaintext http/);
+        await set.dispose();
+      }
+      const closesBefore = close.mock.calls.length;
+      await connector.release(scope.runId);
+      expect(close.mock.calls.length).toBe(closesBefore);
+    } finally {
+      close.mockRestore();
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("a reused http connection picks up a rotated OAuth token", async () => {
+    const server = startHttpAuthServer();
+    const cwd = projectWith({ mcpServers: { api: { type: "http", url: server.url } } });
+    const tokenBlob = (token: string) =>
+      JSON.stringify({ serverUrl: server.url, tokens: { access_token: token, token_type: "Bearer" } });
+    let blob = tokenBlob("token-one");
+    const port: McpOAuthStore = {
+      load: () => blob,
+      save: (_url, payload) => {
+        blob = payload;
+      },
+      clear: () => {},
+    };
+    const connector = createMcpConnector({
+      oauthProviderFor: (url) =>
+        makeMcpOAuthProvider({
+          url,
+          store: port,
+          redirectUrl: "http://127.0.0.1:41765/callback",
+          onRedirect: () => {
+            throw new Error("not logged in");
+          },
+        }),
+    });
+    try {
+      const first = await connector.materialize(["api"], { cwd, scope });
+      expect(first.errors).toEqual([]);
+      const whoami = toolNamed(first.tools, "mcp__api__whoami");
+      expect((await whoami.execute({}, new LocalEnvironment())).text).toContain("token-one");
+      await first.dispose();
+
+      blob = tokenBlob("token-two");
+      const second = await connector.materialize(["api"], { cwd, scope });
+      const rotated = await toolNamed(second.tools, "mcp__api__whoami").execute({}, new LocalEnvironment());
+      expect(rotated.text).toContain("token-two");
+      await second.dispose();
+      expect(server.initializeCount()).toBe(1);
+    } finally {
+      await connector.closeAll();
+      server.stop();
+    }
+  }, 30_000);
+
+  test("idle entries close after POOL_IDLE_MS; leased entries do not", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector({ poolIdleMs: 200 });
+    try {
+      const idle = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "r", nodeId: "idle" } });
+      await idle.dispose();
+      const held = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "r", nodeId: "held" } });
+      const [idlePid, heldPid] = project.spawns();
+      if (idlePid === undefined || heldPid === undefined) throw new Error("expected two spawns");
+      expect(await waitUntil(() => !isAlive(idlePid))).toBe(true);
+      expect(isAlive(heldPid)).toBe(true);
+      expect(await echoOnce(held, "held")).toBe("echo: held");
+      await held.dispose();
+    } finally {
+      await connector.closeAll();
+    }
+  }, 30_000);
+
+  test("closeAll closes every live entry", async () => {
+    const project = pooledEchoProject();
+    const connector = createMcpConnector();
+    const one = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "r1", nodeId: "n" } });
+    const two = await connector.materialize(["echo"], { cwd: project.cwd, scope: { runId: "r2", nodeId: "n" } });
+    await one.dispose();
+    await connector.closeAll();
+    await two.dispose();
+    const pids = project.spawns();
+    expect(pids).toHaveLength(2);
+    expect(await waitUntil(() => pids.every((pid) => !isAlive(pid)))).toBe(true);
   }, 30_000);
 });

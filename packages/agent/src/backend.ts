@@ -67,8 +67,10 @@ export interface PiLlmBackendOptions {
   skills?: Skill[];
   /** Materialises MCP-server tools for a node's `mcp_servers`. When wired,
    * an llm node that lists servers gets each server's tools appended as
-   * `mcp__<server>__<tool>`, connected lazily for the node and torn down when
-   * it finishes. Omit to disable MCP entirely (tests / bare daemons). */
+   * `mcp__<server>__<tool>`. Connections are pooled per (run, node) inside the
+   * connector and survive retries and self-loops of the node; the daemon closes
+   * them through `McpConnector.release` when the run's cursor leaves the node or
+   * the run terminates. Omit to disable MCP entirely (tests / bare daemons). */
   mcpConnector?: McpConnector;
   /** Construction-time fallback for the `<environment>` block's bootstrap
    * line, for callers that know the bootstrap command but wire an env that
@@ -178,9 +180,9 @@ export class PiLlmBackend implements LlmBackend {
   }
 
   async run(input: LlmInput): Promise<Outcome> {
-    // Cleanup callbacks registered during the run (currently MCP connection
-    // teardown). Runs on every exit path so a lazily-connected server is never
-    // left dangling, no matter which of runInner's many returns fires.
+    // Cleanup callbacks registered during the dispatch (currently MCP pool lease
+    // returns). Runs on every exit path so a lease is never held past the
+    // dispatch, no matter which of runInner's many returns fires.
     const disposers: Array<() => Promise<void>> = [];
     try {
       return await this.runInner(input, disposers);
@@ -398,7 +400,9 @@ export class PiLlmBackend implements LlmBackend {
   }
 
   /** Release every per-run resource this backend holds for `runId`.
-   * Called by the executor after a run reaches a terminal status. Without
+   * Nothing in the executor calls this yet; it is the seam for terminal-run
+   * cleanup of in-memory state (MCP connections are released separately,
+   * through the shared connector's `release`). Without
    * this, a run that buffered a steer but never started another llm
    * node would leak its `pendingSteers` entry until daemon restart —
    * bounded but pointless. Also wipes the `MessageStore` slot and any

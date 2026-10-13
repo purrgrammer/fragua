@@ -82,6 +82,13 @@ export interface DaemonMainOpts {
    * `intentSeq` is the originating `intent.steering_requested` seq, used to
    * record delivery as a joinable `fact.steering_applied`. */
   onSteer?: (runId: string, text: string, intentSeq: number) => void;
+  /** Forwarded into the executor: fires when a committed transition moves a
+   * run's cursor off a node. The CLI releases the node's pooled MCP
+   * connections here. */
+  onNodeExited?: (runId: string, nodeId: string) => void;
+  /** Forwarded into the executor: fires once a run's fiber ends in a
+   * hard-terminal status. The CLI releases the run's pooled MCP connections. */
+  onRunTerminal?: (runId: string) => void;
   /** Tick interval for the schedule-dispatcher fiber. Defaults to
    * 60s; tests inject smaller values. Set to 0 to disable scheduled
    * runs entirely. */
@@ -210,6 +217,8 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
       if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
       if (opts.graphLoader) executorOpts.graphLoader = opts.graphLoader;
+      if (opts.onNodeExited) executorOpts.onNodeExited = opts.onNodeExited;
+      if (opts.onRunTerminal) executorOpts.onRunTerminal = opts.onRunTerminal;
       if (opts.leakGraceMs !== undefined) executorOpts.leakGraceMs = opts.leakGraceMs;
       if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;
       if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;

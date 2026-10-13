@@ -49,6 +49,21 @@ export {
   routingString,
 };
 
+/** Invoke a best-effort release hook (`onNodeExited`); a throw is swallowed so a
+ * cleanup callback can never fail an already-committed transition. */
+export function fireNodeExited(
+  hook: ((runId: string, nodeId: string) => void) | undefined,
+  runId: string,
+  nodeId: string,
+): void {
+  if (hook === undefined) return;
+  try {
+    hook(runId, nodeId);
+  } catch {
+    // best-effort
+  }
+}
+
 export function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();

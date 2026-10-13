@@ -20,7 +20,7 @@ import type { AutoTitler } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { dispatchOne } from "./dispatch-turn.ts";
 import type { RunDeps } from "./dispatch-wiring.ts";
-import { errorMessage, sleep } from "./executor-helpers.ts";
+import { errorMessage, sleep, TERMINAL_STATUSES } from "./executor-helpers.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 import { planCrashHalt } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController } from "./occ-append.ts";
@@ -135,6 +135,14 @@ export interface ExecutorOpts {
    * runId/nodeId pairs, leak order) on the `daemon.stopped` payload.
    * The callback fires at most once per process. */
   onLeakLimitExceeded?: (count: number, leaked: ReadonlyArray<{ runId: string; nodeId: string }>) => void;
+  /** Called after a committed transition moves the run's cursor off `nodeId`
+   * (a retry or self-loop keeps the cursor, so it does not fire). The CLI wires
+   * it to release the node's pooled MCP connections. Best-effort: a throw is
+   * swallowed. */
+  onNodeExited?: (runId: string, nodeId: string) => void;
+  /** Called once a run's fiber ends with the run in a hard-terminal status
+   * (not on a pause). Best-effort: a throw is swallowed. */
+  onRunTerminal?: (runId: string) => void;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -219,6 +227,27 @@ async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBud
 }
 
 export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: LeakBudget): Promise<void> {
+  try {
+    await runOneGuarded(runId, opts, leakBudget);
+  } finally {
+    notifyRunTerminal(runId, opts);
+  }
+}
+
+// After the crash-halt path too, so a run terminalised by the outer safety net
+// still releases its per-run resources.
+function notifyRunTerminal(runId: string, opts: ExecutorOpts): void {
+  if (opts.onRunTerminal === undefined) return;
+  const state = opts.store.getState(runId);
+  if (state == null || !TERMINAL_STATUSES.has(state.status)) return;
+  try {
+    opts.onRunTerminal(runId);
+  } catch {
+    // best-effort cleanup hook — must not mask the run's own outcome.
+  }
+}
+
+async function runOneGuarded(runId: string, opts: ExecutorOpts, leakBudget?: LeakBudget): Promise<void> {
   const budget = leakBudget ?? makeLeakBudget(opts);
   try {
     await runOneInner(runId, opts, budget);
