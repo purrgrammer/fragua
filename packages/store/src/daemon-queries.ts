@@ -190,8 +190,10 @@ const UPDATE_DAEMON_LOCK_HEARTBEAT_SQL = `
   UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?
 `;
 
-export function updateDaemonLockHeartbeat(db: Database, pid: number, now: number): void {
-  db.query(UPDATE_DAEMON_LOCK_HEARTBEAT_SQL).run(now, pid);
+/** True when the singleton row belonged to `pid` and was advanced; false when
+ *  the row is absent or held by another pid — the holder lost its lock. */
+export function updateDaemonLockHeartbeat(db: Database, pid: number, now: number): boolean {
+  return db.query(UPDATE_DAEMON_LOCK_HEARTBEAT_SQL).run(now, pid).changes > 0;
 }
 
 const DELETE_DAEMON_LOCK_SQL = `

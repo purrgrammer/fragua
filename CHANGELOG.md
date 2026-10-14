@@ -24,6 +24,9 @@ guarantee.
 
 ### Fixed
 
+- **A daemon that loses its `daemon_lock` shuts down instead of running unlocked.** The heartbeat now reports whether the row is still its own; when it is not (evicted as stale after the host slept, stopped by an operator, taken over), the daemon stops with `reason: lock_lost` and the harness respawns it. `fragua doctor` no longer reports "no daemon" while a daemon is executing runs.
+- **The harness reaper never evicts its own live child**, however stale its heartbeat reads; a stale heartbeat on a live child is reported instead.
+- **A second harness refuses to start beside a live daemon on the same host**, and `fragua serve` no longer overwrites a `server_endpoint` row published by a live process, so the first instance stays discoverable.
 - **`fragua import` validates every artifact row.** A bundle's `artifacts.jsonl` is shape-checked before the write, its `blobSha` must be a sha256, and it must name a blob the bundle itself carries. A crafted sha can no longer land a path in the artifact index, and an imported run can no longer point at another run's blob already in the store.
 - **Negative numeric query params fall back to their defaults.** `GET /runs/:id/events?limit=-1` now returns the default 1000-event page instead of an unbounded scan, `?since=-1` reads from the start, and `/metrics/global?windowHours=-1` uses the 30-day default window instead of an empty future one.
 - **Blob GC no longer strands a concurrent writer's blob.** A GC sweep racing another process's run enqueue, output spill, artifact write or import can no longer delete the file of a blob that write then references; GC unlinks orphan files under its write lock and writers restore their content after committing.

@@ -37,6 +37,11 @@ export interface SupervisorOpts {
    * so delivery can be recorded as a `fact.steering_applied` joinable to the
    * request. */
   onSteer?: (runId: string, text: string, intentSeq: number) => void;
+  /** The heartbeat found the `daemon_lock` row absent or held by another pid:
+   * this daemon was evicted (a stale-heartbeat reap after the host slept, an
+   * operator `daemon stop`, a takeover) and is no longer the singleton. Fired
+   * once; the daemon should shut down so a fresh one acquires cleanly. */
+  onLockLost?: () => void;
 }
 
 const DEFAULT_TICK_MS = 50;
@@ -70,16 +75,21 @@ export function startSupervisor(opts: SupervisorOpts): {
   // Track per-run state so we only trip on NEW intents (seq > lastSeen).
   const lastIntentSeq = new Map<string, number>();
   let lastHeartbeatAt = 0;
+  let lockLost = false;
 
   const promise = (async () => {
     while (!opts.shutdownSignal.aborted) {
       const now = Date.now();
 
       // (a) Heartbeat at a slower cadence.
-      if (now - lastHeartbeatAt >= heartbeatMs) {
+      if (!lockLost && now - lastHeartbeatAt >= heartbeatMs) {
         try {
-          opts.store.heartbeatDaemonLock(opts.pid);
+          const owned = opts.store.heartbeatDaemonLock(opts.pid);
           lastHeartbeatAt = now;
+          if (!owned) {
+            lockLost = true;
+            opts.onLockLost?.();
+          }
         } catch {
           // Ignore; supervisor must never crash the daemon.
         }
