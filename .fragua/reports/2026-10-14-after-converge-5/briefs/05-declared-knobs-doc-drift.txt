@@ -1,0 +1,34 @@
+Make the authored and operator knobs that currently do nothing take effect: named threads, retry presets, priority, per-run `max_loops` and the fan-out abort policy. Then fix every row in `assessment.md` § Doc drift.
+
+Problem:
+- `packages/agent/src/handler-bridge.ts:400-406` (`loadPriorMessagesForThread`) keeps rows with `nodeId === threadId` and otherwise falls back to `ctx.messages.since(0)`, the whole run. SPEC §3.3 says only steps sharing a `thread:` share a conversation.
+- `packages/core/src/engine/retry-policy.ts:72-80`: preset `maxAttempts` has no reader. `resolveMaxRetries` (`packages/daemon/src/executor-helpers.ts:397-423`) uses only the node's `max_retries`, so `retry-policy: standard` alone gives zero retries.
+- `intent.priority_adjusted` folds only into `routing.priority` (`packages/core/src/handler/intent-fold.ts:252-263`, at dispatch, after a claim). `run_state.priority`, which the claim orders by (`store/src/run-state-queries.ts:599`), is set only at genesis (`store/src/reducers.ts:433`).
+- `executor.ts:305` builds a fresh `RunTurnState` per `runOne` (`run-turn-state.ts:48-53`, `dispatches = 0`), so `max_loops` resets each pass (`dispatch-turn.ts:398`, `fanout.ts:399`).
+- `fanout.ts:227-233` maps thrown branch invocations straight to `abortResultToFacts`, bypassing `planAbort` (`abort-planner.ts:129-170`).
+
+Build:
+1. Add `threadMembers?: readonly string[]` to the llm handler input (`core/src/handler/types.ts`): every node id in the pinned graph whose `thread` attr equals the dispatching node's. Populate it in `dispatch-wiring.ts`. Filter hydration rows by `nodeId ∈ threadMembers`, and return `undefined` (fresh) when it is empty. Never fall back to the whole run.
+2. In `resolveMaxRetries`, fall back to `preset.maxAttempts - 1` when the node sets `retry-policy` and no `max_retries`.
+3. Priority:
+   - Make `operator-actions.ts` apply an unapplied `intent.priority_adjusted` on a QUEUED run by committing the fact the dispatch path already uses to carry an intent-fold `routingDelta`; trace how `routingDelta` reaches `appendFact` in `dispatch-turn.ts`.
+   - Make the reducer project `routing.priority` onto `state.priority` whenever a fact's routing changes it.
+   - Run `scripts/check-contract-bump.sh` and follow `contract-version.test.ts`; bump `EVENT_CONTRACT_VERSION` only if they require it, and NEVER raise `MIN_COMPATIBLE`.
+   - If no existing fact can carry a routingPatch on a queued run without changing its status, stop and write `docs/proposals/priority-requeue.md` instead of adding a fact type.
+4. Seed `RunTurnState.dispatches` from a new store query in `event-queries.ts`, exposed on the reader sub-interface: the count of `fact.dispatch_started` for the run since the last applied `max_loops_adjusted`.
+5. Route thrown fan-out branch invocations through `planAbort` with the branch's node attrs, so `timeout_retry` applies as on the linear path.
+6. Add a validator warning (next free W-code) for a fail, route or success back-edge cycle with no `max_retries` on any member (`transition-planner.ts:515-536` treats 0 as unbounded).
+7. Walk the § Doc drift table in `assessment.md` and fix each doc row (SPEC, ARCH, handler-contract, STATUS, `docs/cli.md`, `validator-codes.md`, AGENTS.md codebase map including the `store → core` runtime edge). Where the code is wrong rather than the doc, open a `docs/proposals/` note instead of editing code here.
+
+Tests:
+- Two threads `a` and `b` in one run, where each sees only its own members' messages.
+- `retry-policy: standard` gives the preset's retries.
+- `runs priority` on a queued run changes `claimNextRun` order.
+- `max_loops: 3` is enforced across a pause/resume (two `runOne` passes).
+- A fan-out branch timeout gets `timeout_retry`.
+- Validator tests for the new warning.
+- `deriveRunState` still equals the projection for priority.
+
+Docs: the files listed in item 7, `handler-contract.md` for `threadMembers`, and one CHANGELOG entry per behaviour change.
+
+Constraints: reducer purity; AGENTS ground rule 11 (fold all versions); enum-literal sweep for any new literal; `bun run ci` green.

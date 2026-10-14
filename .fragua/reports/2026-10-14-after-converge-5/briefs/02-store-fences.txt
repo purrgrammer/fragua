@@ -1,0 +1,27 @@
+Make every store write that decides from a read do that read inside the same BEGIN IMMEDIATE transaction, and make the sweep's projection match the reducer.
+
+Problem:
+- `packages/store/src/sweep.ts` (`sweepRun`, roughly lines 43-148) decides from unlocked scans and then writes under a bare deferred `SAVEPOINT`.
+- `packages/store/src/store-coordinator.ts:136-154` commits the guarded lock delete and then calls `startupSweep` without the lock. A daemon that acquires in between can have its freshly claimed `running` rows flipped to `queued`.
+- `packages/store/src/run-state-queries.ts:666-675` quarantines with `dispatch_started_at = NULL` and no `activeMs` credit, while `reducers.ts:318-324` (`fact.run_quarantined` → `closeDispatchInterval`) credits `now - dispatchStartedAt`. So `deriveRunState` and the projection diverge.
+- `packages/store/src/store-bundle-import.ts:285-348` reads `already` outside the txn and gates only `insertRunState`, `writeRunStateProjection`, `setRunStateNextSeq` and `markRunImported`. `insertEventOrIgnore`, `insertMessageOrIgnore`, `insertOutput` (INSERT OR REPLACE) and `upsertArtifact` still run for a present run, despite the comment "re-import is a no-op".
+- `putArtifact`'s collision pre-read and forward `migrate()` in `migrations.ts:159-192` read outside their transaction.
+
+Build:
+1. Split `startupSweep` into an outer entry and an inner `sweepInTxn(ctx, opts)` that assumes an open IMMEDIATE txn and uses nested SAVEPOINTs per run. Each per-run decision re-reads its row inside the savepoint.
+2. In `evictDaemonLockIfStale`, run `deleteDaemonLockIfMatches` and `sweepInTxn` in ONE `ctx.writeTxn`, and sweep only if the delete matched. Update the in-code comment to the new invariant.
+3. Change the quarantine SQL at `run-state-queries.ts:666-675` to add the same `activeMs` credit the reducer gives, computed by the existing requeue delta helper (`crashRequeueActiveMsDelta`) with `priorHeartbeatAt`. Stop hand-listing terminal statuses in `sweep.ts:93-97`; derive the list from `RUN_STATUSES` and add the site to `enum-consumers.lint.test.ts`.
+4. In the import, compute `already` inside the `writeTxn`. When it is true, skip ALL per-run inserts and report `imported: false`. Blob files may still be written before the txn as now; `gcBlobs` reaps them.
+5. Move the `putArtifact` collision check and the `migrate()` version read inside their IMMEDIATE txns.
+
+All serialisation and `JSON` work stays outside txn bodies, and all SQL stays in `*-queries.ts`.
+
+Tests:
+- Import a bundle, mutate a copy (extra event above `next_seq`, changed output value, new artifact), re-import it, and assert the event count, outputs and artifacts are unchanged and `next_seq` equals max seq + 1.
+- Eviction race: interleave a second `acquireDaemonLock` plus `claimNextRun` between snapshot and delete via an injected hook, and assert the new holder's running row stays running.
+- A property test over random event logs that ends in a crash plus sweep (quarantine and requeue branches): `deriveRunState(events)` equals the projection, modulo version and seq.
+- The existing `lint.test.ts` (I1) and `sql-location.lint.test.ts` pass.
+
+Docs: ARCH §0 and §4 (sweep is IMMEDIATE; eviction delete and sweep are atomic; import is idempotent; import is a third projection writer alongside the two sanctioned eventless writes, so list it explicitly); fix the ARCH §9 `s.length` wording to `utf8ByteLength`; CHANGELOG `Fixed`.
+
+Constraints: no schema or contract bump; never touch `MIN_COMPATIBLE_CONTRACT_VERSION`; the AGENTS.md ground rule 10 purity holds; `bun run ci` green.

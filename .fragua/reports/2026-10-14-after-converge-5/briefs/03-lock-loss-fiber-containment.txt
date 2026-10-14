@@ -1,0 +1,34 @@
+Make a daemon that has lost `daemon_lock` stop claiming runs and abort its handlers, and stop single store errors from killing the supervisor or executor fibers.
+
+Problem:
+- `packages/store/src/daemon-queries.ts:189-195` runs `UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?` and throws away the change count. `heartbeatDaemonLock` (`store-coordinator.ts:100`, `types.ts:1229`) returns `void`.
+- `packages/daemon/src/supervisor.ts:79-86` swallows every heartbeat outcome.
+- `packages/daemon/src/executor.ts:176-186` loops `wakePending` → `processOperatorActions` → `claimNextRun` with no ownership check and no try/catch, so a reclaimed daemon keeps taking new runs and one store throw ends the loop.
+- `supervisor.ts:94` (`getUnappliedIntents`) and `:166` (`getState`) are unguarded, so a throw rejects the supervisor promise and the heartbeat, intent trips and watchdog all stop.
+- `packages/daemon/src/entrypoint.ts:247-251` rethrows without `ctrl.abort()` or `registry.tripAll`.
+
+Build:
+1. Make `updateDaemonLockHeartbeat` return `changes === 1`, and change `heartbeatDaemonLock(pid): boolean` through `store-coordinator.ts`, the façade `store.ts:476` and `IEventStore` in `types.ts:1229`. Update every implementer and mock found with `rg heartbeatDaemonLock packages`.
+2. Add `onLockLost: () => void` to `SupervisorOpts`. Call it once when the heartbeat returns false, or throws on 3 consecutive attempts.
+3. In `entrypoint.ts`, wire `onLockLost` to:
+   - append a `daemon.lock_lost` daemon event, following the existing `daemon.reaper_took_over` pattern;
+   - set a `lockHeld=false` flag the executor reads;
+   - call `registry.tripAll(new LockLostError())`;
+   - abort the shutdown controller.
+4. In `executor.ts`, check `lockHeld()` before each `claimNextRun`, and wrap the three per-iteration store calls in try/catch with a capped backoff and one observability log per distinct error.
+5. Wrap each per-run block in supervisor sections (b) and (c) in its own try/catch.
+6. In `entrypoint.ts:247-251`, call `ctrl.abort()` and `registry.tripAll` before rethrowing.
+
+Tests:
+- Two daemons on one temp DB with an injected clock: A's heartbeat stalls past the TTL, B evicts and claims. Within one heartbeat interval, A calls `onLockLost`, claims nothing further, and its in-flight handler's signal is aborted.
+- A supervisor test: `getUnappliedIntents` throws once, and the heartbeat and watchdog keep ticking.
+- An executor test: `claimNextRun` throws once and the loop continues.
+- An entrypoint test: an error aborts the controller.
+
+Docs:
+- ARCH §1.6 (lock-loss behaviour) and §1.7.
+- ARCH §3 daemon-event taxonomy for `daemon.lock_lost`.
+- STATUS known gap 3: narrow it to fiber deadlock only.
+- CHANGELOG `Fixed`.
+
+Constraints: no new fact types; daemon events only; no inline imports; follow the `backend` skill for store changes; `bun run ci` green.

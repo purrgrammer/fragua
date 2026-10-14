@@ -1,0 +1,32 @@
+Stop a handler from an older dispatch committing facts into a newer dispatch's stream, and make OCC halt escalation always leave the run terminal or requeueable.
+
+Problem:
+- `packages/daemon/src/recorder.ts:89-114` retries `appendFact` on `ConcurrencyError` whenever `live.status === 'running'` by adopting `live.version`. Its comment admits that an orphaned or re-claimed handler "retries through" and interleaves side-effect facts under the same (nodeId, iteration). This makes ARCH §1.6's "until its next commit fails OCC" false, and P18 is only tested at store level.
+- `packages/daemon/src/occ-append.ts:94-113`: after `HALT_APPEND_MAX_ATTEMPTS` failed halt appends, the code falls through to `return { halted: true }` with the run still `running`.
+- `packages/daemon/src/executor.ts:274-282` (crash net) has the same shape.
+
+Build:
+1. Have the recorder (constructed at `packages/daemon/src/dispatch-wiring.ts:240`) take `dispatchStartedAt: number` from the run state the dispatch committed (`RunState.dispatchStartedAt`, `store/src/types.ts:223`). In `commit`, retry only when `live.status === 'running' && live.dispatchStartedAt === captured`; otherwise rethrow the `ConcurrencyError`.
+2. Apply the same predicate in the fan-out commit lane's `commitFanoutFact`.
+3. Decision rule: run the full fan-out and property suites. If sibling-branch commits fail because `dispatch_started_at` moves within one dispatch, or two dispatches can share a millisecond in the injected-clock tests, add a `dispatch_seq` column instead:
+   - set it to the seq of `fact.dispatch_started` in the reducer;
+   - add schema migration v8 in `migrations.ts`, following the walk-forward pattern;
+   - update `schema.sql`, ARCH §2 and the import projection writer;
+   - follow `contract-version.test.ts` and `scripts/check-contract-bump.sh` for any contract bump;
+   - NEVER raise `MIN_COMPATIBLE_CONTRACT_VERSION`.
+4. In `occ-append.ts`, keep retrying the `occ_exhausted` halt with capped backoff until `getState` shows non-running, or the shutdown signal aborts. On shutdown, return `{ halted: false }` so the next startup sweep requeues. Apply the same rule to the crash net in `executor.ts:247-284`.
+5. Rewrite the recorder comment to state the new invariant, and drop the "ACCEPTED TRADE" paragraph.
+
+Tests:
+- Daemon-level P18: start a handler, simulate a re-claim (a new `dispatch_started` with a later timestamp), then have the stale handler commit a side-effect fact. `ConcurrencyError` surfaces and no fact lands.
+- A sibling-branch contention test still passes (siblings retry).
+- `occ-append`: `tryAppendFact` fails 6 times then succeeds, and the run ends `errored`/`occ_exhausted`; with shutdown aborted mid-loop it returns `halted: false`.
+- Crash net equivalent.
+
+Docs:
+- ARCH §1.6: replace the accepted-trade text with the dispatch fence.
+- SPEC/ARCH known-gap list: remove the zombie item.
+- `docs/concurrency.md` linearization section, if present.
+- CHANGELOG `Fixed`.
+
+Constraints: no new fact type; planners stay pure (no clock or store); `bun run ci` green, including the fault and leak property tests.

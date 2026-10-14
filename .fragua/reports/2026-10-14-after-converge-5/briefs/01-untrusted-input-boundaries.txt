@@ -1,0 +1,41 @@
+Stop untrusted values (run inputs, LLM-produced outputs, MCP config, client routing, rebinding hosts) from crossing into the shell, MCP, the routing map and the HTTP control plane.
+
+Problem:
+- (a) `packages/core/src/engine/substitution.ts:96` sets `fmt = shellQuote` when `escapeForShell` is on, and every `${{ inputs|outputs }}` value in a tool `run:` is single-quoted regardless of context. Inside `"…"` the single quotes are literal, so `echo "${{ outputs.plan.summary }}"` lets `$(…)` and backticks from an LLM output execute under `sh -c`. The validator checks `run:` only for E030/E035.
+- (b) `packages/agent/src/tool-assembly.ts:200-206` appends every tool from the declared MCP servers whenever `allowed_tools` has no `mcp__` entry. E042 (`packages/core/src/engine/validator.ts:98-106`, `WRITE_CLASS_TOOLS`) and `packages/core/src/types/read-only-env.ts:25` (`ENV_MUTATOR_TOOLS`) are separate hard-coded lists that ignore MCP.
+- (c) `packages/workspace/src/mcp/config.ts:108-109` resolves `${VAR}` against `{...loadProjectEnv(cwd), ...process.env}`, with no credential floor like the bash env in `local-env.ts`.
+- (d) `packages/core/src/intent-plane/plane.ts:450` copies the client `routing` unvalidated, typed input validation runs only when `inputDecls` is passed (`:439`), and `packages/daemon/src/schedule-dispatcher.ts:182-186` omits it. Priority is not validated in `buildEnqueue`.
+- (e) `packages/server/src/origin-gate.ts:85` (`hostAllowed`) returns true for any Host on a wildcard bind, and `:69-73` only requires Origin to equal the delivered Host, so a DNS-rebinding page passes. `packages/cli/src/commands/serve.ts:187` and `:349` enable `devMode` from `FRAGUA_DEV_ORIGIN` inside `startServer`, which the harness shares.
+
+Build:
+1. In `substitution.ts`, when `escapeForShell` is on, scan the template with a small POSIX quote-state lexer (unquoted / single-quoted / double-quoted, honouring backslash escapes outside single quotes):
+   - unquoted: emit `shellQuote(v)` as today;
+   - inside `"…"`: backslash-escape `\`, `$`, `` ` `` and `"`;
+   - inside `'…'`: replace each `'` in the value with `'\''`.
+   Keep the single replace pass: values are never re-scanned.
+2. Add a validator error, using the next unused E-code (do not reuse E054; check `docs/validator-codes.md`), for any `${{ }}` token in a tool `run:` that sits inside backticks, `$(…)` or a heredoc body. Name the step and the token in the message.
+3. Export one `WRITE_CLASS_TOOLS` constant from `core/src/types/read-only-env.ts` and use it in both `validator.ts` and the env scoping.
+4. Make E042 treat any node that declares MCP servers as write-capable, unless `allowed_tools` pins specific `mcp__` tools.
+5. In `tool-assembly.ts`, when the node's env is read-only, include MCP tools only if they are named explicitly in `allowed_tools`.
+6. In `mcp/config.ts`, filter `process.env` through the same deny-by-default floor `local-env.ts` applies to bash (reuse its function; don't copy the list), and refuse provider-credential variables. An unresolved `${VAR}` must produce the existing skipped-server warning, not an empty string.
+7. In `plane.ts` `buildEnqueue`:
+   - run `validateRoutingPatch` over `input.routing`;
+   - reject reserved control keys (every key the planners write);
+   - load input declarations from the workflow IR whenever `inputDecls` is absent, so schedules are validated too;
+   - require `priority` to be an integer within the range the CLI `runs priority` verb accepts.
+   All of these return the existing `invalid_inputs`/400 shape, before any save.
+8. In `origin-gate.ts`, on a wildcard bind accept a Host only if it is a loopback name or an IP literal (v4 or bracketed v6). In `serve.ts`, read `FRAGUA_DEV_ORIGIN` only in the `serve` command's option parsing, never inside `startServer`.
+
+Tests:
+- A fast-check property in `core/test`: for arbitrary strings `v` and each of the templates `printf %s ${{inputs.x}}`, `printf %s "${{inputs.x}}"`, `printf %s '${{inputs.x}}'`, run via `sh -c` and assert stdout === v byte-for-byte.
+- Validator tests for the new code.
+- An E042 test with an MCP server on a parallel branch.
+- A `tool-assembly` test: read-only node plus MCP server gives no MCP tools.
+- An MCP config test: `ANTHROPIC_API_KEY` is not resolvable.
+- Plane tests: bad routing key, bad priority, schedule enqueue with an invalid default all return 400 and write no workflow row.
+- Origin-gate tests: wildcard bind with `Host: evil.example:6767` and a matching Origin gives 403; with `Host: 192.168.1.5:6767` the request passes.
+- A harness test: the env var set does not trust :5173.
+
+Docs: SECURITY.md rows for each boundary with the pinning test; `docs/validator-codes.md` for the new code; SPEC §2 tool-step quoting note; STATUS and `docs/cli.md:353` on the env var scope; a CHANGELOG `Fixed` entry per item.
+
+Constraints: no inline imports; core main entry stays browser-safe (the lexer is pure TS); no handler I/O outside `ctx`; don't change `inputs` leniency semantics; `bun run ci` green.
