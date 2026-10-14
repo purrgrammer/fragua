@@ -17,6 +17,7 @@ import { hostnameSafe, SqliteStore } from "@fragua/store";
 import {
   type DaemonProcess,
   evictStaleLock,
+  liveDaemonHolder,
   type SpawnDaemon,
   type SupervisorConfig,
   superviseDaemon,
@@ -638,6 +639,78 @@ describe("superviseDaemon", () => {
     await emitSigintWhenReady(sigintBefore);
     expect(await done).toBe(0);
   });
+
+  test("the reaper tick never evicts its own live child, even with a stale heartbeat", async () => {
+    const dbPath = await freshDbPath();
+    const spawns: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, spawns);
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { reaperTickMs: 10, lockTtlMs: 0 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => spawns.length === 1 && currentLockPid(dbPath) === spawns[0]!.pid)).toBe(true);
+    // The host slept: every heartbeat is now far past the TTL while the child
+    // is alive and (as far as the store can tell) still executing.
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: test-only db access to backdate the heartbeat
+      const db = (store as any).db as { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+      db.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1").run(Date.now() - 3_600_000);
+    } finally {
+      store.close();
+    }
+    await new Promise((r) => setTimeout(r, 60));
+    expect(currentLockPid(dbPath)).toBe(spawns[0]!.pid);
+    expect(spawns.length).toBe(1);
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+});
+
+describe("liveDaemonHolder", () => {
+  let scratch: string | undefined;
+  afterEach(async () => {
+    if (scratch) {
+      await rm(scratch, { recursive: true, force: true });
+      scratch = undefined;
+    }
+  });
+  async function db(): Promise<string> {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-harness-live-"));
+    const dbPath = join(scratch, "fragua.db");
+    new SqliteStore({ path: dbPath }).close();
+    return dbPath;
+  }
+  function seed(dbPath: string, pid: number, hostname: string, heartbeatAt: number): void {
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      store.forceAcquireDaemonLock(pid, hostname);
+      // biome-ignore lint/suspicious/noExplicitAny: test-only db access to set the heartbeat
+      const d = (store as any).db as { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+      d.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1").run(heartbeatAt);
+    } finally {
+      store.close();
+    }
+  }
+
+  test("a fresh lock held by a live pid on this host is reported", async () => {
+    const dbPath = await db();
+    seed(dbPath, 4_242, hostnameSafe(), Date.now() - 1_000);
+    expect(liveDaemonHolder(dbPath, { isPidAlive: () => true })).toEqual({ pid: 4_242, ageS: 1 });
+  });
+
+  test("no store, no lock, a stale lock, a dead pid, or a foreign host all read as none", async () => {
+    expect(liveDaemonHolder(join(tmpdir(), "fragua-nope-does-not-exist.db"))).toBeNull();
+    const dbPath = await db();
+    expect(liveDaemonHolder(dbPath)).toBeNull();
+    seed(dbPath, 4_242, hostnameSafe(), Date.now() - 3_600_000);
+    expect(liveDaemonHolder(dbPath, { isPidAlive: () => true })).toBeNull();
+    seed(dbPath, 4_242, hostnameSafe(), Date.now());
+    expect(liveDaemonHolder(dbPath, { isPidAlive: () => false })).toBeNull();
+    seed(dbPath, 4_242, "another-host", Date.now());
+    expect(liveDaemonHolder(dbPath, { isPidAlive: () => true })).toBeNull();
+  });
 });
 
 describe("evictStaleLock", () => {
@@ -668,6 +741,15 @@ describe("evictStaleLock", () => {
       store.close();
     }
   }
+
+  test("protectPid leaves that holder's lock alone past the TTL, and still evicts any other", async () => {
+    const { dbPath, heartbeatAt } = await seedLock(4_242, hostnameSafe());
+    const past = () => heartbeatAt + 30_001;
+    evictStaleLock(dbPath, { now: past, isPidAlive: () => true, protectPid: 4_242 });
+    expect(lockPid(dbPath)).toBe(4_242);
+    evictStaleLock(dbPath, { now: past, isPidAlive: () => true, protectPid: 1 });
+    expect(lockPid(dbPath)).toBeNull();
+  });
 
   test("evicts a lock whose heartbeat is past the TTL", async () => {
     const { dbPath, heartbeatAt } = await seedLock(4242, "some-host");

@@ -1237,7 +1237,7 @@ export type DaemonEvent =
       type: "daemon.stopped";
       payload: {
         pid: number;
-        reason: "clean" | "leak_limit" | "signal" | "error";
+        reason: "clean" | "leak_limit" | "lock_lost" | "signal" | "error";
         detail?: string;
         /** The leaked handler sites that tripped the leak budget when
          * `reason === "leak_limit"` — capped by the producer so the row

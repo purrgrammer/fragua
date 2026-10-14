@@ -79,7 +79,8 @@ export function formatLastExit(row: DaemonEventRow | null): string {
     detail?: string;
     leaked?: Array<{ runId: string; nodeId: string }>;
   };
-  const reason = p.reason === "leak_limit" || p.reason === "error" ? chalk.red(p.reason) : p.reason;
+  const reason =
+    p.reason === "leak_limit" || p.reason === "error" || p.reason === "lock_lost" ? chalk.red(p.reason) : p.reason;
   const detail = p.detail !== undefined ? `, ${p.detail}` : "";
   let line = `last exit: ${reason} at ${when} ${chalk.dim(`(pid ${p.pid}${detail})`)}`;
   if (p.reason === "leak_limit" && p.leaked !== undefined && p.leaked.length > 0) {

@@ -31,7 +31,7 @@
 //      SIGKILL; `serverHandle.close()` clears `server_endpoint` and stops the
 //      HTTP server.
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { getFraguaHome } from "@fragua/agent";
 import { DAEMON_LOCK_TTL_MS, hostnameSafe, SqliteStore } from "@fragua/store";
@@ -153,6 +153,19 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   // tree to read from anyway). Dev / source install: skipped
   // automatically for production installs (no src/) and FRAGUA_NO_WEB_BUILD=1.
   const webDistDir = COMPILED ? undefined : (await ensureWebBundle()).distDir;
+
+  // 0. Refuse to start beside a live harness. A second harness would bind
+  //    another port, overwrite the first's `server_endpoint` row, and burn its
+  //    restart budget against the live daemon's lock — never taking over, but
+  //    leaving discovery pointing at itself on the way out.
+  const live = liveDaemonHolder(dbPath);
+  if (live !== null) {
+    console.error(
+      chalk.red(`harness: a daemon is already running on this host (pid=${live.pid}, heartbeat ${live.ageS}s ago)`) +
+        chalk.dim(" — stop it first (`fragua daemon stop`), or point this harness at another --db"),
+    );
+    return 1;
+  }
 
   // 1. HTTP server (in-process). Binds before the daemon spawns so the
   //    URL is ready to publish the moment the daemon takes the lock.
@@ -365,7 +378,12 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
       reaperTimer = setInterval(() => {
         if (stopping) return;
         try {
-          evictStaleLock(cfg.dbPath);
+          // Our own live child is never a reap target, however stale its
+          // heartbeat reads: a laptop that slept past the TTL wakes with every
+          // heartbeat stale, and stealing the lock from under a running
+          // executor leaves it dispatching with no lock (and `doctor` blind).
+          const child = daemonProc;
+          evictStaleLock(cfg.dbPath, child !== undefined && child.exitCode === null ? { protectPid: child.pid } : {});
         } catch {
           // Best-effort — a transient store-open failure must not crash the
           // supervisor; the next tick (or the next spawn) retries.
@@ -441,11 +459,31 @@ function pidHolderAlive(pid: number): boolean {
  *  drive both the TTL arm and the dead-pid arm deterministically. */
 export function evictStaleLock(
   dbPath: string,
-  opts?: { now?: () => number; isPidAlive?: (pid: number) => boolean },
+  opts?: {
+    now?: () => number;
+    isPidAlive?: (pid: number) => boolean;
+    /** A pid whose lock is left alone even past the TTL — the supervisor's own
+     *  live child. A stale heartbeat on it is reported, not acted on. */
+    protectPid?: number;
+  },
 ): void {
   const isPidAlive = opts?.isPidAlive ?? pidHolderAlive;
   const store = new SqliteStore({ path: dbPath, migrate: false });
   try {
+    if (opts?.protectPid !== undefined) {
+      const lock = store.currentDaemonLock();
+      if (lock !== null && lock.pid === opts.protectPid) {
+        const age = (opts.now ?? Date.now)() - lock.heartbeatAt;
+        if (age > DAEMON_LOCK_TTL_MS) {
+          console.warn(
+            chalk.yellow(
+              `harness: daemon pid=${lock.pid} is alive but its heartbeat is ${Math.round(age / 1000)}s old`,
+            ),
+          );
+        }
+        return;
+      }
+    }
     store.evictDaemonLockIfStale({
       ttlMs: DAEMON_LOCK_TTL_MS,
       ...(opts?.now ? { now: opts.now } : {}),
@@ -454,6 +492,32 @@ export function evictStaleLock(
       // means "not in this namespace".
       isHolderAlive: (lock) => lock.hostname !== hostnameSafe() || isPidAlive(lock.pid),
     });
+  } finally {
+    store.close();
+  }
+}
+
+/** The `daemon_lock` holder when it is a live process on this host with a
+ *  fresh heartbeat; `null` when there is no store yet, no lock, a stale or
+ *  foreign-host lock (the reaper's business), or a provably dead pid. */
+export function liveDaemonHolder(
+  dbPath: string,
+  opts?: { now?: () => number; isPidAlive?: (pid: number) => boolean },
+): { pid: number; ageS: number } | null {
+  if (!existsSync(dbPath)) return null;
+  let store: SqliteStore;
+  try {
+    store = new SqliteStore({ path: dbPath, migrate: false });
+  } catch {
+    return null;
+  }
+  try {
+    const lock = store.currentDaemonLock();
+    if (lock === null || lock.hostname !== hostnameSafe()) return null;
+    const age = (opts?.now ?? Date.now)() - lock.heartbeatAt;
+    if (age > DAEMON_LOCK_TTL_MS) return null;
+    if (!(opts?.isPidAlive ?? pidHolderAlive)(lock.pid)) return null;
+    return { pid: lock.pid, ageS: Math.max(0, Math.round(age / 1000)) };
   } finally {
     store.close();
   }

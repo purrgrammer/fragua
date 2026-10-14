@@ -290,7 +290,21 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // Publish discovery into the store. A separate `server_endpoint` row
   // (not the daemon lock) means the daemon's lock insert/release can never
   // clobber it — a one-shot write on bind suffices, no re-assert loop.
-  store.setServerEndpoint({ url, port, pid: process.pid, version: opts.version ?? null });
+  // A row held by a live sibling (another harness/serve on this host) is not
+  // ours to overwrite: publishing would point discovery at this listener and
+  // the pid-guarded clear on close would then drop the row entirely, leaving
+  // the surviving server undiscoverable.
+  const existing = store.currentServerEndpoint();
+  const published = existing === null || existing.pid === process.pid || !pidAlive(existing.pid);
+  if (published) {
+    store.setServerEndpoint({ url, port, pid: process.pid, version: opts.version ?? null });
+  } else {
+    console.warn(
+      chalk.yellow(
+        `serve: ${existing.url} is already published by live pid=${existing.pid}; not overwriting discovery`,
+      ),
+    );
+  }
   return {
     origin,
     url,
@@ -300,7 +314,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     webDistDir: webSource ?? undefined,
     async close() {
       try {
-        store.clearServerEndpoint(process.pid);
+        if (published) store.clearServerEndpoint(process.pid);
       } catch {}
       await server.stop(true);
       store.close();
@@ -380,4 +394,15 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   });
 
   return 0;
+}
+
+/** `kill(pid, 0)` liveness: only ESRCH means gone; EPERM (another user's
+ *  process) is treated as alive so a foreign row is never overwritten. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }

@@ -97,11 +97,13 @@ export function forceAcquireDaemonLock(ctx: StoreCtx, pid: number, hostname: str
   return { acquired: true, current };
 }
 
-export function heartbeatDaemonLock(ctx: StoreCtx, pid: number): void {
+export function heartbeatDaemonLock(ctx: StoreCtx, pid: number): boolean {
   const now = ctx.now();
+  let owned = false;
   ctx.writeTxn(() => {
-    updateDaemonLockHeartbeat(ctx.db, pid, now);
+    owned = updateDaemonLockHeartbeat(ctx.db, pid, now);
   });
+  return owned;
 }
 
 export function releaseDaemonLock(ctx: StoreCtx, pid: number): void {

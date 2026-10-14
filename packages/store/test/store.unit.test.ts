@@ -746,14 +746,18 @@ describe("SqliteStore — daemon lock", () => {
     const store = freshStore();
     store.acquireDaemonLock(1, "h");
     const before = store.currentDaemonLock()!.heartbeatAt;
-    store.heartbeatDaemonLock(1);
+    expect(store.heartbeatDaemonLock(1)).toBe(true);
     const after = store.currentDaemonLock()!.heartbeatAt;
     expect(after).toBeGreaterThan(before);
 
-    // Non-owner heartbeat is a no-op.
-    store.heartbeatDaemonLock(9999);
+    // Non-owner heartbeat is a no-op, and says so: the caller lost the lock.
+    expect(store.heartbeatDaemonLock(9999)).toBe(false);
     const unchanged = store.currentDaemonLock()!.heartbeatAt;
     expect(unchanged).toBe(after);
+
+    // An evicted row reads the same way to its former owner.
+    store.releaseDaemonLock(1);
+    expect(store.heartbeatDaemonLock(1)).toBe(false);
     store.close();
   });
 

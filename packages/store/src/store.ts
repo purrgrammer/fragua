@@ -473,8 +473,8 @@ export class SqliteStore implements IEventStore {
     return coordinator.forceAcquireDaemonLock(this.ctx, pid, hostname);
   }
 
-  heartbeatDaemonLock(pid: number): void {
-    coordinator.heartbeatDaemonLock(this.ctx, pid);
+  heartbeatDaemonLock(pid: number): boolean {
+    return coordinator.heartbeatDaemonLock(this.ctx, pid);
   }
 
   releaseDaemonLock(pid: number): void {

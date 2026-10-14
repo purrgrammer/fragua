@@ -9,6 +9,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SqliteStore } from "@fragua/store";
 import {
   DEFAULT_WEB_HOST,
   DEFAULT_WEB_PORT,
@@ -74,6 +75,39 @@ describe("startServer", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
+  });
+
+  test("does not overwrite a server_endpoint row held by a live sibling, and leaves it on close", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    const dbPath = join(scratch, "fragua.db");
+    const seed = new SqliteStore({ path: dbPath });
+    // The parent process is alive for the whole test and is not us.
+    seed.setServerEndpoint({ url: "http://127.0.0.1:1/api", port: 1, pid: process.ppid, version: null });
+    seed.close();
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, dbPath });
+    const during = new SqliteStore({ path: dbPath, migrate: false });
+    expect(during.currentServerEndpoint()?.pid).toBe(process.ppid);
+    during.close();
+    await handle.close();
+    handle = undefined;
+    const after = new SqliteStore({ path: dbPath, migrate: false });
+    expect(after.currentServerEndpoint()?.pid).toBe(process.ppid);
+    after.close();
+  });
+
+  test("replaces a server_endpoint row whose pid is dead", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "fragua-serve-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "fragua-serve-home-"));
+    const dbPath = join(scratch, "fragua.db");
+    const gone = Bun.spawnSync(["true"]).pid;
+    const seed = new SqliteStore({ path: dbPath });
+    seed.setServerEndpoint({ url: "http://127.0.0.1:1/api", port: 1, pid: gone, version: null });
+    seed.close();
+    handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, dbPath });
+    const during = new SqliteStore({ path: dbPath, migrate: false });
+    expect(during.currentServerEndpoint()?.pid).toBe(process.pid);
+    during.close();
   });
 
   test("close() releases the port (subsequent bind to same port succeeds)", async () => {

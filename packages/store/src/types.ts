@@ -1226,7 +1226,11 @@ export interface IDaemonCoordinator {
   // ─── Daemon lock
   acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
-  heartbeatDaemonLock(pid: number): void;
+  /** Advance the heartbeat of the lock held by `pid`. Returns false when the
+   * row is absent or held by another pid: the caller no longer owns the lock
+   * (evicted as stale, e.g. after the host slept) and must stop acting as the
+   * singleton. */
+  heartbeatDaemonLock(pid: number): boolean;
   releaseDaemonLock(pid: number): void;
   /**
    * Unconditionally delete whatever `daemon_lock` row exists, in a single

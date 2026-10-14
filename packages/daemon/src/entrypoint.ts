@@ -145,7 +145,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       payload: { pid, hostname },
     });
 
-    let stoppedReason: "clean" | "leak_limit" | "signal" | "error" = "clean";
+    let stoppedReason: "clean" | "leak_limit" | "lock_lost" | "signal" | "error" = "clean";
     let stoppedDetail: string | undefined;
     let stoppedLeaked: ReadonlyArray<{ runId: string; nodeId: string }> | undefined;
     try {
@@ -169,6 +169,15 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         registry,
         pid,
         shutdownSignal: ctrl.signal,
+        // A daemon whose lock was evicted must not keep executing beside the
+        // replacement that acquires it: shut down and let the harness respawn.
+        onLockLost: () => {
+          stoppedReason = "lock_lost";
+          stoppedDetail = "daemon_lock row no longer held by this pid";
+          // eslint-disable-next-line no-console
+          console.error("[daemon] daemon_lock lost (evicted or taken over) — shutting down so a fresh daemon acquires");
+          ctrl.abort();
+        },
       };
       if (opts.leakGraceMs !== undefined) supervisorOpts.nodeLeakGraceMs = opts.leakGraceMs;
       if (opts.onSteer !== undefined) supervisorOpts.onSteer = opts.onSteer;
