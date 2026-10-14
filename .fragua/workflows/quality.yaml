@@ -258,7 +258,7 @@ steps:
 
       Rules, every one of them hard:
         - Write each probe verbatim to `.fragua/scratch/quality/probes/<id>.sh`, run it with `sh` from the repo root under `timeout 300`, and save stdout+stderr to `<id>.log`. Run them one at a time.
-        - Refuse to run a probe that touches `~/.fragua`, any `--db` that is not under a `mktemp` directory, a network address other than loopback, `git push`, `git reset`, or `rm -rf` outside `.fragua/scratch`. Record it `inconclusive` with the reason.
+        - Refuse to run a probe that touches `~/.fragua`, any `--db` that is not under a `mktemp` directory, a network address other than loopback, `git push`, `git reset`, or an `rm -rf` whose target is anything other than a directory the probe itself created with `mktemp` or a path under `.fragua/scratch`. Record it `inconclusive` with the reason. A probe that fails on an import error is re-run once after reading the error; if it still fails, `inconclusive` with the error line.
         - After a maintainability probe, `git status --porcelain` must be empty apart from `.fragua/scratch/`; if not, `git checkout -- .` and note it.
         - `confirmed` only when the log shows the `expect` outcome; `refuted` when the probe ran and showed the opposite; `inconclusive` when it could not run or the result does not decide the claim. Quote the deciding lines in `evidence` (≤ 400 chars). Never guess from code — the log decides.
         - Do not write new probes or fix anything.
