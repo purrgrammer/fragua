@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { type FactEvent, type IntentEvent, newRunId } from "../src/index.ts";
-import { freshStore, seedWorkflow } from "./helpers.ts";
+import { freshStore, seedHashedWorkflow } from "./helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Encoding helpers — mirror registry.ts's encoding-expand step.
@@ -81,7 +81,7 @@ async function seedRunWithBothSecrets(
   literal: string,
   pattern: string,
 ): Promise<string> {
-  const sha = await seedWorkflow(store, "f".repeat(64));
+  const sha = await seedHashedWorkflow(store, "f");
   const runId = newRunId();
   const combined = `${literal} ${pattern}`;
 

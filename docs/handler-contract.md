@@ -338,8 +338,22 @@ scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
     retry: implement   # re-run `implement` until tests pass (goal gate)
 ```
 
-`run:` (stored as `tool_command`) substitutes `${{ inputs.<name> }}` (POSIX-quoted)
-and runs the shell command. Stdout + stderr become artifacts keyed by
+`run:` (stored as `tool_command`) substitutes `${{ inputs.<name> }}` and
+`${{ outputs.<producer>.<field> }}`, escaping each value for the shell quoting
+it sits in, and runs the shell command:
+
+- **Bare** (`cmd ${{ inputs.x }}`, `x=${{ inputs.x }}`) — the value is wrapped
+  in single quotes; it is always one word.
+- **Double quotes** (`"pre-${{ inputs.x }}-post"`) — `\`, `$`, `` ` `` and `"`
+  are backslash-escaped, so the value is literal text inside the author's quotes.
+  Inside `"$(…)"` quoting starts over: a token there is bare.
+- **Single quotes** (`'${{ inputs.x }}'`) — a validator error (E058): single
+  quotes promise no expansion. Use double quotes or a bare token. A graph that
+  skips validation still gets the value quote-escaped, never executed.
+- **Unsafe positions** — after a backslash, inside backticks, a `#` comment, a
+  heredoc body, `$'…'` or `$((…))`. No escape keeps a value inert there: the
+  validator rejects them (E058) and the tool step fails if one reaches runtime.
+  Bind the value to a variable first (`v=${{ inputs.x }}`) and use `"$v"`. Stdout + stderr become artifacts keyed by
 `${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay. A tool
 node that declares typed `outputs:` **may** feed a struct forward: it
 writes one JSON document to the file named by `$FRAGUA_OUTPUT` (set only

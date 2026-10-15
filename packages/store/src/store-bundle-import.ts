@@ -1,3 +1,4 @@
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
 import { VALID_WRITERS } from "@fragua/types";
 import { blobRowExists, insertBlobIfAbsent, upsertArtifact } from "./artifact-queries.ts";
 import {
@@ -7,6 +8,7 @@ import {
   BUNDLE_VERSION,
   type BundleManifest,
   blobPath,
+  canonicalJson,
   decodeJsonl,
   MANIFEST_ENTRY,
   readTar,
@@ -16,7 +18,7 @@ import {
   workflowIrPath,
   workflowSourcePath,
 } from "./bundle.ts";
-import { insertEventOrIgnore } from "./event-queries.ts";
+import { insertEventOrIgnore, selectEvents } from "./event-queries.ts";
 import { insertMessageOrIgnore } from "./message-queries.ts";
 import { insertOutput } from "./outputs-queries.ts";
 import { EVENT_CONTRACT_VERSION, MIN_COMPATIBLE_CONTRACT_VERSION } from "./pragmas.ts";
@@ -27,8 +29,8 @@ import { insertRunState, markRunImported, setRunStateNextSeq, writeRunStateProje
 import { sha256Hex } from "./sha256.ts";
 import type { StoreCtx } from "./store-ctx.ts";
 import { reputBlobs } from "./store-writer.ts";
-import type { ArtifactListRow, EventWriter, ImportBundleResult } from "./types.ts";
-import { insertWorkflowIfAbsent } from "./workflow-queries.ts";
+import { type ArtifactListRow, ConcurrencyError, type EventWriter, type ImportBundleResult } from "./types.ts";
+import { insertWorkflowIfAbsent, selectWorkflow } from "./workflow-queries.ts";
 
 /** Merge a `.fragua` bundle into this store so its runs are inspectable here
  * (`fragua runs status|events|messages`). `run_state` is DERIVED by replaying
@@ -36,10 +38,14 @@ import { insertWorkflowIfAbsent } from "./workflow-queries.ts";
  * An imported run is inert by construction: its derived `cwd` is `null`, so
  * the daemon can never claim or provision it (no marker needed).
  *
- * Fail-closed on what blocks a safe read: an unknown `bundleVersion` or any
- * blob absent / failing its sha256. The event-contract version is reported
- * (`resumeCompatible`), not gated — a too-new/too-old run still imports for
- * inspection. Idempotent: a run already present is a no-op. */
+ * Fail-closed on what blocks a safe read: an unknown `bundleVersion`, any
+ * blob absent / failing its sha256, or a workflow whose source doesn't hash to
+ * its sha (its IR is re-derived from source, never taken from the bundle). The
+ * event-contract version is reported (`resumeCompatible`), not gated — a
+ * too-new/too-old run still imports for inspection. A run already present
+ * must be an imported one whose stored log is a prefix of the bundle's: an
+ * identical log is a no-op, a longer one extends it and re-derives the
+ * projection + `next_seq`; anything else is refused before any write. */
 export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleResult {
   const entries = readTar(bytes);
   const byName = new Map(entries.map((e) => [e.name, e.data] as const));
@@ -75,17 +81,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
   }
   const bundleBlobShas = new Set(blobs.map((b) => b.sha256));
 
-  // Workflows: read the source + IR bytes each manifest entry declares. The
-  // `name` length is rejected (not clamped) in assertBundleManifest — same
-  // reject discipline as the sha gates, no silent mutation at the boundary.
-  const workflows = manifest.workflows.map((w) => {
-    const source = byName.get(workflowSourcePath(w.sha));
-    const ir = byName.get(workflowIrPath(w.sha));
-    if (source == null || ir == null) {
-      throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
-    }
-    return { ...w, source: new TextDecoder().decode(source), ir: new TextDecoder().decode(ir) };
-  });
+  const workflows = manifest.workflows.map((w) => verifyBundleWorkflow(ctx, byName, w));
 
   // The format is multi-run by construction; a duplicate id would import the
   // first run then fail the second on a PK conflict (opaque SQLite error).
@@ -125,6 +121,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
     // the known set (the column has no CHECK, by design — but the import trust
     // boundary does), and require a string `type`/numeric `seq` so a malformed
     // row can't reach the events table.
+    const seenSeqs = new Set<number>();
     for (const ev of events) {
       if (ev == null || typeof ev !== "object") {
         throw new Error(`importRunBundle: run ${r.runId} carries a non-object event row`);
@@ -140,6 +137,9 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
           `importRunBundle: run ${r.runId} event seq ${ev.seq} has invalid writer ${JSON.stringify(ev.writer)}`,
         );
       }
+      if (seenSeqs.has(ev.seq))
+        throw new Error(`importRunBundle: run ${r.runId} carries duplicate event seq ${ev.seq}`);
+      seenSeqs.add(ev.seq);
     }
     // Scope note: we shape-gate the row envelope (writer/type/seq) and the
     // GENESIS payload (below), but NOT every other event's `payload` — the
@@ -206,6 +206,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
       throw new Error(`importRunBundle: run ${r.runId} genesis contractVersion is not a number`);
     }
     asObject(gp["routing"], `run ${r.runId} genesis routing`);
+    const existing = classifyExistingRun(ctx, r.runId, events);
 
     const derived = deriveRunState(r.runId, events);
     // Rebuild the outputs index from node_completed facts, mirroring the live
@@ -265,7 +266,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
         };
       }),
       artifacts,
-      already: ctx.store.getState(r.runId) != null,
+      existing,
     };
   });
 
@@ -282,7 +283,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
 
       for (const r of runsToImport) {
         const d = r.derived;
-        if (!r.already) {
+        if (r.existing.mode === "new") {
           insertRunState(ctx.db, {
             runId: d.runId,
             workflowSha: d.workflowSha,
@@ -306,11 +307,16 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             inCheckout: d.inCheckout,
             checkoutPath: null, // a local binding — an imported run never holds a checkout
           });
-          writeRunStateProjection(ctx.db, {
+        }
+        if (r.existing.mode !== "identical") {
+          // A fresh row was inserted at version 1; an extension replaces the
+          // projection over the merged log (the stored log is a prefix of the
+          // bundle's, so `derived` already is its replay).
+          const expectedVersion = r.existing.mode === "new" ? 1 : r.existing.expectedVersion;
+          const applied = writeRunStateProjection(ctx.db, {
             runId: d.runId,
             version: d.version,
-            // The row was inserted just above at version 1.
-            expectedVersion: 1,
+            expectedVersion,
             status: d.status,
             currentNode: d.currentNode,
             routingJson: r.routingJson,
@@ -332,11 +338,14 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             inboxStatus: d.inboxStatus,
             acceptedSha: d.acceptedSha,
           });
+          if (!applied) throw new ConcurrencyError(expectedVersion, -1);
           setRunStateNextSeq(ctx.db, d.runId, d.nextSeq);
+        }
+        if (r.existing.mode === "new") {
           // Authoritative inert marker: holds the run out of dispatch /
           // concurrency / sweep regardless of its derived status (a
           // non-terminal source run derives to queued/running but must never
-          // execute here). Only on first import; re-import is a no-op.
+          // execute here). An extension keeps the marker it already carries.
           markRunImported(ctx.db, d.runId, now);
         }
         for (const ev of r.eventRows) {
@@ -374,7 +383,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             now: a.createdAt,
           });
         }
-        result.push({ runId: d.runId, imported: !r.already });
+        result.push({ runId: d.runId, imported: r.existing.mode !== "identical" });
       }
     });
   } catch (err) {
@@ -397,4 +406,90 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
   for (const r of runsToImport) reputBlobs(ctx, r.outputsSpilledData);
 
   return { runs: result, resumeCompatible };
+}
+
+type ExistingRun = { mode: "new" } | { mode: "identical" } | { mode: "extend"; expectedVersion: number };
+
+/** A bundle may only ever write into a run this store holds as an import, and
+ * only by extending it: appending into a run this store executes would inject
+ * intents and collide with its `next_seq`. Every stored event must reappear in
+ * the bundle unchanged (seq/type/writer/payload) and the bundle may add only
+ * events past the stored max seq. */
+function classifyExistingRun(
+  ctx: StoreCtx,
+  runId: string,
+  events: readonly { seq: number; type: string; writer: string; payload: unknown }[],
+): ExistingRun {
+  const state = ctx.store.getState(runId);
+  if (state == null) return { mode: "new" };
+  if (state.imported !== true) {
+    throw new Error(`importRunBundle: run ${runId} exists locally and is not an imported run`);
+  }
+  const notPrefix = (seq: number) =>
+    new Error(`importRunBundle: run ${runId} stored event log is not a prefix of the bundle's (seq ${seq})`);
+  const bundleBySeq = new Map(events.map((e) => [e.seq, e] as const));
+  const stored = selectEvents(ctx.db, runId, { sinceSeq: Number.MIN_SAFE_INTEGER });
+  let storedMax = Number.NEGATIVE_INFINITY;
+  for (const s of stored) {
+    const b = bundleBySeq.get(s.seq);
+    if (
+      b == null ||
+      b.type !== s.type ||
+      b.writer !== s.writer ||
+      canonicalJson(b.payload) !== canonicalJson(JSON.parse(s.payload))
+    ) {
+      throw notPrefix(s.seq);
+    }
+    storedMax = s.seq;
+  }
+  const storedSeqs = new Set(stored.map((s) => s.seq));
+  const gap = events.find((e) => e.seq <= storedMax && !storedSeqs.has(e.seq));
+  if (gap != null) throw notPrefix(gap.seq);
+  return events.some((e) => e.seq > storedMax)
+    ? { mode: "extend", expectedVersion: state.version }
+    : { mode: "identical" };
+}
+
+/** The workflows table is shared with locally-authored runs and keyed by
+ * content hash with insert-if-absent, so a row whose source doesn't hash to
+ * its sha would shadow the genuine workflow for every later `fragua run`.
+ * Verify the sha against the source, derive the IR from that source (the
+ * bundle's `ir.json` is never trusted), and require an existing row to agree. */
+function verifyBundleWorkflow(
+  ctx: StoreCtx,
+  byName: Map<string, Uint8Array>,
+  w: BundleManifest["workflows"][number],
+): { sha: string; name: string; source: string; ir: string; irVersion: number } {
+  const sourceBytes = byName.get(workflowSourcePath(w.sha));
+  if (sourceBytes == null || byName.get(workflowIrPath(w.sha)) == null) {
+    throw new Error(`importRunBundle: workflow ${w.sha} is in the manifest but its source/ir entry is absent`);
+  }
+  const actual = sha256Hex(sourceBytes);
+  if (actual !== w.sha) throw new Error(`importRunBundle: workflow ${w.sha} source hashes to ${actual}`);
+  let source: string;
+  try {
+    // fatal + ignoreBOM: the stored string must re-encode to exactly the hashed bytes.
+    source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(sourceBytes);
+  } catch {
+    throw new Error(`importRunBundle: workflow ${w.sha} source is not valid UTF-8`);
+  }
+  let ir: string;
+  try {
+    ir = serializeGraph(parseWorkflow(source));
+  } catch (err) {
+    throw new Error(
+      `importRunBundle: workflow ${w.sha} source does not parse under this build: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const existing = selectWorkflow(ctx.db, w.sha);
+  if (existing != null) {
+    if (existing.source !== source) {
+      throw new Error(`importRunBundle: workflow ${w.sha} exists locally with different source`);
+    }
+    // A row saved under an older IR version can't byte-match a freshly derived IR.
+    if (existing.ir_version === CURRENT_IR_VERSION && existing.ir !== ir) {
+      throw new Error(`importRunBundle: workflow ${w.sha} exists locally with a different IR`);
+    }
+  }
+  return { sha: w.sha, name: w.name, source, ir, irVersion: CURRENT_IR_VERSION };
 }

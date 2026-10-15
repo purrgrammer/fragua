@@ -3,7 +3,7 @@
 // spill rehydration, latest-iteration resolution, and parallel-branch refs.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { newRunId, SqliteStore } from "@fragua/store";
+import { newRunId, SqliteStore, sha256Hex } from "@fragua/store";
 import { CURRENT_IR_VERSION, serializeGraph } from "../../src/ir.ts";
 import { parseWorkflow } from "../../src/parser/yaml.ts";
 import { makeReadPlane } from "../../src/read-plane/plane.ts";
@@ -220,9 +220,9 @@ describe("RunDetail.outputs projection", () => {
   });
 
   test("a completed run's run-level outputs re-derive after export → import", () => {
-    // Bundle import shape-gates the run id as a ULID and the workflow sha as a
-    // sha256, so this run uses both real-shaped ids.
-    const sha = "a".repeat(64);
+    // Bundle import verifies the workflow sha against its source and the run id
+    // as a ULID, so this run uses a real content hash and a real run id.
+    const sha = sha256Hex(WF_SOURCE);
     store.saveWorkflow(sha, "rl-outputs", WF_SOURCE, serializeGraph(parseWorkflow(WF_SOURCE)), CURRENT_IR_VERSION);
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, cwd: "/tmp/repo" });

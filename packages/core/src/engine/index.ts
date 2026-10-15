@@ -6,6 +6,7 @@ export * from "./inputs.ts";
 export * from "./outputs-profile.ts";
 export * from "./outputs-substitution.ts";
 export * from "./retry-policy.ts";
+export * from "./shell-quote.ts";
 export * from "./substitution.ts";
 export * from "./thread.ts";
 export * from "./validator.ts";

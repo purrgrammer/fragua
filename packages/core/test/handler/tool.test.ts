@@ -187,12 +187,10 @@ describe("makeToolHandler — happy path", () => {
 });
 
 describe("makeToolHandler — substitution", () => {
-  // Tool commands run substitution with `escapeForShell: true`, so
-  // every substituted value is wrapped in POSIX single quotes. Adjacent
-  // quoted/unquoted segments concatenate at shell tokenisation
-  // (e.g. `--filter=''@fragua/core''` is one argument equal to
-  // `--filter=@fragua/core`), so existing workflows that pre-quoted
-  // their substitutions keep the same semantics.
+  // Tool commands run substitution with `escapeForShell: true`: a bare
+  // token is wrapped in POSIX single quotes, a token inside `"…"` is
+  // backslash-escaped, a token inside `'…'` has its quotes escaped without
+  // a wrap, and a token where no escape is inert fails the node.
 
   test("an input is substituted into tool_command (shell-quoted)", async () => {
     const ctx = stubCtx({ args: { inputs: { file: "auth.ts" } } });
@@ -236,6 +234,39 @@ describe("makeToolHandler — substitution", () => {
     });
     await spec.handler(ctx);
     expect(ranWith).toBe("echo 'it'\\''s fine'");
+  });
+
+  test("a double-quoted input is backslash-escaped, not single-wrapped", async () => {
+    const ctx = stubCtx({ args: { inputs: { v: "$(id)" } } });
+    let ranWith = "";
+    const spec = makeToolHandler({
+      toolCommand: 'echo "x=${{ inputs.v }}"',
+      spawner: async (cmd) => {
+        ranWith = cmd;
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
+      },
+    });
+    await spec.handler(ctx);
+    expect(ranWith).toBe('echo "x=\\$(id)"');
+  });
+
+  test("a token in an unsafe position fails the node closed", async () => {
+    const ctx = stubCtx({ args: { inputs: { v: "x" } } });
+    let spawned = false;
+    const spec = makeToolHandler({
+      toolCommand: "echo `printf %s ${{ inputs.v }}`",
+      spawner: async () => {
+        spawned = true;
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
+      },
+    });
+    const result = await spec.handler(ctx);
+    expect(spawned).toBe(false);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toContain("inside backticks");
+    }
   });
 });
 

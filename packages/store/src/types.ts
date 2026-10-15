@@ -1462,7 +1462,10 @@ export interface IMcpOAuthStore {
 export interface IBundleStore {
   /** Export `runId` as a scrubbed, replayable `.fragua` bundle. */
   exportRunBundle(runId: string, opts: ExportBundleOptions): ExportBundleResult;
-  /** Merge a `.fragua` bundle's runs into this store. Idempotent per run. */
+  /** Merge a `.fragua` bundle's runs into this store. Verifies every workflow
+   *  against its sha and refuses a run that exists locally without the import
+   *  marker; re-importing an imported run is a no-op when the logs match and
+   *  an extension when the bundle's log continues the stored one. */
   importRunBundle(bytes: Uint8Array): ImportBundleResult;
   /** Prune the store to the portable, replayable run record (drops the
    *  secret-bearing + instance-scoped tables) then VACUUM + checkpoint.
