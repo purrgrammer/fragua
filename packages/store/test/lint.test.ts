@@ -2,8 +2,8 @@
 //
 // Every store write runs inside a `this.writeTxn(() => ...)` (or a raw
 // `db.transaction(() => ...)`) callback whose body executes under the SQLite
-// write lock. A `SAVEPOINT`-wrapped closure (the startup sweep's per-run
-// `sweepRun(runId, () => ...)`) runs under the same lock, so its callback is a
+// write lock. A closure handed to a same-file `SAVEPOINT` wrapper (e.g.
+// `wrap(id, () => ...)`) runs under the same lock, so its callback is a
 // transaction scope too. Inside any such body we MUST NOT `await` (blocks the
 // lock), serialize or parse JSON (allocates on the hot path under the lock),
 // reach the network (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` —
@@ -31,6 +31,12 @@
 // `ctx.blobs.<m>` / `ctx.metrics.<m>` are followed into the implementing
 // class method (`SqliteStore` / `BlobFS` / `Metrics`). `ctx.db.*` (bun:sqlite)
 // and the injected `ctx.now` clock have no in-repo body and are not followed.
+//
+// Callee text is normalised through literal-key element access, so
+// `JSON["stringify"](x)` / ``ctx[`validatePayload`]()`` match like their dotted
+// forms. A computed member access on `JSON`, `Value`, or a `StoreCtx` binding
+// (or its `store` / `blobs` / `metrics` member) inside a txn scope can't be
+// resolved statically, so it is reported as an offender in its own right.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
@@ -43,11 +49,13 @@ import {
   collectAwaits,
   collectCalls,
   lineOf,
+  literalKey,
   parseSource,
   propertyChain,
   resolveImportedFunctionBody,
   sameFileFunctionBodies,
   typedBindings,
+  walk,
 } from "@fragua/test-utils";
 import ts from "typescript";
 
@@ -81,6 +89,15 @@ const TXN_CALLEES = ["writeTxn", "transaction"];
  * by its identifier name separately. */
 const BANNED_CALL_TEXT = new Set(["JSON.stringify", "JSON.parse", "Value.Check", "Value.Compile"]);
 
+/** Globals whose banned members a computed key could reach unseen. */
+const GUARDED_GLOBALS = new Set(["JSON", "Value"]);
+
+/** `StoreCtx` members whose methods are followed — a computed key on them hides
+ * which method runs. */
+const GUARDED_CTX_MEMBERS = new Set(["store", "blobs", "metrics"]);
+
+const COMPUTED_ACCESS = "computed member access on";
+
 interface Offender {
   file: string;
   kind: string;
@@ -108,7 +125,7 @@ function isSavepointOpener(node: ts.CallExpression): boolean {
 }
 
 /** Names of same-file functions whose body opens a `SAVEPOINT` — their
- * callback arguments run under the write lock (the sweep's `sweepRun`). */
+ * callback arguments run under the write lock. */
 function savepointWrapperNames(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   for (const [name, body] of sameFileFunctionBodies(sf)) {
@@ -157,11 +174,34 @@ function ctxCall(call: CallInfo, ctxNames: Set<string>): { member: string; metho
   return undefined;
 }
 
+/** The guarded object a computed (non-literal-key) element access hangs off:
+ * `JSON` / `Value`, a `StoreCtx` binding, or `<ctx>.store|blobs|metrics`. */
+function guardedComputedObject(node: ts.ElementAccessExpression, ctxNames: Set<string>): string | undefined {
+  if (literalKey(node) !== undefined) return undefined;
+  const chain = propertyChain(node.expression);
+  const head = chain?.[0];
+  if (chain === undefined || head === undefined) return undefined;
+  if (chain.length === 1 && (GUARDED_GLOBALS.has(head) || ctxNames.has(head))) return head;
+  const member = chain[1];
+  if (chain.length === 2 && ctxNames.has(head) && member !== undefined && GUARDED_CTX_MEMBERS.has(member))
+    return chain.join(".");
+  return undefined;
+}
+
 /** Scan one node (a transaction body or an inlined helper body) for the banned
  * constructs, excluding nested deferred functions. */
 function scanBody(body: ts.Node, sf: ts.SourceFile, file: string, ctxNames: Set<string>): Offender[] {
   const offenders: Offender[] = [];
   for (const a of collectAwaits(body)) offenders.push({ file, kind: "await", line: lineOf(sf, a) });
+  walk(
+    body,
+    (n) => {
+      if (!ts.isElementAccessExpression(n)) return;
+      const obj = guardedComputedObject(n, ctxNames);
+      if (obj !== undefined) offenders.push({ file, kind: `${COMPUTED_ACCESS} ${obj}`, line: lineOf(sf, n) });
+    },
+    true,
+  );
   for (const call of collectCalls(body, sf, true)) {
     const onCtx = ctxCall(call, ctxNames);
     if (call.name === "fetch") offenders.push({ file, kind: "fetch", line: lineOf(sf, call.node) });
@@ -404,6 +444,46 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
       function f() { const body = make(); db.transaction(body); }
     `;
     expect(scanSynthetic(src).map((o) => o.kind)).toEqual([UNRESOLVED_CALLBACK]);
+  });
+
+  test('catches JSON["stringify"] inside a txn callback (R2-M1)', () => {
+    const caller = join(__dirname, "fixtures", "txn-element-access", "json-bracket.ts");
+    expect(scanFile(caller).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches template-literal and ctx element-access callees", () => {
+    const src = `
+      function f(ctx: StoreCtx) {
+        ctx.writeTxn(() => { JSON[\`parse\`](s); ctx["validatePayload"](p); });
+      }
+    `;
+    const kinds = scanSynthetic(src).map((o) => o.kind);
+    expect(kinds).toContain("JSON.parse");
+    expect(kinds).toContain("ctx.validatePayload");
+  });
+
+  test("flags a computed member access on JSON / Value / ctx inside a txn body", () => {
+    const src = `
+      function f(ctx: StoreCtx, k: string) {
+        ctx.writeTxn(() => { JSON[k](x); Value[k](s, v); ctx[k](); ctx.blobs[k](b); });
+      }
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual([
+      `${COMPUTED_ACCESS} JSON`,
+      `${COMPUTED_ACCESS} Value`,
+      `${COMPUTED_ACCESS} ctx`,
+      `${COMPUTED_ACCESS} ctx.blobs`,
+    ]);
+  });
+
+  test("does not flag computed access outside the txn or in a nested deferred callback", () => {
+    const src = `
+      function f(ctx: StoreCtx, k: string) {
+        const s = JSON[k](x);
+        ctx.writeTxn(() => { on("x", () => JSON[k](y)); insert(s); });
+      }
+    `;
+    expect(scanSynthetic(src)).toHaveLength(0);
   });
 
   test("does not flag a JSON.stringify in the sweepRun wrapper's own catch (outside the savepoint)", () => {

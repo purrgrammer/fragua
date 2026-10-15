@@ -6,6 +6,7 @@
 //   - GET /metrics/global aggregates via generated columns + json_each pivot
 //   - P19: SSE replay via Last-Event-ID
 
+import type { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -628,15 +629,46 @@ steps:
     expect(state!.routing["input"]).toBeUndefined();
   });
 
-  test("routing passed through body lands on routing (non-input keys preserved)", async () => {
+  test("POST /runs rejects non-allow-listed routing keys", async () => {
     const res = await req("POST", "/runs", {
       workflowSha: "wf",
       routing: { start_node: "s" },
     });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; routingErrors: Array<{ key: string; code: string }> };
+    expect(body.code).toBe("invalid_routing");
+    expect(body.routingErrors).toEqual([
+      expect.objectContaining({ key: "start_node", code: "routing_key_not_allowed" }),
+    ]);
+  });
+
+  test("POST /runs refuses smuggled routing.inputs and enqueues nothing (R2-B4)", async () => {
+    const before = store.runStateCounts().queued;
+    const res = await req("POST", "/runs", {
+      workflowSha: "wf",
+      routing: { inputs: { n: "a[$(id)]", mode: "zzz" }, "max_retries_override.x": -5 },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("invalid_routing");
+    expect(store.runStateCounts().queued).toBe(before);
+  });
+
+  test("POST /runs carries an allow-listed budget override onto routing", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", routing: { "budget_override.run.cost": 5 } });
+    expect(res.status).toBe(200);
     const { runId } = (await res.json()) as { runId: string };
-    const state = store.getState(runId);
-    expect(state!.routing["start_node"]).toBe("s");
-    expect(state!.routing["input"]).toBeUndefined();
+    expect(store.getState(runId)!.routing["budget_override.run.cost"]).toBe(5);
+  });
+
+  test("POST /runs rejects fractional priority without a SQLiteError (R2-B8)", async () => {
+    const before = store.runStateCounts().queued;
+    const res = await req("POST", "/runs", { workflowSha: "wf", priority: 1.5 });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_priority");
+    expect(body.error).not.toContain("SQLiteError");
+    expect(store.runStateCounts().queued).toBe(before);
   });
 
   test("no input field on enqueue → routing.input is absent", async () => {
@@ -687,6 +719,19 @@ steps:
     expect(body.code).toBe("payload_too_large");
     expect(body.sizeBytes).toBeGreaterThan(body.maxBytes);
     expect(body.maxBytes).toBe(4096);
+  });
+
+  test("intent on an imported run → 409 code=imported_run", async () => {
+    store.enqueueRun({ runId: "rimported", workflowSha: "wf" });
+    const db = (store as unknown as { db: Database }).db;
+    db.query("INSERT INTO imported_runs (run_id, imported_at) VALUES (?, ?)").run("rimported", 0);
+    const seqBefore = store.getState("rimported")!.nextSeq;
+    const res = await req("POST", "/runs/rimported/cancel", {});
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("imported_run");
+    expect(body.error).toMatch(/imported run/);
+    expect(store.getState("rimported")!.nextSeq).toBe(seqBefore);
   });
 
   test("over-long steer text → 400 at validation (before the store payload cap)", async () => {

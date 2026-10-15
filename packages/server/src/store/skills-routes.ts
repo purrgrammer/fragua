@@ -143,15 +143,11 @@ export function skillsRoutes(opts: SkillsRoutesOpts): Hono {
         500,
       );
     }
-    // Content-Type derived from extension; the client viewer dispatches
-    // on this header (markdown / image / monospace / hex-dump). Default
-    // to octet-stream so unknown extensions land in the hex-dump bucket.
-    return new Response(bytes, {
-      headers: {
-        "Content-Type": mimeFromExt(resolved),
-        "Content-Length": String(stats.size),
-      },
-    });
+    // Skill files are untrusted bytes served from the control-plane origin, so
+    // nothing here may render: no active MIME type, no sniffing, a sandboxed
+    // CSP, and markup forced to download. The viewer picks its renderer from
+    // the file extension, not this header.
+    return new Response(bytes, { headers: skillFileHeaders(resolved, stats.size) });
   });
 
   return app;
@@ -260,34 +256,43 @@ function decodeB64Url(s: string): string {
   return Buffer.from(s, "base64url").toString("utf8");
 }
 
-const MIME_BY_EXT: Record<string, string> = {
-  ".md": "text/markdown; charset=utf-8",
-  ".markdown": "text/markdown; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".yml": "text/yaml; charset=utf-8",
-  ".yaml": "text/yaml; charset=utf-8",
-  ".toml": "text/plain; charset=utf-8",
-  ".js": "text/plain; charset=utf-8",
-  ".mjs": "text/plain; charset=utf-8",
-  ".ts": "text/plain; charset=utf-8",
-  ".tsx": "text/plain; charset=utf-8",
-  ".py": "text/plain; charset=utf-8",
-  ".sh": "text/plain; charset=utf-8",
-  ".bash": "text/plain; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".webp": "image/webp",
-};
+const TEXT_EXTS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".json",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".js",
+  ".mjs",
+  ".ts",
+  ".tsx",
+  ".py",
+  ".sh",
+  ".bash",
+  ".css",
+  ".html",
+  ".htm",
+  ".svg",
+  ".xml",
+]);
 
-function mimeFromExt(absPath: string): string {
+const ATTACHMENT_EXTS = new Set([".html", ".htm", ".svg", ".xml"]);
+
+function extOf(absPath: string): string {
+  const slash = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
   const dot = absPath.lastIndexOf(".");
-  if (dot < 0) return "application/octet-stream";
-  const ext = absPath.slice(dot).toLowerCase();
-  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+  return dot > slash ? absPath.slice(dot).toLowerCase() : "";
+}
+
+function skillFileHeaders(absPath: string, size: number): Record<string, string> {
+  const ext = extOf(absPath);
+  return {
+    "Content-Type": TEXT_EXTS.has(ext) ? "text/plain; charset=utf-8" : "application/octet-stream",
+    "Content-Length": String(size),
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+    ...(ATTACHMENT_EXTS.has(ext) ? { "Content-Disposition": "attachment" } : {}),
+  };
 }

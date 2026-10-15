@@ -4,7 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { InvalidDurationError, parseDurationMs, type parseWorkflow } from "@fragua/core";
+import type { parseWorkflow } from "@fragua/core";
 import { type BuildResult, makeIntentPlane } from "@fragua/core/intent-plane";
 import { makeReadPlane } from "@fragua/core/read-plane";
 import {
@@ -25,6 +25,7 @@ import type { RunActionExec, RunSnapshotReader, WorkflowReader } from "../ports.
 import { numericQueryParam } from "./query-params.ts";
 import { buildRunActionGate } from "./run-action-gate.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
+import { findInvalidTimeoutAttr, importedRunResponse, invalidWorkflowResponse } from "./workflow-guards.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared
@@ -106,65 +107,6 @@ const DEFAULT_SSE_BATCH_SIZE = 500;
 // `?windowHours=1e12` from driving `cutoffMs` negative and scanning all
 // history. Preserves the existing default window (no `windowHours` → 30 days).
 const MAX_WINDOW_HOURS = 24 * 365 * 5;
-
-/**
- * Scan a workflow source for nodes with malformed `timeout=` or `max_ms=`
- * attrs. Returns the first offender so the API can reject before a
- * workflow is saved (and therefore before any run is enqueued against
- * a broken sha). Returns `null` when every timeout attr parses or
- * nothing is set.
- */
-function findInvalidTimeoutAttr(
-  graph: ReturnType<typeof parseWorkflow>,
-): { nodeId: string; attr: "timeout" | "max_ms"; value: unknown; detail: string } | null {
-  for (const node of Object.values(graph.nodes)) {
-    const { timeout, max_ms } = node.attrs;
-    if (typeof max_ms === "number") {
-      try {
-        parseDurationMs(max_ms);
-      } catch (err) {
-        return {
-          nodeId: node.id,
-          attr: "max_ms",
-          value: max_ms,
-          detail: err instanceof InvalidDurationError ? err.message : String(err),
-        };
-      }
-    } else if (max_ms != null) {
-      return {
-        nodeId: node.id,
-        attr: "max_ms",
-        value: max_ms,
-        detail: "max_ms must be a non-negative integer (ms); 0 disables the wall-clock watchdog",
-      };
-    }
-    if (typeof timeout === "string") {
-      try {
-        parseDurationMs(timeout);
-      } catch (err) {
-        return {
-          nodeId: node.id,
-          attr: "timeout",
-          value: timeout,
-          detail: err instanceof InvalidDurationError ? err.message : String(err),
-        };
-      }
-    }
-  }
-  return null;
-}
-
-function invalidWorkflowResponse(c: Context, err: unknown): Response {
-  const detail = err instanceof Error ? err.message : String(err);
-  return c.json(
-    {
-      error: `invalid workflow: ${detail}`,
-      code: "invalid_workflow",
-      detail,
-    },
-    400,
-  );
-}
 
 /** Registry-backed preflight. Rejects only when no provider in the
  * registry has any configured credential — reads the global store's
@@ -288,6 +230,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       workflowSha?: string;
       priority?: number;
       runId?: string;
+      /** Operator overrides only, gated by `ENQUEUE_ROUTING_ALLOWLIST`. */
       routing?: Record<string, unknown>;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for
@@ -428,17 +371,16 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    // Input-binding validation, routing assembly, run-id mint, and the
-    // enqueue params are the plane's; the adapter passes the resolved
-    // identity/location fields (§3.6). `inputDecls: …attrs.inputs ?? []` when
-    // the graph is known means a defined (possibly empty) array — so unknown
-    // inputs are rejected even for a no-`inputs:` workflow; `undefined` (graph
-    // unknown, by-sha not-yet-stored) skips validation, as before.
+    // Input, routing-allow-list and priority validation, run-id mint, and the
+    // enqueue params are the plane's; the adapter passes the resolved fields
+    // (§3.6). A known graph passes a defined (possibly empty) `inputDecls`, so
+    // unknown inputs are rejected even for a no-`inputs:` workflow; an unknown
+    // graph (by-sha, not yet stored) skips input validation.
     const enq = plane.buildEnqueue({
       workflowSha,
       ...(resolvedGraph !== undefined ? { inputDecls: resolvedGraph.attrs.inputs ?? [] } : {}),
       ...(body.inputs != null ? { inputs: body.inputs } : {}),
-      ...(body.routing != null ? { routing: body.routing } : {}),
+      ...(body.routing !== undefined ? { routing: body.routing } : {}),
       ...(body.priority !== undefined ? { priority: body.priority } : {}),
       ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
       ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
@@ -454,7 +396,8 @@ export function createRoutes(deps: ServerDeps): Hono {
       ...(typeof body.title === "string" && body.title.length > 0 ? { title: body.title } : {}),
     });
     if (!enq.ok) {
-      return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
+      const { ok: _ok, ...failure } = enq;
+      return c.json(failure, 400);
     }
     if (pendingSave !== undefined) plane.commitSaveWorkflow(pendingSave);
     try {
@@ -469,7 +412,8 @@ export function createRoutes(deps: ServerDeps): Hono {
    * Append an intent and translate store-level errors into typed HTTP
    * responses: an unknown run id (`RunNotFoundError`) becomes a 404 with
    * `code: "not_found"` (a client error, not a 500), matching the
-   * human/accept not-found shape; an oversized payload
+   * human/accept not-found shape; an imported (inert) run
+   * (`ImportedRunError`) becomes a 409 `code: "imported_run"`; an oversized payload
    * (`PayloadTooLargeError`) becomes a 413. Operator-supplied text fields
    * (`steer.text`,
    * `cancel.reason`, `hitl.input`, `unquarantine.note`) can plausibly
@@ -486,6 +430,8 @@ export function createRoutes(deps: ServerDeps): Hono {
       if (err instanceof RunNotFoundError) {
         return c.json({ error: "run not found", code: "not_found" }, 404);
       }
+      const imported = importedRunResponse(c, err);
+      if (imported != null) return imported;
       if (err instanceof PayloadTooLargeError) {
         return c.json(
           {
@@ -631,6 +577,8 @@ export function createRoutes(deps: ServerDeps): Hono {
       const landed = res.landedUnstaged === true ? { landedUnstaged: true } : {};
       return c.json({ seq, sha: res.sha, replayed: res.replayed, tailStaged: res.tailStaged, ...landed });
     } catch (err) {
+      const imported = importedRunResponse(c, err);
+      if (imported != null) return imported;
       if (err instanceof PayloadTooLargeError) {
         return c.json({ error: "payload too large", code: "payload_too_large" }, 413);
       }
@@ -644,8 +592,14 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!g.ok) return g.res;
     const res = await runActions.discard(g.gate);
     if (!res.ok) return c.json({ error: res.detail, code: res.reason }, 409);
-    const { seq } = plane.commit(runId, plane.buildDiscardRun(res));
-    return c.json({ seq, refs: res.refs });
+    try {
+      const { seq } = plane.commit(runId, plane.buildDiscardRun(res));
+      return c.json({ seq, refs: res.refs });
+    } catch (err) {
+      const imported = importedRunResponse(c, err);
+      if (imported != null) return imported;
+      throw err;
+    }
   });
 
   // ─── Reads ──────────────────────────────────────────────────

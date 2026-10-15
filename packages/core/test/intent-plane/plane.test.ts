@@ -445,6 +445,112 @@ describe("intent plane — buildEnqueue", () => {
     plane.commitEnqueue(r.params);
     expect(enqueued).toEqual([{ runId: "run-z", workflowSha: "sha1" }]);
   });
+
+  test("buildEnqueue rejects the R2-B4 smuggled routing body", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({
+      workflowSha: "sha1",
+      inputDecls,
+      routing: { inputs: { n: "a[$(id)]", mode: "zzz" }, "max_retries_override.x": -5 },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.code).toBe("invalid_routing");
+    expect(r.routingErrors).toContainEqual(
+      expect.objectContaining({ key: "inputs", code: "routing_inputs_forbidden" }),
+    );
+    expect(r.routingErrors).toContainEqual(
+      expect.objectContaining({ key: "max_retries_override.x", code: "routing_value_invalid" }),
+    );
+  });
+
+  test("buildEnqueue rejects routing.inputs even alongside valid inputs", () => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({
+      workflowSha: "sha1",
+      inputDecls,
+      inputs: { ticket: "BUG-1" },
+      routing: { inputs: { ticket: "BUG-2" } },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.code).toBe("invalid_routing");
+  });
+
+  test.each([
+    "start_node",
+    "internal.retry_count.a",
+    "goal_gates.g",
+    "goal_gates.__retries",
+    "priority",
+    "graph.goal",
+    "max_loops_override",
+    "bogus",
+  ])("buildEnqueue rejects routing keys outside the operator allow-list (%s)", (key) => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", routing: { [key]: 1 } });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.routingErrors).toEqual([expect.objectContaining({ key, code: "routing_key_not_allowed" })]);
+  });
+
+  test.each([-5, 1.5, Number.NaN, "3"])(
+    "buildEnqueue rejects non-integer or negative max_retries_override (%p)",
+    (v) => {
+      const { plane } = rig();
+      const r = plane.buildEnqueue({ workflowSha: "sha1", routing: { "max_retries_override.work": v } });
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error("expected failure");
+      expect(r.routingErrors).toEqual([
+        expect.objectContaining({ key: "max_retries_override.work", code: "routing_value_invalid" }),
+      ]);
+    },
+  );
+
+  test.each([0, -1, Number.POSITIVE_INFINITY])(
+    "buildEnqueue rejects non-positive budget and goal-gate overrides (%p)",
+    (v) => {
+      const { plane } = rig();
+      const r = plane.buildEnqueue({
+        workflowSha: "sha1",
+        routing: { "budget_override.run.cost": v, max_goal_gate_retries_override: v },
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error("expected failure");
+      expect(r.routingErrors?.map((e) => e.code)).toEqual(["routing_value_invalid", "routing_value_invalid"]);
+    },
+  );
+
+  test("buildEnqueue carries allow-listed overrides onto initialRouting", () => {
+    const { plane } = rig();
+    const routing = {
+      "budget_override.run.cost": 5,
+      "max_retries_override.work": 0,
+      max_goal_gate_retries_override: 2,
+    };
+    const r = plane.buildEnqueue({ workflowSha: "sha1", routing });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.initialRouting).toEqual(routing);
+  });
+
+  test.each([1.5, "high", 1e300, Number.NaN])("buildEnqueue rejects non-safe-integer priority (%p)", (priority) => {
+    const enqueued: unknown[] = [];
+    const store = { enqueueRun: (p: unknown) => enqueued.push(p) } as unknown as IEventStore;
+    const plane = makeIntentPlane({ store, newRunId: () => "run-p" });
+    const r = plane.buildEnqueue({ workflowSha: "sha1", priority: priority as number });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.code).toBe("invalid_priority");
+    expect("params" in r).toBe(false);
+    expect(enqueued).toEqual([]);
+  });
+
+  test.each([-3, 0, 7])("buildEnqueue accepts safe-integer priority (%p)", (priority) => {
+    const { plane } = rig();
+    const r = plane.buildEnqueue({ workflowSha: "sha1", priority });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.params.priority).toBe(priority);
+  });
 });
 
 describe("intent plane — buildAcceptRun", () => {

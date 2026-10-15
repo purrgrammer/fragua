@@ -683,15 +683,22 @@ const UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL = `
       dispatch_started_at = NULL,
       version = version + 1,
       claim_epoch = claim_epoch + 1,
-      updated_at = ?
+      updated_at = ?,
+      metrics = json_set(metrics, '$.activeMs',
+                         COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
     WHERE run_id = ?
 `;
 
-/** Quarantine an orphan-side-effect run during the startup sweep. Leaves
+/** Quarantine an orphan-side-effect run during the startup sweep, crediting
+ *  the open dispatch span (`activeMsDelta`, computed by the reducer's shared
+ *  helper) exactly as the `fact.run_quarantined` fold does. Leaves
  *  `last_applied_seq` untouched: the sweep folds no operator intents, so it
  *  must not advance the watermark past a pre-crash intent. */
-export function updateRunStateQuarantinedBySweep(db: Database, runId: string, now: number): void {
-  db.query(UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL).run(now, runId);
+export function updateRunStateQuarantinedBySweep(
+  db: Database,
+  args: { runId: string; now: number; activeMsDelta: number },
+): void {
+  db.query(UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL).run(args.now, args.activeMsDelta, args.runId);
 }
 
 const UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL = `

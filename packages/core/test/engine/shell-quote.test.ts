@@ -141,6 +141,8 @@ describe("unsafe positions throw ShellContextError", () => {
     ["in a <<- heredoc body", "cat <<-EOF\n\t${{ inputs.v }}\n\tEOF", "heredoc"],
     ["inside $'…'", "printf '%s' $'${{ inputs.v }}'", "ansi-c"],
     ["inside $((…))", "echo $(( ${{ inputs.v }} + 1 ))", "arithmetic"],
+    ["directly after $ in double quotes", 'echo "Price: $${{ inputs.v }}"', "dollar-prefix"],
+    ["directly after $ bare", "echo $${{ inputs.v }}", "dollar-prefix"],
   ];
 
   test.each(cases)("%s", (_label, tpl, position) => {
@@ -167,8 +169,56 @@ describe("unsafe positions throw ShellContextError", () => {
   });
 });
 
+describe("R2-B1/B2 — a $-prefixed token is refused", () => {
+  const refusal = (fn: () => unknown): unknown => {
+    try {
+      fn();
+    } catch (err) {
+      return err;
+    }
+    return undefined;
+  };
+
+  test('R2-B1: "Price: $${{ inputs.p }}" with (echo PWNED_B1) throws ShellContextError', () => {
+    const caught = refusal(() =>
+      substitute('echo "Price: $${{ inputs.p }}"', {
+        args: { inputs: { p: "(echo PWNED_B1)" } },
+        escapeForShell: true,
+      }),
+    );
+    expect(caught).toBeInstanceOf(ShellContextError);
+    expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ inputs.p }}", position: "dollar-prefix" }]);
+  });
+
+  test("R2-B2: $${{ inputs.v }} with \\'; echo PWNED_B2 # throws ShellContextError", () => {
+    for (const v of ["\\'; echo PWNED_B2 #", "'; echo PWNED_B2 #"]) {
+      const caught = refusal(() =>
+        substitute("echo $${{ inputs.v }}", { args: { inputs: { v } }, escapeForShell: true }),
+      );
+      expect(caught).toBeInstanceOf(ShellContextError);
+      expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ inputs.v }}", position: "dollar-prefix" }]);
+    }
+  });
+
+  test("substituteOutputs refuses $${{ outputs.p.v }}", () => {
+    const caught = refusal(() =>
+      substituteOutputs('echo "$${{ outputs.p.v }}"', { p: { v: "(echo PWNED_B1)" } }, { escapeForShell: true }),
+    );
+    expect(caught).toBeInstanceOf(ShellContextError);
+    expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ outputs.p.v }}", position: "dollar-prefix" }]);
+  });
+});
+
 describe("scanShellTokenContexts", () => {
   const ctxs = (tpl: string) => shellReferenceContexts(tpl).map((r) => r.context);
+
+  test("a backslash-escaped $ before a token is not dollar-prefix", () => {
+    expect(ctxs('echo "\\$${{ inputs.a }}" \\$${{ inputs.b }}')).toEqual(["double", "bare"]);
+  });
+
+  test("a $ before a token in single quotes is dollar-prefix", () => {
+    expect(ctxs("echo '$${{ inputs.a }}'")).toEqual([{ unsafe: "dollar-prefix" }]);
+  });
 
   test("classifies bare / double / single / nested", () => {
     expect(ctxs("printf '%s' ${{ inputs.a }}")).toEqual(["bare"]);
@@ -218,21 +268,33 @@ describe("shellEscapeForContext — property", () => {
     }),
   );
 
-  test("property: any NUL-free string round-trips in bare and double", () => {
+  test("property: any NUL-free string round-trips in bare, double and single", () => {
     fc.assert(
       fc.property(
         value.filter((v) => !v.includes("\0")),
         (v) => {
-          const cmd = substitute("printf '%s|' ${{ inputs.v }} \"${{ inputs.v }}\"", {
+          const cmd = substitute("printf '%s|' ${{ inputs.v }} \"${{ inputs.v }}\" '${{ inputs.v }}'", {
             args: { inputs: { v } },
             escapeForShell: true,
           });
           const r = runSh(cmd);
-          expect(r.stdout).toBe(`${v}|${v}|`);
+          expect(r.stdout).toBe(`${v}|${v}|${v}|`);
           expect(r.pwned).toBe(false);
         },
       ),
       { numRuns: 50 },
+    );
+  });
+
+  test("property: a $-prefixed token throws for any value in bare, double and single", () => {
+    const templates = ["printf %s $${{ inputs.v }}", 'printf %s "$${{ inputs.v }}"', "printf %s '$${{ inputs.v }}'"];
+    fc.assert(
+      fc.property(value, (v) => {
+        for (const tpl of templates) {
+          expect(() => substitute(tpl, { args: { inputs: { v } }, escapeForShell: true })).toThrow(ShellContextError);
+        }
+      }),
+      { numRuns: 100 },
     );
   });
 });

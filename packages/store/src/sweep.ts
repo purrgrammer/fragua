@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { insertDaemonEvent } from "./daemon-queries.ts";
 import { insertEventDaemon, selectAllOrphanSideEffects } from "./event-queries.ts";
-import { crashRequeueActiveMsDelta } from "./reducers.ts";
+import { crashRequeueActiveMsDelta, dispatchIntervalActiveMsDelta } from "./reducers.ts";
 import {
   bumpRunSeq,
   selectRunningNonImportedRuns,
@@ -10,6 +10,7 @@ import {
   updateRunStateReleasedClaim,
   updateRunStateRequeuedAfterCrash,
 } from "./run-state-queries.ts";
+import type { StoreCtx } from "./store-ctx.ts";
 import type { SweepResult } from "./types.ts";
 
 /**
@@ -37,25 +38,36 @@ export interface StartupSweepOpts {
   priorHeartbeatAt?: number;
 }
 
-export function startupSweep(db: Database, now: () => number, opts?: StartupSweepOpts): SweepResult {
+/** How many `BEGIN IMMEDIATE` attempts one run's heal gets. Each attempt
+ * already waits out `busy_timeout` inside SQLite before reporting BUSY, so the
+ * budget bounds the total wait at roughly `SWEEP_BUSY_ATTEMPTS × busy_timeout`. */
+export const SWEEP_BUSY_ATTEMPTS = 3;
+
+function isBusy(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) return true;
+  return err.message.includes("database is locked");
+}
+
+export function startupSweep(ctx: StoreCtx, opts?: StartupSweepOpts): SweepResult {
   const requeued: string[] = [];
   const quarantined = new Map<string, number[]>();
 
   // Read-only scans first — outside the write txn — to gather work + pre-serialize payloads.
-  const orphans = selectAllOrphanSideEffects(db);
+  const orphans = selectAllOrphanSideEffects(ctx.db);
   for (const row of orphans) {
     const list = quarantined.get(row.run_id) ?? [];
     list.push(row.seq);
     quarantined.set(row.run_id, list);
   }
 
-  // Pre-serialize quarantine payloads so the write txn is pure DB work.
   const quarantinePayloads = new Map<string, string>();
   for (const [runId, seqs] of quarantined) {
     quarantinePayloads.set(runId, JSON.stringify({ reason: "orphan_side_effect", orphanedIntents: seqs }));
   }
 
-  const running = selectRunningNonImportedRuns(db);
+  const running = selectRunningNonImportedRuns(ctx.db);
   const requeuePayloads = new Map<string, string>();
   for (const row of running) {
     const payload: { prevNode?: string; lastAliveAt?: number } = {};
@@ -64,78 +76,96 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     requeuePayloads.set(row.run_id, JSON.stringify(payload));
   }
 
-  // Each run's mutation runs in its own SAVEPOINT. A single corrupt or
-  // missing `run_state` row that throws mid-mutation is rolled back to
-  // its savepoint and recorded as a `daemon.sweep_run_failed`
-  // observability event — it can't abort the sweep of any other run or
-  // crash-loop the daemon at boot. (Contrast the old single outer
-  // BEGIN IMMEDIATE, where one throw discarded every other run's heal.)
-  const sweepRun = (runId: string, mutate: () => void): void => {
-    db.exec("SAVEPOINT sweep_run");
-    try {
-      mutate();
-      db.exec("RELEASE sweep_run");
-    } catch (err) {
+  // Each run heals in its own BEGIN IMMEDIATE transaction: the write lock is
+  // taken before the run's row is read, so a concurrent writer makes the heal
+  // wait (busy_timeout) instead of failing a read→write upgrade. A run whose
+  // heal still reports BUSY is retried; a non-BUSY throw (a corrupt or missing
+  // row) or a spent budget rolls back that run alone and is recorded as
+  // `daemon.sweep_run_failed`, so it can't abort the other runs' heal.
+  const healRun = (runId: string, attempt: () => void): boolean => {
+    let lastErr: unknown;
+    let attempts = 0;
+    while (attempts < SWEEP_BUSY_ATTEMPTS) {
+      attempts++;
       try {
-        db.exec("ROLLBACK TO sweep_run");
-        db.exec("RELEASE sweep_run");
-      } catch {
-        // best-effort savepoint cleanup
+        attempt();
+        return true;
+      } catch (err) {
+        lastErr = err;
+        if (!isBusy(err)) break;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      insertDaemonEvent(db, "daemon.sweep_run_failed", JSON.stringify({ runId, error: message }), now(), runId);
     }
+    const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    const payload = JSON.stringify({ runId, error: message, attempts });
+    try {
+      insertDaemonEvent(ctx.db, "daemon.sweep_run_failed", payload, ctx.now(), runId);
+    } catch {
+      // The audit row needs the same lock that just defeated the heal; losing
+      // it must not abort the remaining runs.
+    }
+    return false;
   };
 
   // Quarantine orphan runs (only those currently in a non-terminal,
   // non-quarantined state). Quarantine runs BEFORE requeue so it takes
   // precedence: a run flagged here is re-read as non-'running' below.
-  for (const [runId, _seqs] of quarantined) {
-    sweepRun(runId, () => {
-      const ts = now();
-      const stateRow = selectRunStateRow(db, runId);
-      if (stateRow == null) return;
-      if (
-        stateRow.status === "completed" ||
-        stateRow.status === "cancelled" ||
-        stateRow.status === "halted" ||
-        stateRow.status === "quarantined" ||
-        // An imported run's orphans were the source's concern — never quarantine
-        // (it would mutate an inert, inspect-only run).
-        stateRow.imported === 1
-      ) {
-        return;
-      }
+  for (const runId of quarantined.keys()) {
+    healRun(runId, () =>
+      ctx.writeTxn(() => {
+        const ts = ctx.now();
+        const stateRow = selectRunStateRow(ctx.db, runId);
+        if (stateRow == null) return;
+        if (
+          stateRow.status === "completed" ||
+          stateRow.status === "cancelled" ||
+          stateRow.status === "halted" ||
+          stateRow.status === "quarantined" ||
+          // An imported run's orphans were the source's concern — never quarantine
+          // (it would mutate an inert, inspect-only run).
+          stateRow.imported === 1
+        ) {
+          return;
+        }
 
-      const seq = bumpRunSeq(db, runId);
-      insertEventDaemon(db, runId, seq, "fact.run_quarantined", quarantinePayloads.get(runId)!, ts);
-      // Leave last_applied_seq alone: sweep doesn't fold operator
-      // intents, so it can't pretend they've been applied. Advancing
-      // the watermark past, e.g., a pre-crash intent.cancel_requested
-      // would silently drop it from the next executor fold.
-      updateRunStateQuarantinedBySweep(db, runId, ts);
-    });
+        const seq = bumpRunSeq(ctx.db, runId);
+        insertEventDaemon(ctx.db, runId, seq, "fact.run_quarantined", quarantinePayloads.get(runId)!, ts);
+        // Leave last_applied_seq alone: sweep doesn't fold operator
+        // intents, so it can't pretend they've been applied. Advancing
+        // the watermark past, e.g., a pre-crash intent.cancel_requested
+        // would silently drop it from the next executor fold.
+        updateRunStateQuarantinedBySweep(ctx.db, {
+          runId,
+          now: ts,
+          activeMsDelta: dispatchIntervalActiveMsDelta(stateRow.dispatch_started_at, ts),
+        });
+      }),
+    );
   }
 
   // Requeue runs still in 'running'. Re-read status here (per run)
   // because the quarantine loop above may have moved some of them.
   for (const row of running) {
-    sweepRun(row.run_id, () => {
-      const current = selectRunStateRow(db, row.run_id);
-      if (current == null || current.status !== "running") return;
-      // Sweep bypasses the reducer, so the activeMs credit in applyFact for
-      // fact.run_requeued_after_crash doesn't fire here. Compute it via the
-      // same shared helper the reducer calls, then apply it in SQL — one
-      // source of truth so the fold and the projection can't drift.
-      const activeMsDelta = crashRequeueActiveMsDelta(current.dispatch_started_at, opts?.priorHeartbeatAt);
-      appendCrashRequeue(db, {
-        runId: row.run_id,
-        payloadJson: requeuePayloads.get(row.run_id) ?? "{}",
-        ts: now(),
-        activeMsDelta,
-      });
-      requeued.push(row.run_id);
-    });
+    let didRequeue = false;
+    const healed = healRun(row.run_id, () =>
+      ctx.writeTxn(() => {
+        didRequeue = false;
+        const current = selectRunStateRow(ctx.db, row.run_id);
+        if (current == null || current.status !== "running") return;
+        // Sweep bypasses the reducer, so the activeMs credit in applyFact for
+        // fact.run_requeued_after_crash doesn't fire here. Compute it via the
+        // same shared helper the reducer calls, then apply it in SQL — one
+        // source of truth so the fold and the projection can't drift.
+        const activeMsDelta = crashRequeueActiveMsDelta(current.dispatch_started_at, opts?.priorHeartbeatAt);
+        appendCrashRequeue(ctx.db, {
+          runId: row.run_id,
+          payloadJson: requeuePayloads.get(row.run_id) ?? "{}",
+          ts: ctx.now(),
+          activeMsDelta,
+        });
+        didRequeue = true;
+      }),
+    );
+    if (healed && didRequeue) requeued.push(row.run_id);
   }
 
   return {

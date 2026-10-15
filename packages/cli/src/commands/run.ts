@@ -43,8 +43,6 @@ export interface RunCommandOptions {
   workflow: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
-  /** Starting routing entries injected into run_state.routing. */
-  routing?: Record<string, unknown>;
   /** Explicit run title (`--title`). When set, the daemon uses it verbatim
    * and skips auto-titling; otherwise the title is summarised from `inputs`. */
   title?: string;
@@ -266,7 +264,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       workflowPath: dotPath,
       ...(scope === "global" || scope === "local" ? { workflowName: name } : {}),
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
-      ...(opts.routing !== undefined ? { routing: opts.routing } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(opts.title !== undefined && opts.title.length > 0 ? { title: opts.title } : {}),
       ...(base !== undefined ? { baseGitSha: base.sha, baseGitRef: base.ref } : {}),

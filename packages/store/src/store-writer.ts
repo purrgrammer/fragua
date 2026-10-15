@@ -8,7 +8,13 @@ import {
   selectDeletableOrphanFiles,
   upsertArtifact,
 } from "./artifact-queries.ts";
-import { insertEventDaemon, insertEventRunEnqueued, insertEventWeb } from "./event-queries.ts";
+import { assertClaimEpoch } from "./claim-epoch-guard.ts";
+import {
+  insertEventDaemon,
+  insertEventRunEnqueued,
+  insertEventWeb,
+  selectHasPendingIntentBetween,
+} from "./event-queries.ts";
 import { insertMessage, selectMaxMessageOrdinal, selectMessageByDedup } from "./message-queries.ts";
 import { insertOutput } from "./outputs-queries.ts";
 import { EVENT_CONTRACT_VERSION } from "./pragmas.ts";
@@ -29,18 +35,22 @@ import { sha256Hex } from "./sha256.ts";
 import type { StoreCtx } from "./store-ctx.ts";
 import { rowToRunState } from "./store-rows.ts";
 import { appendCrashRequeue, startupSweep as runStartupSweep } from "./sweep.ts";
+import { truncationMarker } from "./truncation-marker.ts";
 import {
   type AppendFactOpts,
+  type AppendMessageOpts,
   ArtifactCollisionError,
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
   CheckoutBusyError,
+  type ClaimFenceOpts,
   ClaimLostError,
   ConcurrencyError,
   type EnqueueRunParams,
   type FactAppendResult,
   type FactEvent,
+  ImportedRunError,
   type IntentAppendResult,
   type IntentEvent,
   MAX_BLOB_BYTES,
@@ -51,6 +61,7 @@ import {
   MessageTooLargeError,
   type ObservabilityEvent,
   PayloadTooLargeError,
+  type PutArtifactOpts,
   RunNotFoundError,
   type RunState,
   type SweepResult,
@@ -101,47 +112,6 @@ export function writeProjection(
     const row = selectRunStateRow(ctx.db, state.runId);
     throw new ConcurrencyError(expectedVersion, row?.version ?? -1);
   }
-}
-
-/** Replacement payload for an oversized observability event. Preserves
- * the small, high-value metadata fields UIs / aggregators rely on (node
- * routing, model identity, iteration loop position, thread context) and
- * stamps an explicit truncation marker so consumers don't silently read
- * fabricated data. The bulky parts (prompt, system_prompt, messages,
- * skills, context_files) are reconstructable from the `messages` table
- * + the workflow source and are deliberately dropped here.
- *
- * Anything added here must stay *short*: the whole truncated payload
- * still has to fit in MAX_EVENT_PAYLOAD_BYTES, which is the reason we
- * truncate in the first place. Strings + numbers + the small
- * `iteration` object only — no nested arrays. */
-function truncationMarker(original: unknown, originalBytes: number): Record<string, unknown> {
-  const out: Record<string, unknown> = { _truncated: true, _original_bytes: originalBytes };
-  if (original != null && typeof original === "object") {
-    const src = original as Record<string, unknown>;
-    if (typeof src["nodeId"] === "string") out["nodeId"] = src["nodeId"];
-    // `iteration` is overloaded across event types: a plain number on
-    // observability events stamped by the executor, a `{ n, max }`
-    // object on llm.start when the caller is a loop. Keep both shapes.
-    if (typeof src["iteration"] === "number") {
-      out["iteration"] = src["iteration"];
-    } else if (src["iteration"] != null && typeof src["iteration"] === "object") {
-      const it = src["iteration"] as Record<string, unknown>;
-      if (typeof it["n"] === "number" && typeof it["max"] === "number") {
-        out["iteration"] = { n: it["n"], max: it["max"] };
-      }
-    }
-    if (typeof src["content_index"] === "number") out["content_index"] = src["content_index"];
-    // llm.start-specific identity fields — without these the step UI
-    // can't render the model name, look up the context window, or join
-    // back to the right thread when the prompt + system_prompt push
-    // the payload over the cap. All four are short strings.
-    if (typeof src["provider"] === "string") out["provider"] = src["provider"];
-    if (typeof src["model"] === "string") out["model"] = src["model"];
-    if (typeof src["thread_id"] === "string") out["thread_id"] = src["thread_id"];
-    if (typeof src["summary"] === "string") out["summary"] = src["summary"];
-  }
-  return out;
 }
 
 export function appendFact(
@@ -293,6 +263,7 @@ export function appendIntent(ctx: StoreCtx, runId: string, event: IntentEvent): 
   ctx.writeTxn(() => {
     const row = selectRunStateRow(ctx.db, runId);
     if (row == null) throw new RunNotFoundError(runId);
+    if (row.imported === 1) throw new ImportedRunError(runId);
     seq = bumpRunSeq(ctx.db, runId);
     insertEventWeb(ctx.db, runId, seq, event.type, payload, ts);
   });
@@ -315,11 +286,21 @@ export function appendIntentWithFact(
   // next_seq so the predicted intent seq and the speculative fold stay valid.
   const row = selectRunStateRow(ctx.db, runId);
   if (row == null) throw new RunNotFoundError(runId);
+  if (row.imported === 1) throw new ImportedRunError(runId);
   if (row.version !== expectedVersion) throw new ConcurrencyError(expectedVersion, row.version);
   const intentSeq = row.next_seq;
+  // An earlier intent still waiting for its fold (a cancel, an accept) must
+  // stay above the watermark, so the watermark only moves when nothing is
+  // pending below this intent. The txn's version + next_seq re-check keeps the
+  // pre-read valid: any intent appended since would have moved next_seq.
+  const earlierPending = selectHasPendingIntentBetween(ctx.db, runId, row.last_applied_seq, intentSeq);
   let state = rowToRunState(row);
   for (const f of facts) state = applyFact(state, f, ts);
-  state = { ...state, version: state.version + 1, lastAppliedSeq: Math.max(state.lastAppliedSeq, intentSeq) };
+  state = {
+    ...state,
+    version: state.version + 1,
+    lastAppliedSeq: earlierPending ? state.lastAppliedSeq : Math.max(state.lastAppliedSeq, intentSeq),
+  };
   const projection = {
     routingJson: JSON.stringify(state.routing),
     metricsJson: JSON.stringify(state.metrics),
@@ -333,6 +314,7 @@ export function appendIntentWithFact(
     ctx.writeTxn(() => {
       const current = selectRunStateRow(ctx.db, runId);
       if (current == null) throw new RunNotFoundError(runId);
+      if (current.imported === 1) throw new ImportedRunError(runId);
       if (current.version !== expectedVersion || current.next_seq !== intentSeq) {
         throw new ConcurrencyError(expectedVersion, current.version);
       }
@@ -356,6 +338,7 @@ export function appendObservabilityEvents(
   ctx: StoreCtx,
   runId: string,
   events: ObservabilityEvent[],
+  opts: ClaimFenceOpts = {},
 ): { seqs: number[] } {
   if (events.length === 0) return { seqs: [] };
   const ts = ctx.now();
@@ -387,6 +370,9 @@ export function appendObservabilityEvents(
   ctx.writeTxn(() => {
     const row = selectRunStateRow(ctx.db, runId);
     if (row == null) throw new Error(`unknown run ${runId}`);
+    if (opts.claimEpoch !== undefined && row.claim_epoch !== opts.claimEpoch) {
+      throw new ClaimLostError(opts.claimEpoch, row.claim_epoch, row.version, row.version);
+    }
     for (const p of prepared) {
       const seq = bumpRunSeq(ctx.db, runId);
       seqs.push(seq);
@@ -557,7 +543,7 @@ export function releaseClaim(
 }
 
 export function startupSweep(ctx: StoreCtx, opts?: { priorHeartbeatAt?: number }): SweepResult {
-  return runStartupSweep(ctx.db, ctx.now, opts);
+  return runStartupSweep(ctx, opts);
 }
 
 export function setRunTitle(ctx: StoreCtx, runId: string, title: string): void {
@@ -572,7 +558,7 @@ export function appendMessage(
   ctx: StoreCtx,
   runId: string,
   row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
-  opts?: { dedup?: boolean },
+  opts?: AppendMessageOpts,
 ): { ordinal: number } {
   // Pre-check before entering the transaction so the caller sees a typed
   // error rather than a CHECK constraint failure from SQLite. The schema
@@ -597,7 +583,9 @@ export function appendMessage(
     throw new PayloadTooLargeError(messageAppendedGuardBytes, MAX_EVENT_PAYLOAD_BYTES);
   }
   let ordinal = 0;
+  const claimEpoch = opts?.claimEpoch;
   ctx.writeTxn(() => {
+    if (claimEpoch !== undefined) assertClaimEpoch(ctx, runId, claimEpoch);
     // Opt-in dedup. When the caller asserts the message is replay-safe
     // (deterministic content given the same scope), passing `dedup: true`
     // causes a re-dispatch at the same `(run, node, iteration)` with
@@ -645,7 +633,7 @@ export function putArtifact(
   scope: ArtifactScope,
   content: Uint8Array,
   mime?: string,
-  opts?: { replace?: boolean },
+  opts?: PutArtifactOpts,
 ): ArtifactRef {
   if (content.byteLength > MAX_BLOB_BYTES) {
     throw new ArtifactTooLargeError(content.byteLength, MAX_BLOB_BYTES);
@@ -679,7 +667,9 @@ export function putArtifact(
   // file; the `blobs` row never references missing content.
   ctx.blobs.put(sha, content);
 
+  const claimEpoch = opts?.claimEpoch;
   ctx.writeTxn(() => {
+    if (claimEpoch !== undefined) assertClaimEpoch(ctx, scope.runId, claimEpoch);
     insertBlobIfAbsent(ctx.db, sha, bytes, now);
     upsertArtifact(ctx.db, {
       runId: scope.runId,

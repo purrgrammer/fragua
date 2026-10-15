@@ -239,6 +239,103 @@ export function validateRoutingPatch(patch: Record<string, unknown>): void {
   }
 }
 
+// ── Enqueue routing allow-list ───────────────────────────────────────────────
+// The genesis routing an enqueue caller may seed is a strict subset of the
+// write vocabulary: only the operator-settable ceilings the control-plane verbs
+// (`budget`, `max_retries`, `goal_gate`) can also raise. Run inputs travel only
+// through the typed `inputs` field so they are always validated against the
+// workflow's `inputs:` block. Engine-owned keys (`internal.*`, `goal_gates.*`
+// outcome records, `start_node`, `graph.*`, `priority`) are refused: seeding
+// them would let a caller skip nodes, pre-satisfy a gate, or forge context.
+
+/** One operator-settable genesis routing key family and the rule its value must
+ * satisfy on top of {@link validateRoutingPatch}'s type check. */
+export interface EnqueueRoutingRule {
+  /** An exact key, or a prefix when `prefix` is true (the suffix is a node id). */
+  key: string;
+  prefix: boolean;
+  value: "positive-finite" | "non-negative-integer";
+}
+
+export const ENQUEUE_ROUTING_ALLOWLIST: readonly EnqueueRoutingRule[] = [
+  ...BUDGET_SCOPES.flatMap((scope) =>
+    BUDGET_METRICS.map(
+      (metric): EnqueueRoutingRule => ({
+        key: budgetOverrideKey(scope, metric),
+        prefix: false,
+        value: "positive-finite",
+      }),
+    ),
+  ),
+  { key: MAX_RETRIES_OVERRIDE_PREFIX, prefix: true, value: "non-negative-integer" },
+  { key: MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY, prefix: false, value: "positive-finite" },
+];
+
+export interface EnqueueRoutingError {
+  code: "routing_inputs_forbidden" | "routing_key_not_allowed" | "routing_value_invalid";
+  key: string;
+  message: string;
+}
+
+function enqueueRoutingRule(key: string): EnqueueRoutingRule | undefined {
+  return ENQUEUE_ROUTING_ALLOWLIST.find((r) =>
+    r.prefix ? key.length > r.key.length && key.startsWith(r.key) : key === r.key,
+  );
+}
+
+function satisfiesEnqueueRule(value: unknown, rule: EnqueueRoutingRule): boolean {
+  if (typeof value !== "number") return false;
+  return rule.value === "positive-finite"
+    ? Number.isFinite(value) && value > 0
+    : Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Validate a caller-supplied genesis routing object against
+ * {@link ENQUEUE_ROUTING_ALLOWLIST}. Returns every violation (empty when the
+ * routing is acceptable). Pure. */
+export function validateEnqueueRouting(routing: unknown): EnqueueRoutingError[] {
+  if (routing === null || typeof routing !== "object" || Array.isArray(routing)) {
+    return [{ code: "routing_value_invalid", key: "routing", message: "routing must be an object" }];
+  }
+  const errors: EnqueueRoutingError[] = [];
+  for (const [key, value] of Object.entries(routing as Record<string, unknown>)) {
+    if (key === INPUTS_KEY) {
+      errors.push({
+        code: "routing_inputs_forbidden",
+        key,
+        message: "routing.inputs is not accepted; pass run inputs through the typed `inputs` field",
+      });
+      continue;
+    }
+    const rule = enqueueRoutingRule(key);
+    if (rule === undefined) {
+      errors.push({
+        code: "routing_key_not_allowed",
+        key,
+        message: `routing key ${JSON.stringify(key)} is not operator-settable at enqueue`,
+      });
+      continue;
+    }
+    let typed = true;
+    try {
+      validateRoutingPatch({ [key]: value });
+    } catch (err) {
+      if (!(err instanceof RoutingPatchError)) throw err;
+      typed = false;
+    }
+    if (!typed || !satisfiesEnqueueRule(value, rule)) {
+      errors.push({
+        code: "routing_value_invalid",
+        key,
+        message: `routing key ${JSON.stringify(key)} must be a ${
+          rule.value === "positive-finite" ? "positive finite number" : "non-negative integer"
+        }`,
+      });
+    }
+  }
+  return errors;
+}
+
 /** Documentary TypeBox schema describing the LOGICAL namespaces the accessors
  * present. It is the single place the typed view's shape is written down — it
  * is NOT the on-disk serialization (which stays flat + dotted) and is never
@@ -320,13 +417,6 @@ export function readRawInputs(routing: Record<string, unknown>): Record<string, 
   const v = routing[INPUTS_KEY];
   if (v === null || typeof v !== "object" || Array.isArray(v)) return undefined;
   return v as Record<string, unknown>;
-}
-
-/** Whether `routing.inputs` has been seeded. The intent-plane build path uses
- * this to decide whether an explicit `routing.inputs` already won the merge,
- * keeping the presence probe inside the accessor seam. */
-export function hasInputs(routing: Record<string, unknown>): boolean {
-  return routing[INPUTS_KEY] !== undefined;
 }
 
 /** Seed `routing.inputs` on a routing object under construction. The one

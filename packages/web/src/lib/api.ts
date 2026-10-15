@@ -582,8 +582,9 @@ export async function getSkillTree(locId: string): Promise<SkillTreeResponse> {
 }
 
 /** Raw byte fetch for one file under a skill_dir. Returns the body
- * bytes plus the server-asserted Content-Type so the file viewer can
- * dispatch on it (markdown, image, monospace, hex-dump). 403 on
+ * bytes plus the server's Content-Type, which is always inert
+ * (text/plain or octet-stream); the file viewer dispatches on the
+ * extension and uses it only as a fallback. 403 on
  * sandbox escape, 404 when missing, 400 when path is omitted or names
  * a directory. */
 export async function getSkillFile(locId: string, path: string): Promise<{ bytes: Uint8Array; contentType: string }> {

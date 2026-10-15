@@ -169,4 +169,32 @@ describe("claim epoch — a stale fiber is fenced after a crash requeue", () => 
     expect(r.store.getEvents("f7").filter((e) => e.type === "fact.side_effect_intent")).toHaveLength(0);
     r.store.close();
   });
+
+  test("a stale fiber's bound appendMessage and putArtifact throw ClaimLostError without writing", () => {
+    const { r } = setup();
+    const { claimEpoch } = r.store.claimNextRun(1)!;
+    const stale = bindClaim(r.store, claimEpoch);
+    const scope = { runId: "f7", nodeId: "start", iteration: 0, key: "out" };
+    stale.putArtifact(scope, new TextEncoder().encode("fresh"));
+    r.store.startupSweep();
+    r.store.claimNextRun(1);
+    const messagesBefore = r.store.getMessages("f7").length;
+    const artifactsBefore = r.store.listArtifacts("f7").length;
+
+    expect(() =>
+      stale.appendMessage("f7", {
+        content: { role: "user", content: "late", timestamp: 0 },
+        nodeId: "start",
+        iteration: 0,
+      }),
+    ).toThrow(ClaimLostError);
+    expect(() => stale.putArtifact(scope, new TextEncoder().encode("stale"), undefined, { replace: true })).toThrow(
+      ClaimLostError,
+    );
+
+    expect(r.store.getMessages("f7").length).toBe(messagesBefore);
+    expect(r.store.listArtifacts("f7").length).toBe(artifactsBefore);
+    expect(new TextDecoder().decode(r.store.getArtifact(scope))).toBe("fresh");
+    r.store.close();
+  });
 });

@@ -322,6 +322,31 @@ export function selectUnappliedIntents(db: Database, runId: string, sinceSeq: nu
   return db.query<EventRow, [string, number]>(SELECT_EVENTS_UNAPPLIED_INTENTS_SQL).all(runId, sinceSeq);
 }
 
+const SELECT_HAS_PENDING_INTENT_BETWEEN_SQL = `
+  SELECT 1 AS hit
+    FROM events
+   WHERE run_id = ? AND seq > ? AND seq < ? AND writer = 'client'
+     AND type <> 'intent.run_enqueued'
+   LIMIT 1
+`;
+
+/** Whether an operator intent awaiting its fold sits strictly between
+ *  `afterSeq` (the applied watermark) and `beforeSeq`. The genesis
+ *  `intent.run_enqueued` is excluded: it is applied at enqueue and only
+ *  rides above the watermark until the executor's first fold. */
+export function selectHasPendingIntentBetween(
+  db: Database,
+  runId: string,
+  afterSeq: number,
+  beforeSeq: number,
+): boolean {
+  return (
+    db
+      .query<{ hit: number }, [string, number, number]>(SELECT_HAS_PENDING_INTENT_BETWEEN_SQL)
+      .get(runId, afterSeq, beforeSeq) != null
+  );
+}
+
 const SELECT_NEXT_PENDING_INTENT_SQL = `
   SELECT seq, payload
     FROM events

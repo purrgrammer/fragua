@@ -7,6 +7,10 @@
 // Conflict-clause forms (`INSERT OR … INTO`, `UPDATE OR … SET`, `REPLACE INTO`)
 // and CTE-led statements (`WITH x AS (`) count as DML/DQL too.
 //
+// A `+` chain of literal operands is folded into one string before testing, so
+// `"SEL" + "ECT …"` is caught; a non-literal operand ends the fold. Keywords
+// match at `\b` boundaries, so `SELECT*FROM x` (no whitespace) counts.
+//
 // VACUUM / PRAGMA / DROP TABLE / BEGIN / COMMIT / SAVEPOINT are transaction and
 // maintenance control, not table DML, and are not flagged anywhere.
 
@@ -23,9 +27,11 @@ const ALLOWLIST = new Map<string, string>([["migrations.ts", "schema DDL + schem
 
 /** Table DML/DQL that must be centralised in a `*-queries.ts`. */
 const SQL_RE =
-  /\b(SELECT\s|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|REPLACE\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b|UPDATE\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK)\s+[\w".]+\s+SET\b|WITH\s+(?:RECURSIVE\s+)?\w+\s+AS\s*\()/i;
+  /\b(SELECT\b|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|REPLACE\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b|UPDATE\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK)\s+[\w".]+\s+SET\b|WITH\s+(?:RECURSIVE\s+)?\w+\s+AS\s*\()/i;
 
 const CONFLICT_FIXTURE = join(__dirname, "fixtures", "sql-location", "conflict-clauses.ts");
+const CONCAT_FIXTURE = join(__dirname, "fixtures", "sql-location", "concat.ts");
+const NO_SPACE_FIXTURE = join(__dirname, "fixtures", "sql-location", "no-space.ts");
 
 function collectSources(dir: string): string[] {
   const out: string[] = [];
@@ -37,14 +43,62 @@ function collectSources(dir: string): string[] {
   return out;
 }
 
+function skipParens(n: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(n) ? skipParens(n.expression) : n;
+}
+
+function isPlus(n: ts.Node): n is ts.BinaryExpression {
+  return ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken;
+}
+
+/** Operands of a `+` chain, left to right, through parentheses. */
+function plusOperands(n: ts.Expression): ts.Expression[] {
+  const e = skipParens(n);
+  return isPlus(e) ? [...plusOperands(e.left), ...plusOperands(e.right)] : [e];
+}
+
+/** True for the outermost `+` of a chain (its parent, through parentheses, is
+ * not itself a `+`). */
+function isChainRoot(n: ts.BinaryExpression): boolean {
+  let parent = n.parent;
+  while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
+  return !isPlus(parent);
+}
+
+/** Text a literal operand contributes to a concatenation; undefined for a
+ * non-literal operand. */
+function literalText(n: ts.Expression, sf: ts.SourceFile): string | undefined {
+  if (ts.isStringLiteralLike(n)) return n.text;
+  if (ts.isTemplateExpression(n)) return n.getText(sf).slice(1, -1);
+  return undefined;
+}
+
+/** Each maximal run of adjacent literal operands in the chain, joined. */
+function foldedRuns(chain: ts.BinaryExpression, sf: ts.SourceFile): string[] {
+  const runs: string[] = [];
+  let run: string | undefined;
+  for (const operand of plusOperands(chain)) {
+    const text = literalText(operand, sf);
+    if (text === undefined) {
+      if (run !== undefined) runs.push(run);
+      run = undefined;
+    } else run = (run ?? "") + text;
+  }
+  if (run !== undefined) runs.push(run);
+  return runs;
+}
+
 function sqlLiteralLines(sf: ts.SourceFile): number[] {
-  const out: number[] = [];
+  const out = new Set<number>();
+  const lineOfNode = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   walk(sf, (n) => {
     if (ts.isStringLiteralLike(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) {
-      if (SQL_RE.test(n.getText(sf))) out.push(sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1);
+      if (SQL_RE.test(n.getText(sf))) out.add(lineOfNode(n));
+    } else if (isPlus(n) && isChainRoot(n)) {
+      if (foldedRuns(n, sf).some((s) => SQL_RE.test(s))) out.add(lineOfNode(n));
     }
   });
-  return out;
+  return [...out].sort((a, b) => a - b);
 }
 
 function scanString(src: string): number[] {
@@ -99,6 +153,26 @@ describe("SQL lives in *-queries.ts", () => {
       "db.query(`INSERT INTO events (run_id, seq, type, writer, payload, ts)" +
       " VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`).run(r, s, p, t);\n";
     expect(scanString(src)).toEqual([1]);
+  });
+
+  test("flags a SELECT split across a + concatenation (R2-M2)", () => {
+    expect(sqlLiteralLines(parseSource(CONCAT_FIXTURE))).toEqual([6]);
+  });
+
+  test("flags SELECT* with no whitespace after the keyword (R2-M2)", () => {
+    expect(sqlLiteralLines(parseSource(NO_SPACE_FIXTURE))).toEqual([6]);
+  });
+
+  test("reports a matching concat chain once", () => {
+    expect(scanString('const q = "SELECT a " + "FROM t";\n')).toEqual([1]);
+  });
+
+  test("a non-literal operand breaks the fold", () => {
+    expect(scanString('const q = "SEL" + x + "ECT * FROM t";\n')).toHaveLength(0);
+  });
+
+  test('does not flag "selected"', () => {
+    expect(scanString('const label = "selected rows";\n')).toHaveLength(0);
   });
 
   test("does not flag SQL that appears only in a comment", () => {

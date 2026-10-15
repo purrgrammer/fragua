@@ -1,6 +1,6 @@
-// Pins the FileViewer's content-type → renderer dispatch so a server
-// MIME-table change surfaces in CI rather than as a silent UI
-// regression. Each test stubs `fetch` so the per-file query resolves
+// Pins the FileViewer's extension → renderer dispatch (the server serves
+// skill files as inert text/plain or octet-stream), with Content-Type as
+// the fallback for unknown extensions. Each test stubs `fetch` so the per-file query resolves
 // to canned bytes + content-type.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -48,12 +48,19 @@ describe("FileViewer", () => {
     expect(text.textContent).toContain("import sys");
   });
 
-  test("image/* → image viewer", async () => {
-    // Tiny PNG header — enough to assert the dispatch path.
+  test("a .png served as application/octet-stream renders in the image viewer", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    installFileFetch(png, "image/png");
+    installFileFetch(png, "application/octet-stream");
     const { container } = renderWithClient(<FileViewer locId="x" path="assets/hero.png" />);
     expect(await waitFor(() => within(container).getByTestId("file-viewer-image"))).toBeTruthy();
+  });
+
+  test("a .html file served as text/plain renders as raw source", async () => {
+    installFileFetch(enc.encode("<script>alert(1)</script>"), "text/plain; charset=utf-8");
+    const { container } = renderWithClient(<FileViewer locId="x" path="docs/page.html" />);
+    const text = await waitFor(() => within(container).getByTestId("file-viewer-text"));
+    expect(text.textContent).toContain("<script>alert(1)</script>");
+    expect(container.querySelector("script")).toBeNull();
   });
 
   test("unknown content type → hex-dump", async () => {
