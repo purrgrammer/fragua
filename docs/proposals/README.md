@@ -13,7 +13,7 @@ PR, a brief under `.fragua/reports/*/briefs/`, or a dated note in its
 frontmatter saying who picks it up and when. Anything shipped moves to
 [`archive/`](archive/) the day its PR merges; anything untouched for 90 days
 with none of the above moves there too, with its state recorded in the archive
-index so the thinking is not lost. The nightly `assess` run reports doc drift,
+index so the thinking is not lost. The nightly `fidelity` run reports doc drift,
 and a stale proposal is the most common kind.
 
 ## Live
