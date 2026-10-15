@@ -6,7 +6,6 @@
 // ARCHITECTURE.md §6.1.
 
 import {
-  evaluateBudget,
   GRAPH_GOAL_KEY,
   getInputs,
   getLimits,
@@ -19,22 +18,25 @@ import {
   utf8Truncate,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
-import {
-  EVENT_CONTRACT_VERSION,
-  type FactEvent,
-  MIN_COMPATIBLE_CONTRACT_VERSION,
-  materializeRouting,
-  type RunState,
-} from "@fragua/store";
-import { classifyExit, type ExitKind, planAbortLoop, planExit } from "./abort-planner.ts";
+import { EVENT_CONTRACT_VERSION, type FactEvent, MIN_COMPATIBLE_CONTRACT_VERSION, type RunState } from "@fragua/store";
+import { classifyExit, planAbortLoop } from "./abort-planner.ts";
 import type { TitleRequest } from "./auto-titler.ts";
 import {
+  buildEffectiveRouting,
+  type ExitArgs,
+  emitDropped,
+  planExitCommit,
+  planTransitionCommit,
+  replanTransition,
+  type TransitionArgs,
+} from "./dispatch-replan.ts";
+import {
+  BudgetTripError,
   buildDispatchContext,
   graphFor,
   invalidateOutputsCacheIf,
-  type ObservabilitySink,
+  makeReactiveBudgetGate,
   type RunDeps,
-  type UsageAccumulator,
 } from "./dispatch-wiring.ts";
 import {
   classifyAbortCause,
@@ -49,15 +51,20 @@ import {
 import { runFanout } from "./fanout.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { planDispatchStarted, planOperatorPause, planRunStarted } from "./lifecycle-planner.ts";
-import { commitParkOrTerminal, commitWithOcc, type DispatchOutcome, occAppendOnce } from "./occ-append.ts";
+import {
+  commitParkOrTerminal,
+  commitWithOcc,
+  type DispatchOutcome,
+  type OccReplan,
+  occAppendOnce,
+} from "./occ-append.ts";
 import { planPreDispatch } from "./predispatch-planner.ts";
 import { cancelToFacts } from "./result-to-facts.ts";
-import { countDispatch, type RunTurnState, recordAbort, resetAborts } from "./run-turn-state.ts";
+import { countDispatch, type RunTurnState, recordAbort, recordLeakedNode, resetAborts } from "./run-turn-state.ts";
 import { captureBoundarySnapshot } from "./snapshot-service.ts";
-import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
+import { computeAdvanceAppliedTo } from "./transition-planner.ts";
 import type { ProvisionOpts } from "./worktree-provisioner.ts";
 
-type HandlerResult = core.HandlerResult;
 type ProceedDecision = Extract<core.IntentDecision, { kind: "proceed" }>;
 
 /** Statuses on which the turn ends immediately (the run stopped progressing on
@@ -96,15 +103,7 @@ async function dispatchTurn(deps: RunDeps, ts: RunTurnState): Promise<DispatchOu
 
   const unapplied = opts.store.getUnappliedIntents(deps.runId);
   const decision = core.foldIntents(unapplied, runState.status);
-  if (decision.dropped.length > 0) {
-    opts.store.appendObservabilityEvents(
-      deps.runId,
-      decision.dropped.map((d) => ({
-        type: "intent.dropped",
-        payload: { originalSeq: d.seq, originalType: d.type, reason: d.reason },
-      })),
-    );
-  }
+  emitDropped(deps, decision.dropped);
   if (decision.kind === "cancel") return commitCancel(deps, runState, decision);
 
   const effectiveRouting = buildEffectiveRouting(deps, runState, decision);
@@ -118,6 +117,7 @@ async function dispatchTurn(deps: RunDeps, ts: RunTurnState): Promise<DispatchOu
 
   if (needsStart) return startRun(deps, ts, runState, decision, effectiveRouting);
   if (currentNode == null) return { kind: "terminal" };
+  if (ts.leakedNodes.has(currentNode)) return { kind: "terminal" };
 
   const deferredPause = readPauseAfterDispatch(effectiveRouting);
   if (graphFor(deps, ts, runState.workflowSha)?.nodes[currentNode]?.type === "parallel") {
@@ -163,24 +163,6 @@ async function applyEntryGate(
     },
     entryGate.facts,
   );
-}
-
-/** Effective routing for this turn: the projection view merged with the fold's
- * routing delta, with any `$fragua_blob` inputs materialized. */
-function buildEffectiveRouting(
-  deps: RunDeps,
-  runState: RunState,
-  decision: ProceedDecision,
-): Readonly<Record<string, unknown>> {
-  const rawEffectiveRouting: Readonly<Record<string, unknown>> =
-    Object.keys(decision.routingDelta).length > 0
-      ? { ...runState.routing, ...decision.routingDelta }
-      : runState.routing;
-  return materializeRouting(rawEffectiveRouting as Record<string, unknown>, (sha) => {
-    const bytes = deps.opts.store.readBlob(sha);
-    if (bytes == null) throw new Error(`routing blob missing: ${sha}`);
-    return bytes;
-  });
 }
 
 async function commitCancel(
@@ -412,8 +394,6 @@ async function applyLoopGate(
   );
 }
 
-type ReactiveBudgetPause = { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number };
-
 /** Wire and invoke the handler, classify the outcome (leak / abort / result),
  * and commit through the appropriate arm. */
 async function dispatchHandler(
@@ -431,8 +411,26 @@ async function dispatchHandler(
   const nodeAttrs = graph?.nodes[currentNode]?.attrs;
   const iteration = nodeRetryCount(runState.routing, currentNode);
 
-  let reactiveBudgetHaltDetail: string | undefined;
-  let reactiveBudgetPauseBreach: ReactiveBudgetPause | undefined;
+  const priorNodeBucket = runState.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+  const priorRunFresh = runState.metrics.totalInputTokens + runState.metrics.totalOutputTokens;
+  const overrides = readBudgetOverrides(effectiveRouting);
+  const gate = makeReactiveBudgetGate({
+    nodeId: currentNode,
+    iteration,
+    graphAttrs: graph?.attrs ?? {},
+    nodeAttrs,
+    read: (turn) => ({
+      cumulativeCostUsd: runState.metrics.totalCostUsd + turn.totalCostUsd,
+      cumulativeTokens: priorRunFresh + turn.turnBilled,
+      nodeCumulativeCostUsd: priorNodeBucket.costUsd + turn.totalCostUsd,
+      nodeCumulativeTokens: priorNodeBucket.tokens + turn.turnBilled,
+      alreadyWarned: readBudgetWarned(effectiveRouting),
+      ...(overrides !== undefined ? { overrides } : {}),
+    }),
+    onTrip: (plan, w) => {
+      w.steerCtrl.abort(new BudgetTripError(plan.haltDetail !== undefined ? "halt" : "pause"));
+    },
+  });
 
   const built = buildDispatchContext({
     deps,
@@ -445,39 +443,9 @@ async function dispatchHandler(
     nodeAttrs,
     initialVersion: runState.version,
     obsLabel: "linear",
-    onCostRecorded: (payload, w) => {
-      w.usage.mirrorCostRecorded(payload);
-      if (reactiveBudgetHaltDetail !== undefined || reactiveBudgetPauseBreach !== undefined) return;
-      const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
-      const priorNodeBucket = runState.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
-      const priorRunFresh = runState.metrics.totalInputTokens + runState.metrics.totalOutputTokens;
-      const turn = w.usage.totals();
-      const overrides = readBudgetOverrides(effectiveRouting);
-      const reactive = evaluateBudget({
-        graphAttrs: graph?.attrs ?? {},
-        ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
-        completedNodeId: currentNode,
-        cumulativeCostUsd: runState.metrics.totalCostUsd + turn.totalCostUsd,
-        cumulativeTokens: priorRunFresh + turn.turnBilled,
-        nodeCumulativeCostUsd: priorNodeBucket.costUsd + turn.totalCostUsd,
-        nodeCumulativeTokens: priorNodeBucket.tokens + turn.turnBilled,
-        alreadyWarned: readBudgetWarned(effectiveRouting),
-        ...(overrides !== undefined ? { overrides } : {}),
-      });
-      if (reactive.shouldHalt) {
-        reactiveBudgetHaltDetail = reactive.haltReason ?? "";
-        for (const ev of reactive.events)
-          w.obs.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
-        w.steerCtrl.abort(new Error("budget"));
-      } else if (reactive.pauseBreach !== undefined) {
-        reactiveBudgetPauseBreach = reactive.pauseBreach;
-        for (const ev of reactive.events)
-          w.obs.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
-        w.steerCtrl.abort(new Error("budget_pause"));
-      }
-    },
+    onCostRecorded: gate.onCostRecorded,
   });
-  const { steerCtrl, signal, releaseSignal, deadlines, recorder, obs, usage, ctxOpts } = built;
+  const { steerCtrl, sources, releaseSignal, deadlines, recorder, obs, usage, ctxOpts } = built;
   if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
   const pendingSteer = readPendingSteer(effectiveRouting);
   const mergedSteer = [pendingSteer, decision.steering].filter((s): s is string => s != null && s.length > 0);
@@ -507,18 +475,16 @@ async function dispatchHandler(
   const thrown = invocation.kind === "thrown" ? invocation : undefined;
   const exit = classifyExit({
     invocation: invocation.kind,
-    abortByName: thrown?.abortByName ?? false,
-    signalAborted: signal.aborted,
-    shutdownAborted: opts.shutdownSignal.aborted,
-    abortCause: thrown !== undefined ? classifyAbortCause(signal, thrown.error) : "aborted",
-    budgetTripped: reactiveBudgetHaltDetail !== undefined || reactiveBudgetPauseBreach !== undefined,
+    cause: classifyAbortCause(sources),
+    budgetTripped: gate.tripped() !== undefined,
   });
+  const trip = gate.tripped();
   const exitArgs: ExitArgs = {
     exit,
     currentNode,
     iteration,
-    reactiveBudgetHaltDetail,
-    reactiveBudgetPauseBreach,
+    reactiveBudgetHaltDetail: trip?.haltDetail,
+    reactiveBudgetPauseBreach: trip?.pauseBreach,
     usage,
     effectiveRouting,
     spec,
@@ -567,7 +533,9 @@ async function invokeHandlerFor(
 }
 
 /** Leak arm: the exit plan halts the run (a leaked handler is unrecoverable)
- * with the turn's spend, then the leak budget is bumped. */
+ * with the turn's spend, then the leak budget is bumped. The node is marked
+ * leaked first, so this fiber never dispatches it again even if the halt is
+ * still contended. */
 async function commitLeak(
   deps: RunDeps,
   ts: RunTurnState,
@@ -575,22 +543,10 @@ async function commitLeak(
   decision: ProceedDecision,
   a: ExitArgs,
 ): Promise<DispatchOutcome> {
+  recordLeakedNode(ts, a.currentNode);
   const outcome = await commitExit(deps, ts, runState, decision, a);
   deps.leakBudget.recordLeak(deps.runId, a.currentNode);
   return outcome;
-}
-
-interface ExitArgs {
-  exit: ExitKind;
-  currentNode: string;
-  iteration: number;
-  errorDetail?: string;
-  reactiveBudgetHaltDetail: string | undefined;
-  reactiveBudgetPauseBreach: ReactiveBudgetPause | undefined;
-  usage: UsageAccumulator;
-  effectiveRouting: Readonly<Record<string, unknown>>;
-  spec: core.HandlerSpec;
-  recorder: { version: () => number };
 }
 
 /** Exit arm: the pure exit plan (leak / reactive-budget halt or pause /
@@ -605,30 +561,20 @@ async function commitExit(
 ): Promise<DispatchOutcome> {
   const opts = deps.opts;
   const { currentNode, iteration, recorder } = a;
-  const plan = planExit({
-    exit: a.exit,
-    currentNode,
-    iteration,
-    ...(a.errorDetail !== undefined ? { errorDetail: a.errorDetail } : {}),
-    leakedAt: deps.clock(),
-    reactiveBudgetHaltDetail: a.reactiveBudgetHaltDetail,
-    reactiveBudgetPauseBreach: a.reactiveBudgetPauseBreach,
-    usage: a.usage.totals(),
-    routingDelta: decision.routingDelta,
-    appliedSeqs: decision.appliedSeqs,
-    effectiveRouting: a.effectiveRouting,
-    now: deps.clock(),
-    attemptedMs: a.spec.maxMs ?? 0,
-  });
-  const appendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
-  if (plan.routingPatch !== undefined) appendOpts.routingPatch = plan.routingPatch;
-  if (plan.advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = plan.advanceAppliedTo;
+  const first = planExitCommit(deps, decision, a, a.effectiveRouting, recorder.version());
+  const plan = first.plan;
   const occCommit = {
     occ: deps.occ,
     nodeId: currentNode,
     iteration,
     expectedVersion: recorder.version(),
-    commit: occAppendOnce(opts.store, deps.runId, recorder.version(), appendOpts),
+    commit: first.commit,
+    readState: () => opts.store.getState(deps.runId),
+    replan: (fresh: RunState): OccReplan | undefined => {
+      const next = planExitCommit(deps, decision, a, buildEffectiveRouting(deps, fresh, decision), fresh.version);
+      if (next.plan.outcome !== plan.outcome) return undefined;
+      return { facts: next.plan.facts, expectedVersion: fresh.version, commit: next.commit };
+    },
   };
 
   if (plan.outcome === "timeout_retry") {
@@ -651,7 +597,7 @@ async function commitExit(
         nodeId: currentNode,
         iteration,
         expectedVersion: recorder.version(),
-        appendOpts,
+        appendOpts: first.appendOpts,
       },
       plan.facts,
     );
@@ -701,17 +647,6 @@ async function commitExit(
   );
 }
 
-interface TransitionArgs {
-  currentNode: string;
-  iteration: number;
-  result: HandlerResult;
-  usage: UsageAccumulator;
-  effectiveRouting: Readonly<Record<string, unknown>>;
-  deferredPause: boolean;
-  obs: ObservabilitySink;
-  recorder: { version: () => number };
-}
-
 function notifyNodeExited(deps: RunDeps, nodeId: string): void {
   if (deps.opts.onNodeExited === undefined) return;
   if (deps.opts.store.getState(deps.runId)?.currentNode === nodeId) return;
@@ -719,7 +654,9 @@ function notifyNodeExited(deps: RunDeps, nodeId: string): void {
 }
 
 /** Transition arm: the pure plan (edge selection → facts → routing patch)
- * applied under OCC, then the boundary snapshot. */
+ * applied under OCC, then the boundary snapshot. A version-only conflict
+ * re-folds the intents and re-plans the SAME handler result against fresh
+ * state, so the handler never re-runs and its spend lands exactly once. */
 async function commitTransition(
   deps: RunDeps,
   ts: RunTurnState,
@@ -728,28 +665,10 @@ async function commitTransition(
   a: TransitionArgs,
 ): Promise<DispatchOutcome> {
   const opts = deps.opts;
-  const { currentNode, iteration, obs, recorder } = a;
-  const planDecision =
-    a.deferredPause && !decision.shouldPauseAfterDispatch ? { ...decision, shouldPauseAfterDispatch: true } : decision;
-  const plan = planTransition({
-    state: runState,
-    decision: planDecision,
-    graph: graphFor(deps, ts, runState.workflowSha),
-    handlerResult: a.result,
-    accounting: a.usage.totals(),
-    effectiveRouting: a.effectiveRouting,
-    currentNode,
-    iteration,
-    now: deps.clock(),
-    random: deps.random,
-    providerRetryAfterMaxMs: deps.providerRetryAfterMaxMs,
-  });
-  for (const ev of plan.observability) obs.push(ev);
+  const { currentNode, obs, recorder } = a;
+  const first = planTransitionCommit(deps, ts, runState, decision, a, a.effectiveRouting, recorder.version());
+  for (const ev of first.observability) obs.push(ev);
   obs.flush();
-  const facts = plan.facts;
-  const appendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
-  if (plan.routingPatch !== undefined) appendOpts.routingPatch = plan.routingPatch;
-  if (plan.advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = plan.advanceAppliedTo;
   const turnIteration = nodeRetryCount(runState.routing, currentNode);
   return commitWithOcc(
     {
@@ -757,17 +676,19 @@ async function commitTransition(
       nodeId: currentNode,
       iteration: turnIteration,
       expectedVersion: recorder.version(),
-      attemptedFactType: facts[0]?.type ?? "fact.unknown",
-      commit: occAppendOnce(opts.store, deps.runId, recorder.version(), appendOpts),
+      attemptedFactType: first.facts[0]?.type ?? "fact.unknown",
+      commit: first.commit,
       successOutcome: { kind: "continue" },
       statusOutcome: { kind: "continue" },
-      onSuccess: async () => {
+      readState: () => opts.store.getState(deps.runId),
+      replan: (fresh) => replanTransition(deps, ts, fresh, decision, a),
+      onSuccess: async (landed) => {
         deps.occ.onResolved(currentNode, turnIteration);
-        invalidateOutputsCacheIf(ts, facts);
-        await captureBoundarySnapshot(opts, deps.runId, facts, currentNode);
+        invalidateOutputsCacheIf(ts, landed);
+        await captureBoundarySnapshot(opts, deps.runId, landed, currentNode);
         notifyNodeExited(deps, currentNode);
       },
     },
-    facts,
+    first.facts,
   );
 }

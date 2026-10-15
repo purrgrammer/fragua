@@ -20,6 +20,7 @@ import {
   type IDaemonCoordinator,
   type IEventReader,
   type IEventWriter,
+  PayloadTooLargeError,
 } from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
@@ -29,7 +30,7 @@ import { dispatchOne } from "./dispatch-turn.ts";
 import type { RunDeps } from "./dispatch-wiring.ts";
 import { errorMessage, sleep, TERMINAL_STATUSES } from "./executor-helpers.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
-import { planCrashHalt } from "./lifecycle-planner.ts";
+import { planCrashHalt, planCrashHaltMinimal } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController, type OccController } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { PROVIDER_RETRY_AFTER_MAX_MS } from "./provider-retry-policy.ts";
@@ -294,26 +295,57 @@ async function runOneGuarded(runId: string, opts: ExecutorOpts, epoch: number, l
     // ceiling rather than silently rethrowing with the terminal fact
     // lost. The store's startupSweep is only a last-resort backstop for a
     // process that dies mid-recovery, not the primary recovery path.
-    const state = opts.store.getState(runId);
-    if (state != null && state.status === "running") {
-      const nodeId = state.currentNode ?? "<no-node>";
-      const errorFacts: FactEvent[] = planCrashHalt({
-        detail: `executor crashed at ${nodeId}: ${errorMessage(err)}`,
-      }).facts;
-      const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
-      for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
-        const fresh = opts.store.getState(runId);
-        if (fresh == null || fresh.status !== "running") break;
-        const outcome = await commitParkOrTerminal(
-          { store: opts.store, runId, occ, nodeId, iteration: 0, expectedVersion: fresh.version },
-          errorFacts,
-        );
-        if (outcome.kind === "terminal") break;
-      }
-      releaseIfAbandoned(runId, opts, epoch, occ);
-    }
+    await commitCrashHalt(runId, opts, epoch, err);
     throw err;
   }
+}
+
+/** Terminalise a run whose body escaped without doing so. The clipped crash
+ * halt is tried first; if the store still rejects it as too large, a fixed
+ * minimal detail is committed instead. A run still `running` afterwards (every
+ * append lost, or abandoned at the OCC ceiling) gives its claim back. */
+async function commitCrashHalt(runId: string, opts: ExecutorOpts, epoch: number, err: unknown): Promise<void> {
+  const state = opts.store.getState(runId);
+  if (state == null || state.status !== "running") return;
+  const nodeId = state.currentNode ?? "<no-node>";
+  const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
+  try {
+    await driveCrashHalt(
+      runId,
+      opts,
+      occ,
+      nodeId,
+      planCrashHalt({ detail: `executor crashed at ${nodeId}: ${errorMessage(err)}` }).facts,
+    );
+  } catch (appendErr) {
+    if (!(appendErr instanceof PayloadTooLargeError)) throw appendErr;
+    await driveCrashHalt(runId, opts, occ, nodeId, planCrashHaltMinimal().facts);
+  }
+  releaseIfAbandoned(runId, opts, epoch, occ);
+  releaseIfStillRunning(runId, opts, epoch);
+}
+
+async function driveCrashHalt(
+  runId: string,
+  opts: ExecutorOpts,
+  occ: OccController,
+  nodeId: string,
+  facts: FactEvent[],
+): Promise<void> {
+  for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
+    const fresh = opts.store.getState(runId);
+    if (fresh == null || fresh.status !== "running") return;
+    const outcome = await commitParkOrTerminal(
+      { store: opts.store, runId, occ, nodeId, iteration: 0, expectedVersion: fresh.version },
+      facts,
+    );
+    if (outcome.kind === "terminal") return;
+  }
+}
+
+function releaseIfStillRunning(runId: string, opts: ExecutorOpts, epoch: number): void {
+  if (opts.store.getState(runId)?.status !== "running") return;
+  opts.store.releaseClaim(runId, epoch, { lastAliveAt: (opts.clock ?? Date.now)() });
 }
 
 /** Every `occ_exhausted` halt append lost its race and the run is still
@@ -350,6 +382,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, epoch: number, lea
       if (outcome.kind === "terminal") break;
     }
     releaseIfAbandoned(runId, opts, epoch, occ);
+    if (state.leakedNodes.size > 0) releaseIfStillRunning(runId, opts, epoch);
   } finally {
     // On a hard-terminal status, capture the terminal snapshot and dispose
     // the worktree (gated on the snapshot fact landing). See snapshot-service.

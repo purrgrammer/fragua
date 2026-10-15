@@ -11,6 +11,7 @@
 // Both take only the store + provisioner, not the full ExecutorOpts, so the
 // service has no dependency on the loop's other knobs.
 
+import { clipPayloadText } from "@fragua/core";
 import type { FactEvent, IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
 import { TERMINAL_STATUSES } from "./executor-helpers.ts";
 import { tryAppendFact } from "./occ-append.ts";
@@ -81,7 +82,9 @@ export async function captureBoundarySnapshot(
         payload: {
           runId,
           ok: false,
-          errorDetail: `${boundary} snapshot failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          errorDetail: clipPayloadText(
+            `${boundary} snapshot failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          ),
         },
       },
       { runId },
@@ -156,7 +159,9 @@ export async function disposeTerminalWorktree(deps: SnapshotDeps, runId: string)
         payload: {
           runId,
           ok: false,
-          errorDetail: `terminal snapshot failed, worktree retained for recovery: ${err instanceof Error ? err.message : String(err)}`,
+          errorDetail: clipPayloadText(
+            `terminal snapshot failed, worktree retained for recovery: ${err instanceof Error ? err.message : String(err)}`,
+          ),
         },
       },
       { runId },
@@ -173,7 +178,7 @@ export async function disposeTerminalWorktree(deps: SnapshotDeps, runId: string)
           payload: {
             runId,
             ok: false,
-            errorDetail: `dispose failed: ${err instanceof Error ? err.message : String(err)}`,
+            errorDetail: clipPayloadText(`dispose failed: ${err instanceof Error ? err.message : String(err)}`),
           },
         },
         { runId },

@@ -24,7 +24,7 @@ import {
   utf8Truncate,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
-import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type RunState } from "@fragua/store";
+import type { FactEvent, RunState } from "@fragua/store";
 import {
   classifyExit,
   type ExitKind,
@@ -34,16 +34,18 @@ import {
   planExit,
 } from "./abort-planner.ts";
 import {
+  type BudgetCumulative,
+  BudgetTripError,
   buildDispatchContext,
   type FanoutAppendOpts,
   graphFor,
-  invalidateOutputsCacheIf,
+  makeReactiveBudgetGate,
   mergeFanoutAppendOpts,
+  type ReactiveBudgetGate,
   type RunDeps,
   type UsageAccumulator,
 } from "./dispatch-wiring.ts";
 import {
-  BUDGET_WARNED_KEY,
   classifyAbortCause,
   errorMessage,
   fireNodeExited,
@@ -52,6 +54,7 @@ import {
   readBudgetWarned,
   sleep,
 } from "./executor-helpers.ts";
+import { abortedActiveBranches, commitFanoutFact } from "./fanout-commit.ts";
 import {
   type FanoutPlan,
   noteDisposition,
@@ -65,7 +68,7 @@ import {
 import { FanoutBailError, PROCEED_DECISION, type ProceedDecision, Semaphore } from "./fanout-support.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { planDispatchStarted } from "./lifecycle-planner.ts";
-import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
+import { commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
 import { planLoopCeiling } from "./predispatch-planner.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
@@ -73,9 +76,6 @@ import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts
 /** Default cap on concurrent in-flight fan-out sub-nodes when a `parallel` node
  * declares no `concurrency:`. */
 const DEFAULT_FANOUT_CONCURRENCY = 8;
-
-/** Append attempts for a serialized fan-out commit before giving up. */
-const FANOUT_COMMIT_ATTEMPTS = 8;
 
 /** Outcome of executing one fan-out branch sub-node. A non-result exit carries
  * the same `planExit` plan the linear path commits. */
@@ -92,57 +92,6 @@ interface InflightBranch {
   pass: number;
 }
 
-/** Active fan-out branches whose latest lifecycle fact is `node_aborted` — they
- * are being re-dispatched and need a fresh `dispatch_started` so they project as
- * running, not failed. */
-function abortedActiveBranches(store: IEventReader, runId: string, active: readonly string[]): string[] {
-  if (active.length === 0) return [];
-  const latest = new Map(store.getLatestLifecycleByNode(runId).map((r) => [r.nodeId, r.type]));
-  return active.filter((n) => latest.get(n) === "fact.node_aborted");
-}
-
-/** Serialized fan-out commit lane. Re-reads the live version each attempt; a
- * sibling's commit having moved `version` is benign — retry the APPEND (never
- * re-execute). The `false` arm is TAGGED: `status` ⇒ the run left `running`,
- * `claim_lost` ⇒ the run was requeued / re-claimed (never retried), `occ` ⇒
- * genuine OCC exhaustion. */
-async function commitFanoutFact(
-  deps: RunDeps,
-  ts: RunTurnState,
-  facts: FactEvent[],
-  appendOpts: FanoutAppendOpts,
-): Promise<CommitResult> {
-  if (facts.length === 0) return { ok: true };
-  const store = deps.opts.store;
-  for (let attempt = 0; attempt < FANOUT_COMMIT_ATTEMPTS; attempt++) {
-    const fresh = store.getState(deps.runId);
-    if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
-    let effectiveOpts = appendOpts;
-    if (ts.pendingWarnTags.size > 0) {
-      const prior = readBudgetWarned(fresh.routing);
-      const merged = new Set(prior);
-      for (const t of ts.pendingWarnTags) merged.add(t);
-      if (merged.size > prior.size) {
-        effectiveOpts = {
-          ...appendOpts,
-          routingPatch: { ...(appendOpts.routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() },
-        };
-      }
-    }
-    try {
-      const res = store.appendFact(deps.runId, facts, fresh.version, effectiveOpts);
-      ts.lastFanoutState = res.state;
-      invalidateOutputsCacheIf(ts, facts);
-      return { ok: true };
-    } catch (err) {
-      if (err instanceof ClaimLostError) return { ok: false, reason: "claim_lost" };
-      if (!(err instanceof ConcurrencyError)) throw err;
-    }
-    await sleep(Math.min(2 ** attempt, 16), deps.opts.shutdownSignal);
-  }
-  return { ok: false, reason: "occ" };
-}
-
 /** Execute one fan-out branch sub-node: build ctx → invoke → plan the completion,
  * returning NODE-scoped facts WITHOUT committing (the pool serializes commits). */
 async function executeBranchNode(
@@ -154,6 +103,7 @@ async function executeBranchNode(
   branchTimeoutMs: number,
   foldSteer: string | undefined,
   inflight: Map<string, InflightBranch>,
+  gate: ReactiveBudgetGate,
 ): Promise<BranchOutcome> {
   const graph = graphFor(deps, ts, baseState.workflowSha);
   const spec = deps.opts.dispatcher.get(baseState.workflowSha, branchNode);
@@ -172,9 +122,9 @@ async function executeBranchNode(
     initialVersion: baseState.version,
     obsLabel: "fan-out",
     backstopMs: branchTimeoutMs,
-    onCostRecorded: (payload, w) => w.usage.mirrorCostRecorded(payload),
+    onCostRecorded: gate.onCostRecorded,
   });
-  const { steerCtrl, signal, releaseSignal, deadlines, obs, usage, ctxOpts } = built;
+  const { steerCtrl, sources, releaseSignal, deadlines, obs, usage, ctxOpts } = built;
   const branchSteer = [readPendingSteer(branchRouting as Record<string, unknown>), foldSteer].filter(
     (s): s is string => s != null && s.length > 0,
   );
@@ -198,13 +148,11 @@ async function executeBranchNode(
 
   if (invocation.kind !== "result") {
     const thrown = invocation.kind === "thrown" ? invocation : undefined;
+    const trip = gate.tripped();
     const exit = classifyExit({
       invocation: invocation.kind,
-      abortByName: thrown?.abortByName ?? false,
-      signalAborted: signal.aborted,
-      shutdownAborted: deps.opts.shutdownSignal.aborted,
-      abortCause: thrown !== undefined ? classifyAbortCause(signal, thrown.error) : "aborted",
-      budgetTripped: false,
+      cause: classifyAbortCause(sources),
+      budgetTripped: trip !== undefined,
     });
     const now = deps.clock();
     const plan = planExit({
@@ -213,8 +161,8 @@ async function executeBranchNode(
       iteration,
       ...(thrown !== undefined ? { errorDetail: errorMessage(thrown.error) } : {}),
       leakedAt: now,
-      reactiveBudgetHaltDetail: undefined,
-      reactiveBudgetPauseBreach: undefined,
+      reactiveBudgetHaltDetail: trip?.haltDetail,
+      reactiveBudgetPauseBreach: trip?.pauseBreach,
       usage: usage.totals(),
       routingDelta: {},
       appliedSeqs: [],
@@ -283,6 +231,9 @@ interface FanoutCtx {
   poolBailed: boolean;
   freshState: RunState;
   branchEntries: Set<string>;
+  /** Set once a branch's reactive budget gate trips mid-handler: every live
+   * branch is stopped and no successor is dispatched. */
+  budgetTrip: boolean;
 }
 
 /** Consume the operator fold once — the first commit applies the routing delta
@@ -384,6 +335,59 @@ function routingForBranch(ctx: FanoutCtx, nodeId: string): Readonly<Record<strin
   return { ...ctx.liveRouting, [OPERATOR_NOTES_KEY]: [] };
 }
 
+/** The reactive budget gate for one fan-out branch. It evaluates the parallel
+ * node's run and closure caps against the last committed projection plus the
+ * live spend of every in-flight branch, so a branch is stopped at the same
+ * crossing the linear path stops at. A trip stops every live branch. */
+function branchBudgetGate(ctx: FanoutCtx): ReactiveBudgetGate {
+  const { deps, ts } = ctx;
+  return makeReactiveBudgetGate({
+    nodeId: ctx.parallelNode,
+    iteration: ctx.iteration,
+    graphAttrs: ctx.graph?.attrs ?? {},
+    nodeAttrs: ctx.node?.attrs,
+    read: () => fanoutLiveCumulative(ctx),
+    suppressed: () => ctx.budgetTrip,
+    onTrip: (plan) => {
+      ctx.budgetTrip = true;
+      for (const t of plan.newlyWarned) ts.pendingWarnTags.add(t);
+      const reason = new BudgetTripError(plan.haltDetail !== undefined ? "halt" : "pause");
+      for (const h of deps.opts.registry.liveHandlers(deps.runId)) h.controller.abort(reason);
+    },
+  });
+}
+
+function fanoutLiveCumulative(ctx: FanoutCtx): BudgetCumulative {
+  const { deps, ts, runState, decision, closureNodes } = ctx;
+  const folded = ts.lastFanoutState ?? deps.opts.store.getState(deps.runId) ?? runState;
+  let liveCost = 0;
+  let liveTokens = 0;
+  for (const b of ctx.inflight.values()) {
+    const t = b.usage.totals();
+    liveCost += t.totalCostUsd;
+    liveTokens += t.turnBilled;
+  }
+  let nodeCost = 0;
+  let nodeTokens = 0;
+  for (const id of closureNodes) {
+    const bucket = folded.metrics.nodeCosts[id];
+    if (bucket === undefined) continue;
+    nodeCost += bucket.costUsd;
+    nodeTokens += bucket.tokens;
+  }
+  const overrideRouting =
+    Object.keys(decision.routingDelta).length > 0 ? { ...folded.routing, ...decision.routingDelta } : folded.routing;
+  const overrides = readBudgetOverrides(overrideRouting);
+  return {
+    cumulativeCostUsd: folded.metrics.totalCostUsd + liveCost,
+    cumulativeTokens: folded.metrics.totalInputTokens + folded.metrics.totalOutputTokens + liveTokens,
+    nodeCumulativeCostUsd: nodeCost + liveCost,
+    nodeCumulativeTokens: nodeTokens + liveTokens,
+    alreadyWarned: new Set([...readBudgetWarned(folded.routing), ...ts.pendingWarnTags]),
+    ...(overrides !== undefined ? { overrides } : {}),
+  };
+}
+
 /** Capture a run-level budget breach into the single disposition slot (halt over
  * pause precedence). */
 function captureDisposition(ctx: FanoutCtx): void {
@@ -395,6 +399,7 @@ function captureDisposition(ctx: FanoutCtx): void {
 /** Drive one sub-node into the reactive pool (bounded by the semaphore and the
  * loop budget). */
 function poolDispatch(ctx: FanoutCtx, nodeId: string): void {
+  if (ctx.budgetTrip) return;
   const ceiling = planLoopCeiling({ dispatches: ctx.ts.dispatches, effectiveMaxLoops: ctx.effectiveMaxLoops });
   if (ceiling !== undefined) {
     ctx.disposition = noteDisposition(ctx.disposition, ceiling);
@@ -418,6 +423,7 @@ function poolDispatch(ctx: FanoutCtx, nodeId: string): void {
             ctx.branchTimeoutMs,
             ctx.decision.steering,
             ctx.inflight,
+            branchBudgetGate(ctx),
           ),
         };
       } finally {
@@ -774,6 +780,7 @@ export async function runFanout(
     poolBailed: false,
     freshState: runState,
     branchEntries: new Set(branches),
+    budgetTrip: false,
   };
 
   if (ts.pendingFanoutDisposition !== undefined) return commitFanoutDisposition(ctx, ts.pendingFanoutDisposition);

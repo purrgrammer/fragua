@@ -4,7 +4,7 @@
 // or runOne's closure state; everything is a pure transformation of its
 // arguments (the lone exceptions, `sleep` and `recordEdgeSelected`, take their
 // effect target as a parameter). executor.ts re-exports the public ones
-// (classifyAbortCause, buildSubstitutionArgs, resolveBackoff) for compatibility.
+// (classifyAbortCause, buildSubstitutionArgs, resolveBackoff).
 
 import {
   BUDGET_WARNED_KEY,
@@ -87,26 +87,34 @@ export function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export const TIMEOUT_SENTINEL: unique symbol = Symbol("timeout-sentinel");
 export type TimeoutSentinel = typeof TIMEOUT_SENTINEL;
 
-export function isAbortError(err: unknown): boolean {
-  if (err instanceof Error) {
-    return err.name === "AbortError" || err.name === "TimeoutError";
-  }
-  return false;
+/** The signals one dispatch composed into `ctx.signal`: the composite the
+ * handler saw, plus each source by identity — the steer controller (operator,
+ * steer, budget, fan-out bail, leak trip), the daemon shutdown signal, and the
+ * armed wall-clock deadlines. */
+export interface DispatchSignals {
+  composite: AbortSignal;
+  steer: AbortSignal;
+  shutdown: AbortSignal;
+  deadlines: readonly AbortSignal[];
 }
 
+/** Which dispatch signal ended the handler. `none` ⇒ no dispatch signal had
+ * fired, so whatever the handler threw is its own error. */
+export type AbortCause = "timeout" | "shutdown" | "aborted" | "none";
+
 /**
- * Decide whether an abort was due to the node's own maxMs deadline
- * or an operator / shutdown / steer signal. Reads `signal.reason`
- * first (set by the aborting source via `AbortSignal.any`'s
- * reason-propagation) and falls back to the thrown error's name.
- * A TimeoutError reason indicates the `AbortSignal.timeout(maxMs)`
- * branch tripped; any other error name means an explicit abort
- * tripped first.
+ * Classify a non-result exit by the dispatch signal that fired, never by the
+ * thrown error's name — an inner library `TimeoutError` / `AbortError` thrown
+ * while every dispatch signal is live is a plain error. The composite carries
+ * the first-firing source's reason, so a deadline is matched by reason
+ * identity. A daemon shutdown wins over a steer that fired alongside it, and a
+ * deadline wins over both (the deadline fired first).
  */
-export function classifyAbortCause(signal: AbortSignal, err: unknown): "timeout" | "aborted" {
-  const reason = signal.aborted ? signal.reason : undefined;
-  if (reason instanceof Error && reason.name === "TimeoutError") return "timeout";
-  if (err instanceof Error && err.name === "TimeoutError") return "timeout";
+export function classifyAbortCause(sources: DispatchSignals): AbortCause {
+  const { composite } = sources;
+  if (!composite.aborted) return "none";
+  if (sources.deadlines.some((d) => d.aborted && d.reason === composite.reason)) return "timeout";
+  if (sources.shutdown.aborted) return "shutdown";
   return "aborted";
 }
 
@@ -265,8 +273,8 @@ export function readNumber(v: unknown): number {
 }
 
 /** A clearable replacement for `AbortSignal.timeout(ms)`: a plain setTimeout
- * aborting with a TimeoutError-named reason (so `classifyAbortCause` still
- * reads "timeout") plus a disarm. AbortSignal.timeout's timer is
+ * aborting with a fresh TimeoutError-named reason (whose identity is how
+ * `classifyAbortCause` recognises the deadline) plus a disarm. AbortSignal.timeout's timer is
  * uncancellable — armed per dispatch it kept the composite signal, and every
  * abort listener's closure hanging off it, reachable for the FULL deadline
  * after a seconds-long dispatch settled; a wide fan-out multiplied that by

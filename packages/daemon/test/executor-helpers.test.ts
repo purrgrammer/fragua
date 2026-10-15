@@ -8,7 +8,6 @@ import {
   composeAbortSignals,
   deriveResumeOf,
   errorMessage,
-  isAbortError,
   maxRetriesOverrideKey,
   mergeRoutingPatches,
   nodeRetryCount,
@@ -42,33 +41,26 @@ describe("executor-helpers", () => {
     expect(nodeRetryCount({ [retryCountKey("work")]: Number.NaN }, "work")).toBe(0);
   });
 
-  test("isAbortError matches only AbortError / TimeoutError names", () => {
-    const abort = new Error("x");
-    abort.name = "AbortError";
-    const timeout = new Error("x");
-    timeout.name = "TimeoutError";
-    expect(isAbortError(abort)).toBe(true);
-    expect(isAbortError(timeout)).toBe(true);
-    expect(isAbortError(new Error("plain"))).toBe(false);
-    expect(isAbortError("nope")).toBe(false);
-  });
-
-  test("classifyAbortCause prefers a TimeoutError signal reason, then the thrown name", () => {
-    const timeoutReason = new Error("t");
-    timeoutReason.name = "TimeoutError";
-    const ac1 = new AbortController();
-    ac1.abort(timeoutReason);
-    expect(classifyAbortCause(ac1.signal, new Error("whatever"))).toBe("timeout");
-
-    const ac2 = new AbortController();
-    ac2.abort(new Error("operator"));
-    expect(classifyAbortCause(ac2.signal, new Error("plain"))).toBe("aborted");
-
-    const thrownTimeout = new Error("t");
-    thrownTimeout.name = "TimeoutError";
-    const ac3 = new AbortController();
-    ac3.abort(new Error("operator"));
-    expect(classifyAbortCause(ac3.signal, thrownTimeout)).toBe("timeout");
+  test("classifyAbortCause names the fired source: deadline→timeout, shutdown→shutdown, steer→aborted, none→none", () => {
+    const fire = (fired: "deadline" | "shutdown" | "steer" | "none") => {
+      const steer = new AbortController();
+      const shutdown = new AbortController();
+      const deadline = new AbortController();
+      const { signal } = composeAbortSignals([steer.signal, shutdown.signal, deadline.signal]);
+      if (fired === "deadline") deadline.abort(Object.assign(new Error("deadline"), { name: "TimeoutError" }));
+      if (fired === "shutdown") shutdown.abort();
+      if (fired === "steer") steer.abort(new Error("operator"));
+      return classifyAbortCause({
+        composite: signal,
+        steer: steer.signal,
+        shutdown: shutdown.signal,
+        deadlines: [deadline.signal],
+      });
+    };
+    expect(fire("deadline")).toBe("timeout");
+    expect(fire("shutdown")).toBe("shutdown");
+    expect(fire("steer")).toBe("aborted");
+    expect(fire("none")).toBe("none");
   });
 
   test("errorMessage unwraps Error.message, stringifies the rest", () => {

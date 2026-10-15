@@ -41,10 +41,12 @@ const IO_ALLOWED = new Set<string>([
   "auto-titler.ts",
   "blob-gc.ts",
   "claim-bound-store.ts",
+  "dispatch-replan.ts",
   "dispatch-turn.ts",
   "dispatch-wiring.ts",
   "entrypoint.ts",
   "executor.ts",
+  "fanout-commit.ts",
   "fanout.ts",
   "graph-loader.ts",
   "index.ts",
@@ -220,7 +222,7 @@ describe("decision-core purity discipline", () => {
       /reason:\s*"abort_loop"/,
     ];
     const offenders: string[] = [];
-    for (const name of ["fanout.ts", "dispatch-turn.ts"]) {
+    for (const name of ["fanout.ts", "fanout-commit.ts", "dispatch-turn.ts", "dispatch-replan.ts"]) {
       const lines = readFileSync(join(SRC_DIR, name), "utf8").split("\n");
       lines.forEach((line, i) => {
         const trimmed = line.trimStart();

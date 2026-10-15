@@ -40,6 +40,9 @@ export interface RunTurnState {
   /** Soft budget-warn tags accrued this fan-out run, pending a durable fold
    * into routing (drained onto the next commit by `commitFanoutFact`). */
   pendingWarnTags: Set<string>;
+  /** Nodes whose handler leaked this pass — never dispatched again by this
+   * fiber (the leaked handler may still be running). */
+  leakedNodes: Set<string>;
 }
 
 /** A fresh per-run turn state. */
@@ -58,6 +61,7 @@ export function create(): RunTurnState {
     outputsCacheValid: false,
     lastFanoutState: undefined,
     pendingWarnTags: new Set<string>(),
+    leakedNodes: new Set<string>(),
   };
 }
 
@@ -84,4 +88,9 @@ export function bumpBranchAbort(state: RunTurnState, nodeId: string): void {
 /** Clear a fan-out branch's abort streak after it settles cleanly. */
 export function clearBranchAbort(state: RunTurnState, nodeId: string): void {
   state.branchAborts.delete(nodeId);
+}
+
+/** Mark a node's handler as leaked so dispatch refuses it for the rest of the pass. */
+export function recordLeakedNode(state: RunTurnState, nodeId: string): void {
+  state.leakedNodes.add(nodeId);
 }

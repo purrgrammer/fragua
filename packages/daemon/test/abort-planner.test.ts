@@ -71,37 +71,31 @@ describe("planAbortLoops", () => {
 });
 
 describe("classifyExit", () => {
-  const base: ExitClassifyInput = {
-    invocation: "thrown",
-    abortByName: false,
-    signalAborted: false,
-    shutdownAborted: false,
-    abortCause: "aborted",
-    budgetTripped: false,
-  };
+  const base: ExitClassifyInput = { invocation: "thrown", cause: "none", budgetTripped: false };
 
   test("a leak is a leak whatever else tripped", () => {
-    expect(classifyExit({ ...base, invocation: "leak", abortByName: true, shutdownAborted: true })).toBe("leak");
+    expect(classifyExit({ ...base, invocation: "leak", cause: "shutdown" })).toBe("leak");
   });
 
-  test("a plain throw on a live signal is a throw", () => {
+  test("a throw with cause none is throw regardless of error name", () => {
     expect(classifyExit(base)).toBe("throw");
   });
 
-  test("a throw while the signal had tripped is an abort even when not named AbortError", () => {
-    expect(classifyExit({ ...base, signalAborted: true })).toBe("abort");
+  test("a throw after a dispatch signal fired is an abort", () => {
+    expect(classifyExit({ ...base, cause: "aborted" })).toBe("abort");
   });
 
-  test("a timeout cause wins over shutdown", () => {
-    expect(classifyExit({ ...base, abortByName: true, abortCause: "timeout", shutdownAborted: true })).toBe("timeout");
+  test("a deadline cause is a timeout", () => {
+    expect(classifyExit({ ...base, cause: "timeout" })).toBe("timeout");
   });
 
-  test("a shutdown-tripped abort is a shutdown", () => {
-    expect(classifyExit({ ...base, abortByName: true, signalAborted: true, shutdownAborted: true })).toBe("shutdown");
+  test("a shutdown cause is a shutdown", () => {
+    expect(classifyExit({ ...base, cause: "shutdown" })).toBe("shutdown");
   });
 
   test("a budget trip is an abort", () => {
     expect(classifyExit({ ...base, budgetTripped: true })).toBe("abort");
+    expect(classifyExit({ ...base, cause: "aborted", budgetTripped: true })).toBe("abort");
   });
 });
 
@@ -165,5 +159,35 @@ describe("planExit — leak arm", () => {
       { type: "fact.handler_timeout_leaked", payload: { nodeId: "slow", leakedAt: 12345 } },
       { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
     ]);
+  });
+});
+
+describe("planExit — throw arm", () => {
+  test("planExit clips an oversized errorDetail", () => {
+    const plan = planExit({
+      exit: "throw",
+      currentNode: "work",
+      iteration: 0,
+      errorDetail: "e".repeat(10_000),
+      reactiveBudgetHaltDetail: undefined,
+      reactiveBudgetPauseBreach: undefined,
+      usage: {
+        turnBilled: 0,
+        totalCostUsd: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+      },
+      routingDelta: {},
+      appliedSeqs: [],
+      effectiveRouting: {},
+      now: 0,
+      attemptedMs: 0,
+    });
+    const halt = plan.facts.find((f) => f.type === "fact.run_terminated");
+    expect(plan.outcome).toBe("halt");
+    expect(new TextEncoder().encode(JSON.stringify(halt?.payload)).length).toBeLessThan(4096);
+    expect((halt?.payload as { detail: string }).detail).toMatch(/clipped \d+ bytes\]$/);
   });
 });

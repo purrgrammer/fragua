@@ -168,7 +168,7 @@ return {
 ## The four hard rules
 
 ### 1. Respect `ctx.signal`
-It composes the steer controller + `AbortSignal.timeout(maxMs)` + shutdown. Everything I/O-adjacent must be cancellable:
+It composes the steer controller + the armed `maxMs` deadline + shutdown. Everything I/O-adjacent must be cancellable:
 
 ```typescript
 // ✅ good — ctx.llm already wires the signal
@@ -181,13 +181,13 @@ await ctx.http.fetch("https://example.test");
 await fetch("https://example.test");
 ```
 
-When `ctx.signal` aborts your handler, **throw an `AbortError`** (an `Error` whose `name` is `"AbortError"`; `ctx.llm` / `ctx.http` already reject with one) — never return a `halt` for it. A `halt` is a decision the run cannot recover from; an abort is not your decision. The executor classifies the exit by the signal's cause (`planExit`, `packages/daemon/src/abort-planner.ts`):
+When `ctx.signal` aborts your handler, **throw an `AbortError`** (an `Error` whose `name` is `"AbortError"`; `ctx.llm` / `ctx.http` already reject with one) — never return a `halt` for it. A `halt` is a decision the run cannot recover from; an abort is not your decision. The executor classifies the exit by **which dispatch signal fired** — never by the thrown error's name (`classifyAbortCause` in `packages/daemon/src/executor-helpers.ts`, then `classifyExit` / `planExit` in `packages/daemon/src/abort-planner.ts`). `ctx.signal` composes three sources, each recognised by identity: the node's armed deadline, the daemon shutdown signal, and the dispatch's steer controller (operator intents, steer, the reactive budget gate, a fan-out bail, the leak watchdog's trip):
 
-- **Timeout** (`maxMs`) → `fact.node_aborted{cause:"timeout"}` + a `timeout_retry` auto-wake pause, `timeout_exhausted` halt on the third.
-- **Daemon shutdown** → `fact.node_aborted{cause:"shutdown"}` only; the run is left `running`, and the next daemon's startup sweep requeues it, so the node re-dispatches after the restart.
+- **Timeout** (the armed `maxMs` deadline fired first) → `fact.node_aborted{cause:"timeout"}` + a `timeout_retry` auto-wake pause, `timeout_exhausted` halt on the third.
+- **Daemon shutdown** → `fact.node_aborted{cause:"shutdown"}` only; the run is left `running`, and the next daemon's startup sweep requeues it, so the node re-dispatches after the restart. Shutdown wins over a steer that fired alongside it.
 - **Steer / operator / budget** → `fact.node_aborted{cause:"aborted"}`; the node re-dispatches (bounded by the abort-loop ceiling) or the budget pauses/halts the run.
 
-A handler that throws anything else while its signal is live halts the run (`reason:"error"`, the message as `detail`). A throw *after* `ctx.signal` aborted is classified as an abort even if the error is not named `AbortError`. Every one of these exits records the dispatch's spend on `fact.node_aborted`.
+A throw while **no** dispatch signal has fired is the handler's own error, whatever its name: an inner library `TimeoutError` (an HTTP client's own timeout) or `AbortError` (a peer-closed socket) halts the run with `reason:"error"` and the message as `detail` — it is not a watchdog timeout and not an operator abort. A throw *after* a dispatch signal fired is classified by that signal even if the error is not named `AbortError`. Every one of these exits records the dispatch's spend on `fact.node_aborted`. Free-text fields the executor copies onto facts (the error message as `detail`, a provider's `errorMessage`) are clipped to `FACT_TEXT_MAX_BYTES` (ARCHITECTURE §9).
 
 ### 2. No direct I/O — use `ctx`
 Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici`; they must not call bare `fetch`. The handler-discipline lint (`packages/core/test/handler/discipline.test.ts`) will fail CI if any of those appear under `packages/core/src/handler/handlers/` or in any module reachable from a handler over relative value imports — delegating the call to a helper outside `handlers/` does not escape it.
@@ -479,9 +479,9 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 ## Timeouts
 
-`maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (30s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
+`maxMs` on the spec is a hard deadline. The executor arms a clearable deadline (`armTimeout`: a timer aborting with a fresh `TimeoutError`-named reason, disarmed when the dispatch settles) and composes it into `ctx.signal`; a fan-out branch also arms the region's branch backstop. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (30s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
-`HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. 
+`HandlerSpec.maxMs` is typed `number | undefined`. LLM-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node via `max-ms: 0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor arms no deadline AND skips the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. 
 
 ---
 

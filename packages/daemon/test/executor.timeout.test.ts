@@ -11,13 +11,28 @@ import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { classifyAbortCause, runOne } from "../src/executor.ts";
+import { armTimeout, composeAbortSignals, type DispatchSignals } from "../src/executor-helpers.ts";
 import { HandlerLeakedError, IntentArrivedError } from "../src/supervisor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
-function abortedWith(reason: unknown): AbortSignal {
-  const c = new AbortController();
-  c.abort(reason);
-  return c.signal;
+interface Harness {
+  steer: AbortController;
+  shutdown: AbortController;
+  deadline: AbortController;
+  sources: DispatchSignals;
+}
+
+function harness(): Harness {
+  const steer = new AbortController();
+  const shutdown = new AbortController();
+  const deadline = new AbortController();
+  const { signal } = composeAbortSignals([steer.signal, shutdown.signal, deadline.signal]);
+  return {
+    steer,
+    shutdown,
+    deadline,
+    sources: { composite: signal, steer: steer.signal, shutdown: shutdown.signal, deadlines: [deadline.signal] },
+  };
 }
 
 function makeTimeoutError(): Error {
@@ -26,68 +41,81 @@ function makeTimeoutError(): Error {
   return e;
 }
 
-function makeAbortError(msg = "aborted"): Error {
-  const e = new Error(msg);
-  e.name = "AbortError";
-  return e;
-}
-
 describe("classifyAbortCause", () => {
-  test("TimeoutError reason → timeout", () => {
-    const signal = abortedWith(makeTimeoutError());
-    expect(classifyAbortCause(signal, makeAbortError())).toBe("timeout");
+  test("the deadline firing → timeout", () => {
+    const h = harness();
+    h.deadline.abort(makeTimeoutError());
+    expect(classifyAbortCause(h.sources)).toBe("timeout");
   });
 
-  test("TimeoutError thrown but signal reason is intent → timeout (thrown wins tie)", () => {
-    const signal = abortedWith(new IntentArrivedError("r", 5));
+  test("a TimeoutError-named steer reason → aborted (identity, not name)", () => {
+    const h = harness();
+    h.steer.abort(makeTimeoutError());
+    expect(classifyAbortCause(h.sources)).toBe("aborted");
+  });
+
+  test("IntentArrivedError steer → aborted", () => {
+    const h = harness();
+    h.steer.abort(new IntentArrivedError("r", 7));
+    expect(classifyAbortCause(h.sources)).toBe("aborted");
+  });
+
+  test("HandlerLeakedError steer → aborted", () => {
+    const h = harness();
+    h.steer.abort(new HandlerLeakedError("r", "impl"));
+    expect(classifyAbortCause(h.sources)).toBe("aborted");
+  });
+
+  test("daemon shutdown → shutdown, even when a steer fired first", () => {
+    const h = harness();
+    h.shutdown.abort();
+    expect(classifyAbortCause(h.sources)).toBe("shutdown");
+    const h2 = harness();
+    h2.steer.abort(new IntentArrivedError("r", 1));
+    h2.shutdown.abort();
+    expect(classifyAbortCause(h2.sources)).toBe("shutdown");
+  });
+
+  test("a deadline that fired first wins over a later shutdown", () => {
+    const h = harness();
+    h.deadline.abort(makeTimeoutError());
+    h.shutdown.abort();
+    expect(classifyAbortCause(h.sources)).toBe("timeout");
+  });
+
+  test("a TimeoutError thrown with no source fired classifies none", () => {
+    const h = harness();
     const thrown = makeTimeoutError();
-    expect(classifyAbortCause(signal, thrown)).toBe("timeout");
+    expect(thrown.name).toBe("TimeoutError");
+    expect(classifyAbortCause(h.sources)).toBe("none");
   });
 
-  test("IntentArrivedError reason → aborted", () => {
-    const signal = abortedWith(new IntentArrivedError("r", 7));
-    expect(classifyAbortCause(signal, makeAbortError())).toBe("aborted");
-  });
-
-  test("HandlerLeakedError reason → aborted", () => {
-    const signal = abortedWith(new HandlerLeakedError("r", "impl"));
-    expect(classifyAbortCause(signal, makeAbortError())).toBe("aborted");
-  });
-
-  test("shutdown-style abort (plain Error) → aborted", () => {
-    const signal = abortedWith(new Error("shutdown"));
-    expect(classifyAbortCause(signal, makeAbortError())).toBe("aborted");
-  });
-
-  test("non-aborted signal → aborted (caller is in an abort branch; be defensive)", () => {
-    const c = new AbortController();
-    expect(classifyAbortCause(c.signal, makeAbortError())).toBe("aborted");
-  });
-
-  test("real AbortSignal.timeout propagated through AbortSignal.any", async () => {
-    // Use a timeout generous enough that even a saturated CI runner fires it
-    // well before the poll deadline, without becoming so long that the test
-    // contributes meaningfully to suite wall-time.
-    const timeoutSignal = AbortSignal.timeout(50);
-    const ctrl = new AbortController();
-    const merged = AbortSignal.any([timeoutSignal, ctrl.signal]);
-    // Poll until the merged signal is aborted rather than relying on a fixed
-    // sleep that can race the event loop under heavy PBT load.
+  test("a real armed deadline propagated through the composite → timeout", async () => {
+    const t = armTimeout(20);
+    const steer = new AbortController();
+    const shutdown = new AbortController();
+    const { signal } = composeAbortSignals([steer.signal, shutdown.signal, t.signal]);
     const deadline = Date.now() + 500;
-    while (!merged.aborted && Date.now() < deadline) {
+    while (!signal.aborted && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 10));
     }
-    expect(merged.aborted).toBe(true);
-    expect(classifyAbortCause(merged, makeAbortError())).toBe("timeout");
+    expect(signal.aborted).toBe(true);
+    expect(
+      classifyAbortCause({ composite: signal, steer: steer.signal, shutdown: shutdown.signal, deadlines: [t.signal] }),
+    ).toBe("timeout");
   });
 
-  test("operator abort through AbortSignal.any before timeout fires", async () => {
-    const timeoutSignal = AbortSignal.timeout(500);
-    const ctrl = new AbortController();
-    const merged = AbortSignal.any([timeoutSignal, ctrl.signal]);
-    ctrl.abort(new IntentArrivedError("r", 1));
-    expect(merged.aborted).toBe(true);
-    expect(classifyAbortCause(merged, makeAbortError())).toBe("aborted");
+  test("operator abort through the composite before the deadline fires", () => {
+    const t = armTimeout(500);
+    const steer = new AbortController();
+    const shutdown = new AbortController();
+    const { signal } = composeAbortSignals([steer.signal, shutdown.signal, t.signal]);
+    steer.abort(new IntentArrivedError("r", 1));
+    t.disarm();
+    expect(signal.aborted).toBe(true);
+    expect(
+      classifyAbortCause({ composite: signal, steer: steer.signal, shutdown: shutdown.signal, deadlines: [t.signal] }),
+    ).toBe("aborted");
   });
 });
 
@@ -334,36 +362,34 @@ describe("executor — watchdog timeout pause-retry", () => {
 });
 
 describe("classifyAbortCause — properties", () => {
-  test("any Error reason with name=TimeoutError classifies as timeout", () => {
+  test("any deadline reason, whatever its name, classifies as timeout", () => {
     fc.assert(
-      fc.property(fc.string({ minLength: 0, maxLength: 30 }), (msg) => {
-        const err = new Error(msg);
-        err.name = "TimeoutError";
-        const signal = abortedWith(err);
-        expect(classifyAbortCause(signal, makeAbortError())).toBe("timeout");
+      fc.property(fc.string({ maxLength: 20 }), fc.string({ maxLength: 30 }), (name, msg) => {
+        const h = harness();
+        h.deadline.abort(Object.assign(new Error(msg), { name }));
+        expect(classifyAbortCause(h.sources)).toBe("timeout");
       }),
     );
   });
 
-  test("any Error reason with non-TimeoutError name classifies as aborted", () => {
-    const nonTimeoutName = fc.string({ minLength: 1, maxLength: 20 }).filter((s) => s !== "TimeoutError");
+  test("any steer reason, whatever its name, classifies as aborted", () => {
     fc.assert(
-      fc.property(nonTimeoutName, fc.string({ maxLength: 20 }), (name, msg) => {
-        const err = new Error(msg);
-        err.name = name;
-        const signal = abortedWith(err);
-        expect(classifyAbortCause(signal, makeAbortError())).toBe("aborted");
+      fc.property(fc.string({ maxLength: 20 }), fc.string({ maxLength: 20 }), (name, msg) => {
+        const h = harness();
+        h.steer.abort(Object.assign(new Error(msg), { name }));
+        expect(classifyAbortCause(h.sources)).toBe("aborted");
       }),
     );
   });
 
-  test("non-Error reasons (strings, numbers, objects) classify as aborted", () => {
+  test("non-Error steer reasons (strings, numbers, objects) classify as aborted", () => {
     fc.assert(
       fc.property(
         fc.oneof(fc.string(), fc.integer(), fc.boolean(), fc.constant(null), fc.constant(undefined)),
         (reason) => {
-          const signal = abortedWith(reason);
-          expect(classifyAbortCause(signal, makeAbortError())).toBe("aborted");
+          const h = harness();
+          h.steer.abort(reason);
+          expect(classifyAbortCause(h.sources)).toBe("aborted");
         },
       ),
     );

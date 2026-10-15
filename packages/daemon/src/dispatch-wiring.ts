@@ -7,11 +7,19 @@
 // fan-out append-opts merge. This file does store I/O, so it is on
 // decision-core-discipline.test.ts's IO_ALLOWED list.
 
-import type { ExecutionEnvironment, Graph, OutputsValue } from "@fragua/core";
+import type { BudgetInput, ExecutionEnvironment, Graph, GraphAttrs, NodeAttrs, OutputsValue } from "@fragua/core";
 import * as core from "@fragua/core/handler";
 import type { FactEvent, IEventReader, IEventWriter } from "@fragua/store";
+import { type BudgetBreach, planReactiveBudget, type ReactiveBudgetPlan } from "./abort-planner.ts";
 import type { ExecutorOpts, LeakBudget } from "./executor.ts";
-import { armTimeout, buildSubstitutionArgs, composeAbortSignals, makeUsageAccumulator } from "./executor-helpers.ts";
+import {
+  armTimeout,
+  buildSubstitutionArgs,
+  composeAbortSignals,
+  type DispatchSignals,
+  makeUsageAccumulator,
+  type UsageTotals,
+} from "./executor-helpers.ts";
 import type { GraphLoader } from "./graph-loader.ts";
 import type { OccController } from "./occ-append.ts";
 import { CommittingRecorder } from "./recorder.ts";
@@ -190,6 +198,7 @@ export function invalidateOutputsCacheIf(state: RunTurnState, facts: readonly Fa
 export interface BuiltDispatch {
   steerCtrl: AbortController;
   signal: AbortSignal;
+  sources: DispatchSignals;
   releaseSignal: () => void;
   deadlines: Array<() => void>;
   recorder: CommittingRecorder;
@@ -228,17 +237,21 @@ export function buildDispatchContext(args: {
   const steerCtrl = new AbortController();
   const signals: AbortSignal[] = [steerCtrl.signal, opts.shutdownSignal];
   const deadlines: Array<() => void> = [];
-  if (spec.maxMs !== undefined) {
-    const t = armTimeout(spec.maxMs);
+  const deadlineSignals: AbortSignal[] = [];
+  for (const ms of [spec.maxMs, args.backstopMs]) {
+    if (ms === undefined) continue;
+    const t = armTimeout(ms);
     signals.push(t.signal);
+    deadlineSignals.push(t.signal);
     deadlines.push(t.disarm);
   }
-  if (args.backstopMs !== undefined) {
-    const backstop = armTimeout(args.backstopMs);
-    signals.push(backstop.signal);
-    deadlines.push(backstop.disarm);
-  }
   const { signal, release: releaseSignal } = composeAbortSignals(signals);
+  const sources: DispatchSignals = {
+    composite: signal,
+    steer: steerCtrl.signal,
+    shutdown: opts.shutdownSignal,
+    deadlines: deadlineSignals,
+  };
   const recorder = new CommittingRecorder({
     store: opts.store,
     runId: deps.runId,
@@ -275,5 +288,65 @@ export function buildDispatchContext(args: {
   if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
   if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
   applyOptionalCtxFields(ctxOpts, state.runEnv, opts.judgeClient);
-  return { steerCtrl, signal, releaseSignal, deadlines, recorder, obs, usage, ctxOpts };
+  return { steerCtrl, signal, sources, releaseSignal, deadlines, recorder, obs, usage, ctxOpts };
+}
+
+/** The steer-controller abort reason the reactive budget gate trips with. */
+export class BudgetTripError extends Error {
+  constructor(public readonly kind: "halt" | "pause") {
+    super(kind === "halt" ? "budget" : "budget_pause");
+    this.name = "BudgetTripError";
+  }
+}
+
+/** What a tripped reactive gate hands the exit planner. */
+export interface ReactiveBudgetTrip {
+  haltDetail?: string;
+  pauseBreach?: BudgetBreach;
+}
+
+/** The cumulative spend the gate evaluates, read after each `cost.recorded`. */
+export type BudgetCumulative = Omit<BudgetInput, "graphAttrs" | "completedNodeAttrs" | "completedNodeId">;
+
+export interface ReactiveBudgetGate {
+  onCostRecorded: BuiltDispatchArgs["onCostRecorded"];
+  tripped(): ReactiveBudgetTrip | undefined;
+}
+
+type BuiltDispatchArgs = Parameters<typeof buildDispatchContext>[0];
+
+/** The reactive budget gate shared by the linear dispatch and each fan-out
+ * branch: mirror the spend, then — unless already tripped or `suppressed` —
+ * plan the budget against `read(turn)`. A halt or pause breach streams its
+ * `budget.*` events (stamped with `nodeId` + `iteration`) and calls `onTrip`,
+ * which stops the in-flight handler(s). */
+export function makeReactiveBudgetGate(args: {
+  nodeId: string;
+  iteration: number;
+  graphAttrs: GraphAttrs;
+  nodeAttrs: NodeAttrs | undefined;
+  read: (turn: Readonly<UsageTotals>) => BudgetCumulative;
+  suppressed?: () => boolean;
+  onTrip: (plan: ReactiveBudgetPlan, wiring: { steerCtrl: AbortController }) => void;
+}): ReactiveBudgetGate {
+  let trip: ReactiveBudgetTrip | undefined;
+  return {
+    tripped: () => trip,
+    onCostRecorded: (payload, w) => {
+      w.usage.mirrorCostRecorded(payload);
+      if (trip !== undefined || args.suppressed?.() === true) return;
+      const plan = planReactiveBudget({
+        graphAttrs: args.graphAttrs,
+        ...(args.nodeAttrs !== undefined ? { completedNodeAttrs: args.nodeAttrs } : {}),
+        completedNodeId: args.nodeId,
+        ...args.read(w.usage.totals()),
+      });
+      if (plan.haltDetail !== undefined) trip = { haltDetail: plan.haltDetail };
+      else if (plan.pauseBreach !== undefined) trip = { pauseBreach: plan.pauseBreach };
+      else return;
+      for (const ev of plan.events)
+        w.obs.push({ type: ev.type, payload: { nodeId: args.nodeId, iteration: args.iteration, ...ev.payload } });
+      args.onTrip(plan, w);
+    },
+  };
 }

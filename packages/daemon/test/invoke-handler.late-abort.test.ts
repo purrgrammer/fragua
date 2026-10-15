@@ -77,7 +77,7 @@ describe("invokeHandler — late abort delivery (sleep-collapsed timers)", () =>
       // far inside the 100ms grace. Declaring it leaked means the grace was
       // measured from dispatch, not from abort delivery.
       expect(out.kind).not.toBe("leak");
-      expect(out).toMatchObject({ kind: "thrown", abortByName: true });
+      expect(out).toMatchObject({ kind: "thrown" });
     } finally {
       clearTimeout(fireLate);
     }
@@ -100,6 +100,6 @@ describe("invokeHandler — late abort delivery (sleep-collapsed timers)", () =>
       steerCtrl,
       leakGraceMs: LEAK_GRACE_MS,
     });
-    expect(out).toMatchObject({ kind: "thrown", abortByName: true });
+    expect(out).toMatchObject({ kind: "thrown" });
   }, 10_000);
 });

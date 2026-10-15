@@ -3,7 +3,7 @@
 // (intent / done / failed) are NOT included — they're already durable via
 // the pre-commit recorder before this function runs.
 
-import { getRetry, isTerminalNextNode, readGoalGateRetries } from "@fragua/core";
+import { clipPayloadText, getRetry, isTerminalNextNode, readGoalGateRetries } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
 import { passField } from "./executor-helpers.ts";
@@ -159,7 +159,7 @@ function transitionToFacts(result: Extract<HandlerResult, { kind: "transition" }
     if (nextNode === "__end__" && result.outcomeStatus === "fail") {
       const detail =
         typeof result.failureReason === "string" && result.failureReason.length > 0
-          ? result.failureReason
+          ? clipPayloadText(result.failureReason)
           : `node ${ctx.state.currentNode ?? "?"} failed with no fail route`;
       facts.push({
         type: "fact.run_terminated",
@@ -242,7 +242,7 @@ function haltToFacts(result: Extract<HandlerResult, { kind: "halt" }>, ctx: Resu
     status: "errored",
     reason,
   };
-  if (result.detail != null) payload.detail = result.detail;
+  if (result.detail != null) payload.detail = clipPayloadText(result.detail);
   // Halts reaching this point bypass fact.node_completed AND
   // fact.node_aborted, so the turn's spend would otherwise vanish
   // from run totals. Surface it as partial* fields (same shape and
@@ -301,7 +301,7 @@ function pauseProviderToFacts(
         reason: "payment_required",
         nodeId,
         provider: result.provider,
-        errorMessage: result.errorMessage,
+        errorMessage: clipPayloadText(result.errorMessage),
       },
     });
     return facts;
@@ -313,7 +313,7 @@ function pauseProviderToFacts(
       nodeId,
       httpStatus: result.httpStatus,
       provider: result.provider,
-      errorMessage: result.errorMessage,
+      errorMessage: clipPayloadText(result.errorMessage),
     },
   });
   return facts;

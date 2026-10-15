@@ -3,7 +3,14 @@
 // store, clock, or randomness: every case is a plain input → plan assertion.
 
 import { describe, expect, test } from "bun:test";
-import { planCrashHalt, planDispatchStarted, planOperatorPause, planRunStarted } from "../src/lifecycle-planner.ts";
+import {
+  CRASH_HALT_MINIMAL_DETAIL,
+  planCrashHalt,
+  planCrashHaltMinimal,
+  planDispatchStarted,
+  planOperatorPause,
+  planRunStarted,
+} from "../src/lifecycle-planner.ts";
 
 describe("planOperatorPause", () => {
   test("emits run_paused{reason:operator} at the current node", () => {
@@ -64,6 +71,21 @@ describe("planCrashHalt", () => {
       {
         type: "fact.run_terminated",
         payload: { status: "errored", reason: "error", detail: "executor crashed at n1: boom" },
+      },
+    ]);
+  });
+
+  test("planCrashHalt clips an oversized detail", () => {
+    const [fact] = planCrashHalt({ detail: `executor crashed at n1: ${"x".repeat(10_000)}` }).facts;
+    expect(new TextEncoder().encode(JSON.stringify(fact?.payload)).length).toBeLessThan(4096);
+    expect((fact?.payload as { detail: string }).detail.startsWith("executor crashed at n1: ")).toBe(true);
+  });
+
+  test("planCrashHaltMinimal carries the fixed detail", () => {
+    expect(planCrashHaltMinimal().facts).toEqual([
+      {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error", detail: CRASH_HALT_MINIMAL_DETAIL },
       },
     ]);
   });

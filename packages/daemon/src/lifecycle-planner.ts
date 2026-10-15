@@ -7,6 +7,7 @@
 // the values (graph goal / steer routing, `resumeOf`, crash detail) and applies
 // the plan.
 
+import { clipPayloadText } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import { passField, type ResumeOf } from "./executor-helpers.ts";
 
@@ -73,9 +74,29 @@ export function planDispatchStarted(input: {
 
 /** The executor-crash terminal — the outer safety net when the run body escaped
  * without terminalising. `detail` carries the node + error message the driver
- * assembled. */
+ * assembled, clipped to the fact-text budget. */
 export function planCrashHalt(input: { detail: string }): LifecyclePlan {
   return {
-    facts: [{ type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: input.detail } }],
+    facts: [
+      {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error", detail: clipPayloadText(input.detail) },
+      },
+    ],
+  };
+}
+
+export const CRASH_HALT_MINIMAL_DETAIL = "executor crashed (detail exceeded payload cap)";
+
+/** The crash terminal with a fixed detail — the fallback when the store still
+ * rejected the clipped crash halt as too large. */
+export function planCrashHaltMinimal(): LifecyclePlan {
+  return {
+    facts: [
+      {
+        type: "fact.run_terminated",
+        payload: { status: "errored", reason: "error", detail: CRASH_HALT_MINIMAL_DETAIL },
+      },
+    ],
   };
 }
