@@ -5,12 +5,20 @@
 // author's quote. The scanner tracks POSIX quote state (backslash, `'`, `"`)
 // plus the nested constructs that reset or defeat it, and reports the context
 // of every token so the caller can pick the escape — or refuse a position no
-// escape can make inert.
+// escape can make inert. A literal `$` glued to a token is one such position:
+// it fuses with the escaped value into `$(…)`, `$'…'` or `$name`.
 
 export type ShellQuoteContext = "bare" | "double" | "single";
 
 /** Positions where no escaping of the inserted text keeps it inert. */
-export type UnsafeShellPosition = "escaped" | "backtick" | "comment" | "heredoc" | "ansi-c" | "arithmetic";
+export type UnsafeShellPosition =
+  | "escaped"
+  | "backtick"
+  | "comment"
+  | "heredoc"
+  | "ansi-c"
+  | "arithmetic"
+  | "dollar-prefix";
 
 export type ShellTokenContext = ShellQuoteContext | { unsafe: UnsafeShellPosition };
 
@@ -26,6 +34,10 @@ export const UNSAFE_SHELL_POSITIONS: Readonly<Record<UnsafeShellPosition, { wher
   arithmetic: {
     where: "inside `$((…))`",
     fix: 'bind it to a variable first (`v=${{ … }}`) and validate it before using `"$v"` in arithmetic',
+  },
+  "dollar-prefix": {
+    where: "directly after a literal `$`",
+    fix: "remove the `$` or bind the value to a variable first",
   },
 };
 
@@ -153,12 +165,13 @@ export function scanShellTokenContexts(template: string, tokenRe: RegExp): Map<n
     return k;
   };
 
+  let escapedAt = -1;
   let i = 0;
   while (i < template.length) {
     const top = stack[stack.length - 1] ?? root;
     const tokenEnd = tokens.get(i);
     if (tokenEnd !== undefined) {
-      out.set(i, contextOf(top));
+      out.set(i, at(i - 1) === "$" && escapedAt !== i - 1 ? { unsafe: "dollar-prefix" } : contextOf(top));
       i = tokenEnd;
       continue;
     }
@@ -170,6 +183,7 @@ export function scanShellTokenContexts(template: string, tokenRe: RegExp): Map<n
         out.set(i + 1, { unsafe: "escaped" });
         i = escapedEnd;
       } else {
+        escapedAt = i + 1;
         i += 2;
       }
       continue;

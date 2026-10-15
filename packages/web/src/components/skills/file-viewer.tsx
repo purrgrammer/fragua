@@ -1,8 +1,9 @@
-// Per-file viewer for SkillDetail. Dispatches on the server-asserted
-// Content-Type:
-//   text/* (incl. markdown) → raw monospace text
-//   image/*                 → inline <img> from a blob URL
-//   everything else         → 16-bytes-per-row hex-dump capped at 4 KB
+// Per-file viewer for SkillDetail. Dispatches on the file extension, because
+// the server serves every skill file inertly (text/plain or octet-stream):
+//   image extensions        → inline <img> from a blob URL typed by extension
+//   text extensions         → raw monospace text
+//   anything else           → the Content-Type fallback, then a
+//                             16-bytes-per-row hex-dump capped at 4 KB
 //
 // Lazy-loaded via tanstack-query; cache key is `(locId, path)` so
 // re-mounting / clicking back to a file is O(1).
@@ -19,6 +20,42 @@ export interface FileViewerProps {
 }
 
 const HEX_DUMP_BYTE_CAP = 4096;
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+const TEXT_EXTS = new Set([
+  "md",
+  "markdown",
+  "txt",
+  "json",
+  "yml",
+  "yaml",
+  "toml",
+  "js",
+  "mjs",
+  "ts",
+  "tsx",
+  "py",
+  "sh",
+  "bash",
+  "css",
+  "html",
+  "htm",
+  "xml",
+]);
+
+function extOf(path: string): string {
+  const base = path.slice(path.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
+}
 
 export function FileViewer({ locId, path }: FileViewerProps): JSX.Element {
   if (path === null) {
@@ -53,6 +90,10 @@ function Loaded({ locId, path }: { locId: string; path: string }): JSX.Element {
 }
 
 function Dispatch({ path, bytes, contentType }: { path: string; bytes: Uint8Array; contentType: string }): JSX.Element {
+  const ext = extOf(path);
+  const imageMime = IMAGE_MIME_BY_EXT[ext];
+  if (imageMime !== undefined) return <ImageView path={path} bytes={bytes} contentType={imageMime} />;
+  if (TEXT_EXTS.has(ext)) return <TextView path={path} bytes={bytes} />;
   const ct = contentType.split(";", 1)[0]?.toLowerCase().trim() ?? "";
   if (ct.startsWith("image/")) return <ImageView path={path} bytes={bytes} contentType={contentType} />;
   if (ct.startsWith("text/") || ct === "application/json") return <TextView path={path} bytes={bytes} />;
