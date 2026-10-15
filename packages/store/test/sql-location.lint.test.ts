@@ -4,6 +4,8 @@
 // string / template literals (via the AST, so SQL keywords in comments don't
 // count) of every `packages/store/src` module and fails on DML/DQL outside a
 // `*-queries.ts` file — except a small, named allowlist of maintenance sites.
+// Conflict-clause forms (`INSERT OR … INTO`, `UPDATE OR … SET`, `REPLACE INTO`)
+// and CTE-led statements (`WITH x AS (`) count as DML/DQL too.
 //
 // VACUUM / PRAGMA / DROP TABLE / BEGIN / COMMIT / SAVEPOINT are transaction and
 // maintenance control, not table DML, and are not flagged anywhere.
@@ -21,7 +23,9 @@ const ALLOWLIST = new Map<string, string>([["migrations.ts", "schema DDL + schem
 
 /** Table DML/DQL that must be centralised in a `*-queries.ts`. */
 const SQL_RE =
-  /\b(SELECT\s|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b)/i;
+  /\b(SELECT\s|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|REPLACE\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b|UPDATE\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK)\s+[\w".]+\s+SET\b|WITH\s+(?:RECURSIVE\s+)?\w+\s+AS\s*\()/i;
+
+const CONFLICT_FIXTURE = join(__dirname, "fixtures", "sql-location", "conflict-clauses.ts");
 
 function collectSources(dir: string): string[] {
   const out: string[] = [];
@@ -75,6 +79,12 @@ describe("SQL lives in *-queries.ts", () => {
     expect(scanString('db.query("INSERT INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
     expect(scanString('db.query("INSERT OR REPLACE INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
     expect(scanString('db.query("INSERT OR IGNORE INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
+    expect(scanString('db.query("UPDATE OR ABORT x SET a = ?").run(1);\n')).toEqual([1]);
+    expect(scanString('db.query("REPLACE INTO x (a) VALUES (?)").run(1);\n')).toEqual([1]);
+  });
+
+  test("flags UPDATE OR <conflict> … SET, REPLACE INTO, and WITH … AS ( CTEs", () => {
+    expect(sqlLiteralLines(parseSource(CONFLICT_FIXTURE))).toEqual([6, 7, 8, 9, 10, 11]);
   });
 
   test("sweep.ts is not on the SQL allowlist", () => {

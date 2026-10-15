@@ -76,6 +76,9 @@
                 "paths": {
                   "node:fs": "handlers are pure; persist via ctx.artifacts",
                   "node:child_process": "handlers must not spawn processes",
+                  "fs": "handlers are pure; persist via ctx.artifacts",
+                  "fs/promises": "handlers are pure; persist via ctx.artifacts",
+                  "child_process": "handlers must not spawn processes",
                   "undici": "go through ctx.http"
                 }
               }
