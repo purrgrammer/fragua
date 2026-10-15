@@ -24,6 +24,7 @@ export {
   type ImportInfo,
   importBindings,
   lineOf,
+  literalKey,
   type MemberAccessInfo,
   parseSource,
   propertyChain,

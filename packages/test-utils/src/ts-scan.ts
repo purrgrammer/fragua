@@ -63,16 +63,27 @@ export function walk(root: ts.Node, visit: (n: ts.Node) => void, skipNested = fa
   rec(root);
 }
 
-/** The tail identifier of a callee: `f` for `f(...)`, `m` for `a.b.m(...)`. */
+/** Key of an element access whose argument is a string or no-substitution
+ * template literal (`x["k"]`, ``x[`k`]``) — the property it names, exactly as
+ * `x.k` would. Undefined for a computed key. */
+export function literalKey(expr: ts.ElementAccessExpression): string | undefined {
+  const arg = expr.argumentExpression;
+  return ts.isStringLiteralLike(arg) ? arg.text : undefined;
+}
+
+/** The tail identifier of a callee: `f` for `f(...)`, `m` for `a.b.m(...)` and
+ * for `a.b["m"](...)`. */
 function calleeName(expr: ts.Expression): string | undefined {
   if (ts.isIdentifier(expr)) return expr.text;
   if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
+  if (ts.isElementAccessExpression(expr)) return literalKey(expr);
   return undefined;
 }
 
 /** Identifier chain of a dotted expression: `["ctx","blobs","put"]` for
- * `ctx.blobs.put`, `["this","db"]` for `this.db`. Undefined for anything that
- * is not a pure identifier / `this` / property-access chain. */
+ * `ctx.blobs.put` or `ctx["blobs"].put`, `["this","db"]` for `this.db`.
+ * Undefined for anything that is not a pure identifier / `this` / property or
+ * literal-key element access chain. */
 export function propertyChain(expr: ts.Expression): string[] | undefined {
   if (ts.isIdentifier(expr)) return [expr.text];
   if (expr.kind === ts.SyntaxKind.ThisKeyword) return ["this"];
@@ -80,13 +91,19 @@ export function propertyChain(expr: ts.Expression): string[] | undefined {
     const head = propertyChain(expr.expression);
     return head === undefined ? undefined : [...head, expr.name.text];
   }
+  if (ts.isElementAccessExpression(expr)) {
+    const key = literalKey(expr);
+    const head = key === undefined ? undefined : propertyChain(expr.expression);
+    return head === undefined || key === undefined ? undefined : [...head, key];
+  }
   return undefined;
 }
 
 export interface CallInfo {
   /** Tail identifier of the callee. */
   name: string;
-  /** Full source text of the callee expression (e.g. `JSON.stringify`). */
+  /** Dotted callee (`JSON.stringify`, also for `JSON["stringify"]`); the raw
+   * source text when the callee is not a {@link propertyChain}. */
   text: string;
   node: ts.CallExpression;
 }
@@ -99,7 +116,9 @@ export function collectCalls(root: ts.Node, sf: ts.SourceFile, skipNested = fals
     root,
     (n) => {
       if (ts.isCallExpression(n)) {
-        out.push({ name: calleeName(n.expression) ?? "", text: n.expression.getText(sf), node: n });
+        const chain = propertyChain(n.expression);
+        const text = chain === undefined ? n.expression.getText(sf) : chain.join(".");
+        out.push({ name: calleeName(n.expression) ?? "", text, node: n });
       }
     },
     skipNested,

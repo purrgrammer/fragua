@@ -16,12 +16,17 @@
 //
 // This is an AST walk (not a regex over source text), so a computed member
 // access — `store["enqueueRun"]()` — is caught the same as `store.enqueueRun()`.
+// A write method reached through `.call` / `.apply` / `.bind` counts as a call,
+// and a write method pulled into a local binding — by object destructuring
+// (`const { enqueueRun } = store`, renamed or not) or by aliasing
+// (`const w = store.enqueueRun`, `= store.enqueueRun.bind(store)`) — is flagged
+// wherever that binding is called.
 // Shape mirrors packages/server/test/inline-import-discipline.test.ts.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { lineOf, parseSource, walk } from "@fragua/test-utils";
+import { lineOf, literalKey, parseSource, walk } from "@fragua/test-utils";
 import ts from "typescript";
 
 // Store-write methods that must only be reached through the intent plane
@@ -39,6 +44,10 @@ const WRITE_METHODS = new Set<string>([
   "pauseSchedule",
   "resumeSchedule",
   "deleteSchedule",
+  "createScheduleAudited",
+  "pauseScheduleAudited",
+  "resumeScheduleAudited",
+  "deleteScheduleAudited",
   "evictDaemonLockIfStale",
 ]);
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
@@ -78,24 +87,73 @@ function walkTs(dir: string): string[] {
   return out;
 }
 
-/** The write-method name a call's callee names, whether reached through a
- * property access (`store.enqueueRun(...)`) or a computed element access with a
- * string-literal key (`store["enqueueRun"](...)`). */
-function writeMethodOfCall(node: ts.CallExpression): string | undefined {
-  const callee = node.expression;
-  if (ts.isPropertyAccessExpression(callee) && WRITE_METHODS.has(callee.name.text)) return callee.name.text;
-  if (ts.isElementAccessExpression(callee)) {
-    const arg = callee.argumentExpression;
-    if (ts.isStringLiteralLike(arg) && WRITE_METHODS.has(arg.text)) return arg.text;
-  }
-  return undefined;
+const FORWARDERS = new Set<string>(["call", "apply", "bind"]);
+
+function skipParens(n: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(n) ? skipParens(n.expression) : n;
+}
+
+/** The write method an expression names, whether reached through a property
+ * access (`store.enqueueRun`) or a literal-key element access
+ * (`store["enqueueRun"]`). */
+function writeAccessName(expr: ts.Expression): string | undefined {
+  const e = skipParens(expr);
+  const name = ts.isPropertyAccessExpression(e)
+    ? e.name.text
+    : ts.isElementAccessExpression(e)
+      ? literalKey(e)
+      : undefined;
+  return name !== undefined && WRITE_METHODS.has(name) ? name : undefined;
+}
+
+/** The write method behind `<writeAccess>.call` / `.apply` / `.bind`. */
+function forwardedWriteName(expr: ts.Expression): string | undefined {
+  const e = skipParens(expr);
+  if (!ts.isPropertyAccessExpression(e) || !FORWARDERS.has(e.name.text)) return undefined;
+  return writeAccessName(e.expression);
+}
+
+/** Local name → write method, for every binding that holds a write method:
+ * object-destructuring elements (`{ enqueueRun }`, `{ enqueueRun: e }`) and
+ * `const w = store.enqueueRun` / `= store.enqueueRun.bind(store)` aliases. */
+function writeBindings(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  walk(sf, (n) => {
+    if (ts.isBindingElement(n) && ts.isObjectBindingPattern(n.parent) && ts.isIdentifier(n.name)) {
+      const prop = n.propertyName ?? n.name;
+      const key = ts.isIdentifier(prop) || ts.isStringLiteralLike(prop) ? prop.text : undefined;
+      if (key !== undefined && WRITE_METHODS.has(key)) out.set(n.name.text, key);
+      return;
+    }
+    if (!ts.isVariableDeclaration(n) || !ts.isIdentifier(n.name) || n.initializer === undefined) return;
+    const init = skipParens(n.initializer);
+    const method = writeAccessName(init) ?? (ts.isCallExpression(init) ? bindTarget(init) : undefined);
+    if (method !== undefined) out.set(n.name.text, method);
+  });
+  return out;
+}
+
+function bindTarget(call: ts.CallExpression): string | undefined {
+  const callee = skipParens(call.expression);
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "bind") return undefined;
+  return writeAccessName(callee.expression);
+}
+
+/** The write method a call reaches: directly, through `.call` / `.apply` /
+ * `.bind`, or through a local binding that holds one. */
+function writeMethodOfCall(node: ts.CallExpression, bindings: Map<string, string>): string | undefined {
+  const callee = skipParens(node.expression);
+  const direct = writeAccessName(callee) ?? forwardedWriteName(callee);
+  if (direct !== undefined) return direct;
+  return ts.isIdentifier(callee) ? bindings.get(callee.text) : undefined;
 }
 
 function scan(sf: ts.SourceFile): { method: string; line: number }[] {
+  const bindings = writeBindings(sf);
   const out: { method: string; line: number }[] = [];
   walk(sf, (n) => {
     if (!ts.isCallExpression(n)) return;
-    const method = writeMethodOfCall(n);
+    const method = writeMethodOfCall(n, bindings);
     if (method !== undefined) out.push({ method, line: lineOf(sf, n) });
   });
   return out;
@@ -136,6 +194,34 @@ describe("intent-plane discipline — store writes only inside the plane", () =>
   test("flags a route body calling the coordinator write evictDaemonLockIfStale", () => {
     const src = `app.get("/x", (c) => { deps.store.evictDaemonLockIfStale(o); return c.json({}); });\n`;
     expect(scanString(src).map((h) => h.method)).toContain("evictDaemonLockIfStale");
+  });
+
+  test("flags a write method destructured off the store and called (R2-M4)", () => {
+    const fixture = join(import.meta.dir, "fixtures", "intent-plane", "destructured.ts");
+    expect(scan(parseSource(fixture)).map((h) => h.method)).toContain("enqueueRun");
+  });
+
+  test("flags store.enqueueRun.call(…) (R2-M4)", () => {
+    const fixture = join(import.meta.dir, "fixtures", "intent-plane", "call-apply.ts");
+    expect(scan(parseSource(fixture)).map((h) => h.method)).toContain("enqueueRun");
+  });
+
+  test("flags .apply / .bind on a write method, and renamed or aliased bindings", () => {
+    expect(scanString(`store.enqueueRun.apply(store, [p]);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
+    expect(scanString(`const f = store.enqueueRun.bind(store);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
+    expect(scanString(`const { enqueueRun: e } = s;\ne(p);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
+    expect(scanString(`const w = s.enqueueRun;\nw(p);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
+    expect(scanString(`const w = s["saveWorkflow"];\nw(x);\n`).map((h) => h.method)).toEqual(["saveWorkflow"]);
+  });
+
+  test("flags the *Audited schedule writers", () => {
+    expect(scanString(`store.pauseScheduleAudited(id, ev, now);\n`).map((h) => h.method)).toEqual([
+      "pauseScheduleAudited",
+    ]);
+  });
+
+  test("does not flag destructured non-write methods", () => {
+    expect(scanString(`const { getState } = store;\ngetState(id);\n`)).toEqual([]);
   });
 
   test("exempts harness.ts as the documented direct coordinator caller", () => {
