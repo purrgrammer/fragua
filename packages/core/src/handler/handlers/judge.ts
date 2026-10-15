@@ -30,6 +30,7 @@ import {
   thresholdHolds,
 } from "../../types/judge.ts";
 import type { OutputStructValue, OutputsValue } from "../../types/outputs.ts";
+import { abortError } from "../abort-error.ts";
 import {
   type JudgeAnswer,
   JudgeNotCredentialedError,
@@ -202,7 +203,7 @@ export function makeJudgeHandler(cfg: JudgeConfig): HandlerSpec {
       try {
         response = await judge.ask({ provider, model, state: req.state, questions: req.questions }, ctx.signal);
       } catch (err) {
-        if (ctx.signal.aborted) return halt("judge aborted");
+        if (ctx.signal.aborted) throw abortError("judge aborted");
         if (err instanceof JudgeNotCredentialedError) return halt(err.message);
         if (err instanceof JudgeProviderError) {
           if (err.httpStatus === 401 || err.httpStatus === 403) {

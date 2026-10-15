@@ -211,8 +211,14 @@ describe("decision-core purity discipline", () => {
     expect(scan(`import { SETTLED_STATUSES } from "@fragua/store";\n`)).toHaveLength(0);
   });
 
-  test("driver files construct no dispatch_started / max_loops fact literals", () => {
-    const literals = [/type:\s*"fact\.dispatch_started"/, /reason:\s*"max_loops"/];
+  test("driver files construct no dispatch_started / max_loops / exit fact literals", () => {
+    const literals = [
+      /type:\s*"fact\.dispatch_started"/,
+      /reason:\s*"max_loops"/,
+      /\btype:\s*"fact\.node_aborted"/,
+      /\btype:\s*"fact\.handler_timeout_leaked"/,
+      /reason:\s*"abort_loop"/,
+    ];
     const offenders: string[] = [];
     for (const name of ["fanout.ts", "dispatch-turn.ts"]) {
       const lines = readFileSync(join(SRC_DIR, name), "utf8").split("\n");
@@ -222,7 +228,9 @@ describe("decision-core purity discipline", () => {
         if (literals.some((re) => re.test(line))) offenders.push(`${name}:${i + 1}`);
       });
     }
-    expect(offenders, "build these facts via planDispatchStarted / planLoopCeiling").toEqual([]);
+    expect(offenders, "build these facts via planDispatchStarted / planLoopCeiling / planExit / planAbortLoop").toEqual(
+      [],
+    );
   });
 
   test("fanout-planner.ts is covered by the scan", () => {

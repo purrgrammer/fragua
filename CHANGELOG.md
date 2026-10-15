@@ -26,11 +26,18 @@ guarantee.
 - **MCP connections are reused across dispatches of the same step.** A retried, resumed or self-looping `llm` step with `mcp-servers:` keeps its server connection instead of respawning and re-handshaking on every dispatch; it closes when the run moves to another step, terminates, idles 10 minutes, or the daemon stops. A dead server is re-spawned on the next dispatch.
 - **Event contract v7, schema v7.** The genesis `intent.run_enqueued` gains an optional `baseHeadSha`, seeded onto the new `run_state.base_head_sha` column, and an optional `inCheckout`. `intent.accept_run` / `fact.run_accepted` gain an optional `landedUnstaged`; `fact.run_started` gains an optional `baseHeadSha`; the new `intent.checkout_release` / `fact.checkout_released` pair records a release. Schema v7 adds `run_state.in_checkout`, `checkout_path` and `checkout_released`. Runs pinned at v1–v6 fold unchanged.
 - **Schema v8.** Adds `run_state.claim_epoch`, the run's dispatch-ownership counter; the event contract is unchanged.
+- **A thrown handler error records its spend on `fact.node_aborted`.** The halt that follows (`fact.run_terminated{errored, reason: "error"}`) no longer carries `partial*` fields for that case; run totals are unchanged.
+- **A `judge` step that hits its own `max-ms` retries with backoff** (`timeout_retry`, then `timeout_exhausted`) instead of halting the run with `judge aborted`.
 - **Snapshot capture uses a per-call sentinel index** (`fragua-index-<run>-<nonce>`) instead of a fixed name, so a capture killed mid-way no longer leaves a lock that blocks later snapshots.
 
 ### Fixed
 
 - **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.
+- **A provider pause keeps the turn's spend.** Cost recorded before a `payment_required` / `provider_error` / `provider_retry` pause now lands on a `fact.node_aborted` and counts toward run totals and budgets.
+- **A leaked handler's spend is kept when it halts the run**, on both linear nodes and fan-out branches.
+- **A fan-out leak halt keeps its siblings' work.** Before the halt lands, the in-flight siblings are aborted and waited for, and their completions, aborts, and spend are committed ahead of the terminal fact.
+- **A fan-out branch exits like a linear node.** A branch that throws now halts the run instead of re-dispatching until an `abort_loop` pause, and a branch that times out pauses with `timeout_retry` and halts `timeout_exhausted` on the third, instead of looping into `abort_loop`.
+- **A `judge` step interrupted by a daemon shutdown resumes after the restart** instead of halting the run with `judge aborted`.
 - **A daemon that loses its `daemon_lock` shuts down instead of running unlocked.** The heartbeat now reports whether the row is still its own; when it is not (evicted as stale after the host slept, stopped by an operator, taken over), the daemon stops with `reason: lock_lost` and the harness respawns it. `fragua doctor` no longer reports "no daemon" while a daemon is executing runs.
 - **The harness reaper never evicts its own live child**, however stale its heartbeat reads; a stale heartbeat on a live child is reported instead.
 - **A second harness refuses to start beside a live daemon on the same host**, and `fragua serve` no longer overwrites a `server_endpoint` row published by a live process, so the first instance stays discoverable.

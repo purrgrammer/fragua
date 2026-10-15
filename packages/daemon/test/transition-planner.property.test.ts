@@ -373,6 +373,22 @@ describe("planTransition — properties", () => {
     );
   });
 
+  test("D2: spend conservation — a provider pause leads with node_aborted carrying the turn's spend", () => {
+    fc.assert(
+      fc.property(arbInput, (input) => {
+        if (input.handlerResult.kind !== "pause_provider") return;
+        const plan = planTransition(input);
+        const first = plan.facts.find((f) => f.type !== "fact.intents_folded");
+        expect(first?.type).toBe("fact.node_aborted");
+        const p = first!.payload as { cause: string; partialCostUsd: number; partialTokens: number };
+        expect(p.cause).toBe("provider_pause");
+        expect(p.partialCostUsd).toBe(input.accounting.totalCostUsd);
+        expect(p.partialTokens).toBe(input.accounting.turnBilled);
+      }),
+      { numRuns: pbtRuns(1000) },
+    );
+  });
+
   test("E: advanceAppliedTo = max(appliedSeqs) | undefined", () => {
     fc.assert(
       fc.property(arbInput, (input) => {

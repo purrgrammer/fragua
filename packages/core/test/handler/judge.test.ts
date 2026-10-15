@@ -537,7 +537,7 @@ describe("judge handler — failure modes", () => {
     if (uncredentialed.kind === "halt") expect(uncredentialed.detail).toMatch(/not credentialed/);
   });
 
-  test("abort mid-call → error halt 'judge aborted'", async () => {
+  test("abort mid-call rejects with AbortError (no halt)", async () => {
     const cap = fresh();
     const ctrl = new AbortController();
     const judge: JudgeClient = {
@@ -549,8 +549,9 @@ describe("judge handler — failure modes", () => {
       },
     };
     const spec = makeJudgeHandler({ nodeId: "j", state: "x", questions: { ok: OK } });
-    const result = await spec.handler(stubCtx(cap, { judge, signal: ctrl.signal }));
-    expect(result).toMatchObject({ kind: "halt", reason: "error", detail: "judge aborted" });
+    await expect(spec.handler(stubCtx(cap, { judge, signal: ctrl.signal }))).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 
   test("malformed answers (missing / wrong type / unknown option) → error halt", async () => {

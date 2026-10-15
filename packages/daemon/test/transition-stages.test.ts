@@ -509,6 +509,34 @@ describe("rewriteTerminalFacts", () => {
     expect(input).toHaveLength(2);
   });
 
+  test("provider exhausted / auto-retry rewrites keep the pause batch's spend-bearing node_aborted", () => {
+    const spend: FactEvent = {
+      type: "fact.node_aborted",
+      payload: { nodeId: "n1", iteration: 0, cause: "provider_pause", partialTokens: 5, partialCostUsd: 0.1 },
+    } as FactEvent;
+    const providerPause: FactEvent = {
+      type: "fact.run_paused",
+      payload: { reason: "provider_error", nodeId: "n1", httpStatus: 429, provider: "p", errorMessage: "e" },
+    } as FactEvent;
+    const result: HandlerResult = { kind: "pause_provider", httpStatus: 429, provider: "p", errorMessage: "e" };
+    const exhausted = rewriteTerminalFacts({
+      facts: [spend, providerPause],
+      result,
+      state: mkState("n1"),
+      decision: emptyDecision,
+      providerExhausted: { attempt: 5, reason: "max_attempts" },
+    });
+    expect(exhausted[0]).toEqual(spend);
+    const retried = rewriteTerminalFacts({
+      facts: [spend, providerPause],
+      result,
+      state: mkState("n1"),
+      decision: emptyDecision,
+      providerRetryDecision: { kind: "auto-retry", attempt: 1, resumeAt: 1100, delayMs: 100 },
+    });
+    expect(retried[0]).toEqual(spend);
+  });
+
   test("operator pause — shouldPauseAfterDispatch swaps the success continuation", () => {
     const facts = rewriteTerminalFacts({
       facts: [completed, started],
