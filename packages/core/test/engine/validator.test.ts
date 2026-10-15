@@ -368,6 +368,53 @@ describe("validate — E057 retry_target on a non-goal-gate step", () => {
   });
 });
 
+function toolGraph(toolCommand: string, type: "tool" | "llm" = "tool") {
+  const attrs: NodeAttrs = type === "tool" ? { tool_command: toolCommand } : { prompt: toolCommand };
+  return mkGraph({
+    attrs: { inputs: [{ name: "v", type: "string", required: false }] },
+    nodes: { s: "start", run: { type, attrs }, done: "exit" },
+    edges: [
+      ["s", "run"],
+      ["run", "done"],
+    ],
+  });
+}
+
+describe("validate — E058 shell quoting context in a tool run:", () => {
+  test("a token inside single quotes in a tool run: → E058 error", () => {
+    const e058 = validate(toolGraph("echo 'x=${{ inputs.v }}'")).filter((d) => d.code === "E058");
+    expect(e058).toHaveLength(1);
+    expect(e058[0]).toMatchObject({ code: "E058", severity: "error", nodeId: "run" });
+    expect(e058[0]?.message).toContain("double quotes");
+    expect(e058[0]?.message).toContain("bare token");
+  });
+
+  test("bare and double-quoted tokens in a tool run: do not trip E058", () => {
+    expect(codesOf(toolGraph("printf '%s' ${{ inputs.v }}"))).not.toContain("E058");
+    expect(codesOf(toolGraph('echo "x=${{ inputs.v }}" "$(printf %s ${{ inputs.v }})"'))).not.toContain("E058");
+  });
+
+  test("a single-quoted token in an llm prompt: does not trip E058", () => {
+    expect(codesOf(toolGraph("Say 'hi ${{ inputs.v }}'", "llm"))).not.toContain("E058");
+  });
+
+  test("a backslash-escaped / backtick / heredoc token in run: → E058", () => {
+    const cases: Array<[string, string]> = [
+      ["printf %s \\${{ inputs.v }}", "after a backslash"],
+      ["echo `printf %s ${{ inputs.v }}`", "inside backticks"],
+      ["cat <<EOF\n${{ inputs.v }}\nEOF", "inside a heredoc body"],
+      ["true # ${{ inputs.v }}", "comment"],
+      ["echo $(( ${{ inputs.v }} + 1 ))", "$((…))"],
+    ];
+    for (const [cmd, where] of cases) {
+      const e058 = validate(toolGraph(cmd)).filter((d) => d.code === "E058");
+      expect(e058).toHaveLength(1);
+      expect(e058[0]?.severity).toBe("error");
+      expect(e058[0]?.message).toContain(where);
+    }
+  });
+});
+
 describe("validate — E032 step without a success successor", () => {
   test("llm step with no outgoing edge → E032", () => {
     const g = mkGraph({

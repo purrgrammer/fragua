@@ -7,7 +7,8 @@ import { isOutputRecord, type OutputProfile, resolveOutputProfile } from "../typ
 import { fanoutBranchClosures } from "./fanout.ts";
 import { validateOutputsDeclStatic } from "./outputs-profile.ts";
 import { isRetryPresetName, RETRY_PRESETS } from "./retry-policy.ts";
-import { inputReferences, outputReferences } from "./substitution.ts";
+import { UNSAFE_SHELL_POSITIONS } from "./shell-quote.ts";
+import { inputReferences, outputReferences, shellReferenceContexts } from "./substitution.ts";
 
 /** Walk a dotted output path against a producer's declared output profile,
  * shared by E035 (in-graph `${{ outputs.X.f }}` refs) and E046 (run-level
@@ -375,6 +376,36 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           }
         }
       }
+    }
+  }
+
+  // E058: a `${{ … }}` token in a tool `run:` sits where its quoting can't
+  // both stay safe and mean what it reads as. Inside `'…'` the author asked
+  // for no expansion, so substituting there misleads the reader (the runtime
+  // still escapes it as a backstop for graphs that skip validation). After a
+  // backslash, in backticks, a comment, a heredoc body, `$'…'` or `$((…))` no
+  // escape keeps the value inert, and the tool handler fails the node.
+  for (const n of nodes) {
+    if (n.type !== "tool") continue;
+    const cmd = n.attrs.tool_command;
+    if (typeof cmd !== "string") continue;
+    const seen = new Set<string>();
+    for (const { ref, context } of shellReferenceContexts(cmd)) {
+      if (context === "bare" || context === "double") continue;
+      const key = `${ref}|${typeof context === "object" ? context.unsafe : context}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const message =
+        typeof context === "object"
+          ? `tool node "${n.id}" puts \`${ref}\` ${UNSAFE_SHELL_POSITIONS[context.unsafe].where} in \`run:\` — no escaping keeps a substituted value inert there; ${UNSAFE_SHELL_POSITIONS[context.unsafe].fix}`
+          : `tool node "${n.id}" puts \`${ref}\` inside single quotes in \`run:\` — single quotes promise no expansion; use double quotes ("…${ref}…") or a bare token`;
+      diags.push({
+        severity: "error",
+        code: "E058",
+        message,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
     }
   }
 

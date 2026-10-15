@@ -38,6 +38,7 @@
 
 import type { ToolNodeMessage } from "@fragua/types";
 import { UnpopulatedOutputError } from "../../engine/outputs-substitution.ts";
+import { ShellContextError } from "../../engine/shell-quote.ts";
 import { substitute } from "../../engine/substitution.ts";
 import { DEFAULT_TOOL_MAX_MS } from "../../parser/yaml.ts";
 import type { ExecutionEnvironment, ScratchFile } from "../../types/execution.ts";
@@ -96,16 +97,13 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    // Tool commands are shell strings. A `${{ inputs.x }}` value may
-    // contain whitespace, newlines, quotes, or anything else the run's
-    // input legitimately carries. Without escapeForShell, a trailing
-    // newline turns one statement into several when /bin/sh re-tokenises
-    // the rendered command — every substitution becomes an injection
-    // vector. Llm prompts don't need this: prose tolerates stray
-    // whitespace; shell does not.
-    // An unpopulated `${{ outputs.X.f }}` read FAILS CLOSED as a node `fail`
-    // (routes via fail-edge / aborted_exit), never an uncaught throw the
-    // executor would turn into a fatal `reason:"error"` halt.
+    // A substituted value may carry quotes, `$(…)`, backticks or newlines,
+    // and /bin/sh re-tokenises the rendered command, so every value is
+    // escaped for the quoting context its token sits in. Two reads FAIL
+    // CLOSED as a node `fail` (routes via fail-edge / aborted_exit) rather
+    // than an uncaught throw the executor would turn into a fatal halt: an
+    // unpopulated `${{ outputs.X.f }}`, and a token in a shell position no
+    // escape makes inert (backticks, a comment, a heredoc, after `\`).
     let command: string;
     try {
       command = substitute(rawCommand, {
@@ -113,7 +111,7 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
         escapeForShell: true,
       });
     } catch (err) {
-      if (err instanceof UnpopulatedOutputError) {
+      if (err instanceof UnpopulatedOutputError || err instanceof ShellContextError) {
         return { kind: "transition", outcomeStatus: "fail", failureReason: err.message, tokens: 0, costUsd: 0 };
       }
       throw err;

@@ -11,13 +11,20 @@
 //
 // Substitutes in `prompt:` / `text:` / `run:` strings.
 //
-// Shell-safe mode wraps the substituted value in single quotes, escaping
-// embedded quotes per POSIX (close quote, escaped quote, reopen).
+// Shell-safe mode escapes each substituted value for the quoting context its
+// token sits in (shell-quote.ts) and refuses positions no escape makes inert.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { OutputsValue } from "../types/outputs.ts";
 import { classifyOutputRef, dedupeRefs, UnpopulatedOutputError, type UnpopulatedRef } from "./outputs-substitution.ts";
+import {
+  ShellContextError,
+  type ShellTokenContext,
+  scanShellTokenContexts,
+  shellEscapeForContext,
+  type UnsafeShellRef,
+} from "./shell-quote.ts";
 
 export { outputReferences } from "./outputs-substitution.ts";
 
@@ -33,7 +40,9 @@ export interface SubstitutionArgs {
 
 export interface SubstitutionOptions {
   args?: SubstitutionArgs;
-  /** If true, wrap substituted values in single quotes for shell safety. */
+  /** If true, escape each substituted value for the shell quoting context its
+   * token sits in (bare / double / single); a token in a position no escape
+   * makes inert throws `ShellContextError`. Set for `tool` `run:` only. */
   escapeForShell?: boolean;
   /** If true, wrap each interpolated `${{ outputs.X.f }}` value AND each
    * non-empty `${{ inputs.X }}` value in a content-derived delimiter so an
@@ -91,7 +100,17 @@ const COMBINED_REF_RE =
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { args = {}, escapeForShell = false, wrapValues = false } = opts;
-  const fmt = (raw: string): string => (escapeForShell ? shellQuote(raw) : raw);
+  const contexts = escapeForShell ? scanShellTokenContexts(template, COMBINED_REF_RE) : undefined;
+  const unsafe: UnsafeShellRef[] = [];
+  const fmt = (raw: string, offset: number, whole: string): string => {
+    if (contexts === undefined) return raw;
+    const ctx = contexts.get(offset) ?? "bare";
+    if (typeof ctx === "object") {
+      unsafe.push({ ref: whole.trim(), position: ctx.unsafe });
+      return whole;
+    }
+    return shellEscapeForContext(raw, ctx);
+  };
   const inputs = args.inputs ?? {};
   const outputs = args.outputs ?? {};
   const missing: UnpopulatedRef[] = [];
@@ -104,24 +123,44 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   // into a node failure rather than a silent "".
   const result = template.replace(
     COMBINED_REF_RE,
-    (whole: string, inName: string | undefined, outProducer: string | undefined, outRest: string | undefined) => {
+    (
+      whole: string,
+      inName: string | undefined,
+      outProducer: string | undefined,
+      outRest: string | undefined,
+      offset: number,
+    ) => {
       if (inName !== undefined) {
         const raw = resolveInputRef(inputs, inName.split("."));
         // Wrap a non-empty input value only: an unbound / unresolvable ref is
         // leniently "" (E030 flags the declaration), and fencing empty string
         // is pure noise. `escapeForShell` (tool `run:`) never wraps.
-        return wrapValues && !escapeForShell && raw.length > 0 ? wrapOutputValue(raw) : fmt(raw);
+        return wrapValues && !escapeForShell && raw.length > 0 ? wrapOutputValue(raw) : fmt(raw, offset, whole);
       }
-      const c = classifyOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."), escapeForShell);
+      const c = classifyOutputRef(outputs, outProducer ?? "", (outRest ?? "").split("."));
       if (c.kind !== "value") {
         missing.push({ ref: whole.trim(), kind: c.kind });
         return whole;
       }
-      return wrapValues && !escapeForShell ? wrapOutputValue(c.rendered) : c.rendered;
+      return wrapValues && !escapeForShell ? wrapOutputValue(c.rendered) : fmt(c.rendered, offset, whole);
     },
   );
   if (missing.length > 0) throw new UnpopulatedOutputError(dedupeRefs(missing));
+  if (unsafe.length > 0) throw new ShellContextError(unsafe);
   return result;
+}
+
+/** The shell quoting context of every `${{ inputs.* }}` / `${{ outputs.* }}`
+ * token in a `tool` `run:` template, in source order. The validator (E058)
+ * flags the single-quoted and unsafe ones. */
+export function shellReferenceContexts(template: string): Array<{ ref: string; context: ShellTokenContext }> {
+  const contexts = scanShellTokenContexts(template, COMBINED_REF_RE);
+  const out: Array<{ ref: string; context: ShellTokenContext }> = [];
+  for (const m of template.matchAll(COMBINED_REF_RE)) {
+    const context = contexts.get(m.index);
+    if (context !== undefined) out.push({ ref: m[0].trim(), context });
+  }
+  return out;
 }
 
 /** Resolve a `${{ inputs.<name>[.<field>...] }}` reference to its rendered
@@ -168,9 +207,4 @@ export function inputReferences(template: string): Array<{ base: string; dotted:
     out.push({ base, dotted });
   }
   return out;
-}
-
-/** Wrap a string in POSIX-safe single quotes. */
-function shellQuote(v: string): string {
-  return `'${v.replace(/'/g, "'\\''")}'`;
 }

@@ -14,10 +14,16 @@
 //     silently reading "". The failure becomes a recorded fact and replays
 //     identically — the read-time populated-guarantee (proposal §1, §3).
 //
-// Shell-safe mode wraps scalar substitutions in POSIX single quotes (same as
-// the inputs substitution path in substitution.ts).
+// Shell-safe mode escapes each value for the quoting context its token sits
+// in (shell-quote.ts), the same as the combined path in substitution.ts.
 
 import type { OutputStructValue, OutputsValue } from "../types/outputs.ts";
+import {
+  ShellContextError,
+  scanShellTokenContexts,
+  shellEscapeForContext,
+  type UnsafeShellRef,
+} from "./shell-quote.ts";
 
 /** Thrown by `substituteOutputs` when a `${{ outputs.X.f }}` reference cannot
  * resolve at runtime — the producer didn't emit a value on the taken path.
@@ -64,24 +70,34 @@ export const OUTPUT_REF_RE =
 /** Substitute `${{ outputs.X.f... }}` tokens in a template string.
  * `outputs` is a map from producer node id to that node's emitted struct.
  * Any reference that can't be resolved fails closed — collected and thrown as
- * `UnpopulatedOutputError` rather than collapsed to "". Shell quoting is
- * applied to scalar results only. */
+ * `UnpopulatedOutputError` rather than collapsed to "". With `escapeForShell`,
+ * each value is escaped for its token's shell quoting context and a token in
+ * an unsafe position throws `ShellContextError`. */
 export function substituteOutputs(
   template: string,
   outputs: Record<string, OutputsValue>,
   opts: { escapeForShell?: boolean } = {},
 ): string {
   const { escapeForShell = false } = opts;
+  const contexts = escapeForShell ? scanShellTokenContexts(template, OUTPUT_REF_RE) : undefined;
   const missing: UnpopulatedRef[] = [];
-  const result = template.replace(OUTPUT_REF_RE, (whole: string, producer: string, rest: string) => {
-    const c = classifyOutputRef(outputs, producer, rest.split("."), escapeForShell);
+  const unsafe: UnsafeShellRef[] = [];
+  const result = template.replace(OUTPUT_REF_RE, (whole: string, producer: string, rest: string, offset: number) => {
+    const c = classifyOutputRef(outputs, producer, rest.split("."));
     if (c.kind !== "value") {
       missing.push({ ref: whole.trim(), kind: c.kind });
       return whole;
     }
-    return c.rendered;
+    if (contexts === undefined) return c.rendered;
+    const ctx = contexts.get(offset) ?? "bare";
+    if (typeof ctx === "object") {
+      unsafe.push({ ref: whole.trim(), position: ctx.unsafe });
+      return whole;
+    }
+    return shellEscapeForContext(c.rendered, ctx);
   });
   if (missing.length > 0) throw new UnpopulatedOutputError(dedupeRefs(missing));
+  if (unsafe.length > 0) throw new ShellContextError(unsafe);
   return result;
 }
 
@@ -96,9 +112,8 @@ export function resolveOutputRef(
   outputs: Record<string, OutputsValue>,
   producer: string,
   segments: string[],
-  escapeForShell: boolean,
 ): string | undefined {
-  const c = classifyOutputRef(outputs, producer, segments, escapeForShell);
+  const c = classifyOutputRef(outputs, producer, segments);
   return c.kind === "value" ? c.rendered : undefined;
 }
 
@@ -110,7 +125,6 @@ export function classifyOutputRef(
   outputs: Record<string, OutputsValue>,
   producer: string,
   segments: string[],
-  escapeForShell: boolean,
 ): { kind: "value"; rendered: string } | { kind: "field-absent" } | { kind: "producer-absent" } {
   const producerVal = outputs[producer];
   if (producerVal === undefined) return { kind: "producer-absent" };
@@ -119,7 +133,7 @@ export function classifyOutputRef(
   // i.e. "no value") are both field absence: an unpopulated ref is a node
   // failure, never a silent `"null"` interpolated into the prompt.
   if (resolved === undefined || resolved === null) return { kind: "field-absent" };
-  return { kind: "value", rendered: renderValue(resolved, escapeForShell) };
+  return { kind: "value", rendered: renderOutputValue(resolved) };
 }
 
 /** First diagnosis wins per distinct reference, so one ref repeated in a
@@ -169,20 +183,9 @@ export function resolveSegments(val: OutputStructValue, segments: string[]): Out
  * or array as canonical JSON. These are the exact bytes `wrapOutputValue`
  * hashes, so a reader can reproduce the boundary-tag id from the struct. */
 export function renderOutputValue(val: OutputStructValue): string {
-  return renderValue(val, false);
-}
-
-function renderValue(val: OutputStructValue, escapeForShell: boolean): string {
-  if (typeof val === "string") {
-    return escapeForShell ? shellQuote(val) : val;
-  }
-  if (typeof val === "number" || typeof val === "boolean") {
-    const s = String(val);
-    return escapeForShell ? shellQuote(s) : s;
-  }
-  // Record or array → canonical JSON.
-  const json = canonicalJson(val);
-  return escapeForShell ? shellQuote(json) : json;
+  if (typeof val === "string") return val;
+  if (typeof val === "number" || typeof val === "boolean") return String(val);
+  return canonicalJson(val);
 }
 
 /** `JSON.stringify` with object keys sorted recursively, so a record/array
@@ -203,10 +206,6 @@ function canonicalize(val: unknown): unknown {
     return out;
   }
   return val;
-}
-
-function shellQuote(v: string): string {
-  return `'${v.replace(/'/g, "'\\''")}'`;
 }
 
 /** Every distinct `{ producer, path }` reference in a template string.
