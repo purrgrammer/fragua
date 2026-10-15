@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newRunId, SqliteStore } from "../src/index.ts";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
+import { newRunId, SqliteStore, sha256Hex } from "../src/index.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
 
@@ -45,6 +46,21 @@ export function nextId(prefix = "run"): string {
 
 export async function seedWorkflow(store: SqliteStore, sha = "wf_sha_1"): Promise<string> {
   store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", STUB_IR, 1);
+  return sha;
+}
+
+/** The source a {@link seedHashedWorkflow} row carries for `tag`. */
+export function hashedWorkflowSource(tag = "a"): string {
+  return `name: t-${tag}\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n`;
+}
+
+/** Save a content-addressed workflow (sha = sha256(source), IR parsed from
+ *  source) — the only shape bundle import accepts. Distinct `tag`s yield
+ *  distinct shas. */
+export async function seedHashedWorkflow(store: SqliteStore, tag = "a"): Promise<string> {
+  const source = hashedWorkflowSource(tag);
+  const sha = sha256Hex(source);
+  store.saveWorkflow(sha, "test", source, serializeGraph(parseWorkflow(source)), CURRENT_IR_VERSION);
   return sha;
 }
 
