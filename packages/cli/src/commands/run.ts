@@ -22,12 +22,15 @@ import { basename, join, resolve } from "node:path";
 import { CheckoutBusyError } from "@fragua/store";
 import {
   checkoutBusyDetail,
+  countChangedFiles,
   defaultGitExec,
   inspectCheckout,
   pinDirtyBaseRef,
   prepareDirtyBase,
   resolveBaseRef,
   resolveCheckoutKey,
+  resolveDefaultBranch,
+  resolveHeadBase,
 } from "@fragua/workspace";
 import chalk from "chalk";
 import { coerceInputs } from "../input-coerce.ts";
@@ -54,7 +57,7 @@ export interface RunCommandOptions {
   /** Pin the worktree base to this ref (branch, tag, or sha). Resolved to a
    * commit sha at enqueue against the project root; the provisioner provisions
    * the worktree detached at that sha. Unresolvable refs reject the enqueue.
-   * Omitted = default (cwd HEAD at provision time). */
+   * Omitted = cwd HEAD, resolved and recorded at enqueue. */
   base?: string;
   /** `--dirty`: base the run on the operator's uncommitted working tree,
    * captured at enqueue into a synthetic commit S (parented on HEAD) and
@@ -148,6 +151,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     // Validate a --checkout target before any write, so a refusal leaves no
     // workflow row, run, or event behind.
     let checkoutKey: string | undefined;
+    let checkoutHead: { head: string; ref: string | null } | undefined;
     if (opts.checkout !== undefined) {
       if ((await resolveCheckoutKey(defaultGitExec, cwd)) == null) {
         console.error(chalk.red(`run: --checkout needs a git checkout: ${cwd} is not inside one`));
@@ -169,6 +173,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
         return 1;
       }
       checkoutKey = insp.key;
+      checkoutHead = { head: insp.head, ref: insp.ref };
     }
 
     // A --dirty capture would freeze a checkout run's half-finished tree.
@@ -212,6 +217,36 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       base = { sha: resolved.sha, ref: resolved.ref };
     }
 
+    let headBase: { sha: string; ref: string | null } | undefined;
+    let shown: BaseLine;
+    if (base !== undefined) {
+      shown = { ref: base.ref, sha: base.sha, state: "clean", explicit: true };
+    } else if (dirty !== undefined) {
+      const n = await countChangedFiles(defaultGitExec, dirty.top, dirty.head, dirty.s);
+      shown = { ref: dirty.ref, sha: dirty.s, state: `dirty: ${n} files`, explicit: false };
+    } else if (cleanDirtyBase !== undefined) {
+      const state = cleanDirtyBase.ref == null ? "detached" : "clean";
+      shown = { ref: cleanDirtyBase.ref, sha: cleanDirtyBase.sha, state, explicit: false };
+    } else if (checkoutHead !== undefined) {
+      const state = `${checkoutHead.ref == null ? "detached, " : ""}captured at first start`;
+      // --checkout cannot take --base, so the off-default hint would be unactionable.
+      shown = { ref: checkoutHead.ref, sha: checkoutHead.head, state, explicit: true };
+    } else {
+      const h = await resolveHeadBase(defaultGitExec, cwd);
+      if (h.ok) {
+        headBase = { sha: h.sha, ref: h.ref };
+        shown = { ref: h.ref, sha: h.sha, state: h.ref == null ? "detached" : "clean", explicit: false };
+      } else {
+        shown = {
+          ref: null,
+          sha: null,
+          state: h.reason === "not_git" ? "not a git checkout" : "no commits",
+          explicit: true,
+        };
+      }
+    }
+    const defaultBranch = shown.explicit ? null : await resolveDefaultBranch(defaultGitExec, cwd);
+
     const inputDecls = mint.graph.attrs.inputs ?? [];
     let inputs: Record<string, unknown>;
     try {
@@ -241,6 +276,9 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(dirty !== undefined
         ? { baseGitSha: dirty.s, baseHeadSha: dirty.head, ...(dirty.ref != null ? { baseGitRef: dirty.ref } : {}) }
         : {}),
+      ...(headBase !== undefined
+        ? { baseGitSha: headBase.sha, ...(headBase.ref != null ? { baseGitRef: headBase.ref } : {}) }
+        : {}),
       ...(checkoutKey !== undefined ? { checkoutPath: checkoutKey } : {}),
     });
     if (!enq.ok) {
@@ -256,12 +294,17 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       }
       throw err;
     }
+    console.log(renderBaseLine(shown));
+    if (defaultBranch != null && shown.sha != null && shown.ref !== defaultBranch) {
+      console.error(
+        chalk.yellow(
+          `note: basing on ${shown.ref ?? "HEAD"}, not ${defaultBranch}; pass --base ${defaultBranch} to pin`,
+        ),
+      );
+    }
     console.log(chalk.green(`run queued: ${enq.runId}`));
     if (checkoutKey !== undefined) {
       console.log(chalk.dim(`in checkout ${checkoutKey} — the run's changes land directly in it`));
-    }
-    if (base !== undefined) {
-      console.log(chalk.dim(`base ${base.ref} -> ${base.sha.slice(0, 12)}`));
     }
     if (dirty !== undefined) {
       // The provisioner rewrites this ref before `worktree add`, so a failure
@@ -280,6 +323,19 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     if (opts.follow === false) return 0;
     return followRun(client, enq.runId);
   });
+}
+
+interface BaseLine {
+  ref: string | null;
+  sha: string | null;
+  state: string;
+  /** The operator named the base (`--base`), or no hint could apply. */
+  explicit: boolean;
+}
+
+function renderBaseLine(b: BaseLine): string {
+  if (b.sha == null) return `base: none (${b.state})`;
+  return `base: ${b.ref ?? "HEAD"} @ ${b.sha.slice(0, 7)} (${b.state})`;
 }
 
 /** True when `key` is some non-imported run's own fragua worktree

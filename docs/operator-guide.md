@@ -113,8 +113,10 @@ fragua runs discard <id>   # drop the run's refs (final)
 `accept` runs synchronously and replays the run's commits onto `HEAD` in the run's
 working directory, then stages any uncommitted tail for you to `git commit`. It refuses
 (non-zero exit, with a reason) if the change doesn't merge cleanly (`conflict`), your
-tree has uncommitted changes (`dirty_tree` — stash or commit first), or there's nothing
-to land (`no_work`).
+tree has uncommitted changes (`dirty_tree` — stash or commit first), your checkout is
+not on the branch the run was based on (`wrong_branch` — switch to it, or pass
+`--onto <current-branch>` / `--force-branch`), or there's nothing to land (`no_work`).
+Before replaying it prints the branch and HEAD it will land on (`target: <branch> @ <sha>`).
 
 `discard` drops the run's snapshot/head refs and is final — a later `accept` or
 `discard` on a discarded run exits non-zero.

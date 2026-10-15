@@ -332,6 +332,135 @@ describe("fragua operator verbs", () => {
     return { repo, s, head };
   }
 
+  /** A real repo whose run committed one change off main@base (refs only, the
+   * worktree removed), recorded with `baseGitRef`; the checkout is left on `other`. */
+  function seedCommitRun(runId: string, baseGitRef: string): { repo: string; base: string } {
+    const repo = mkdtempSync(join(tmpdir(), "fragua-op-commit-"));
+    gitIn(repo, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    gitIn(repo, ["add", "-A"]);
+    gitIn(repo, ["commit", "-q", "-m", "base"]);
+    const base = gitIn(repo, ["rev-parse", "HEAD"]);
+    const wt = join(repo, "..", `${runId}-wt-${Date.now()}`);
+    gitIn(repo, ["worktree", "add", "-q", "--detach", wt, base]);
+    writeFileSync(join(wt, "run.txt"), "run\n");
+    gitIn(wt, ["add", "-A"]);
+    gitIn(wt, ["commit", "-q", "-m", "run work"]);
+    const runHead = gitIn(wt, ["rev-parse", "HEAD"]);
+    const snap = gitIn(repo, ["commit-tree", gitIn(wt, ["write-tree"]), "-p", runHead, "-m", "snap"]);
+    gitIn(repo, ["update-ref", `refs/fragua/snapshots/${runId}`, snap]);
+    gitIn(repo, ["update-ref", `refs/fragua/heads/${runId}`, runHead]);
+    gitIn(repo, ["worktree", "remove", "--force", wt]);
+    gitIn(repo, ["checkout", "-q", "-b", "other"]);
+
+    r.store.enqueueRun({ runId, workflowSha: "wf", cwd: repo, baseGitSha: base, baseGitRef });
+    const s0 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1", baseGitSha: base },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "n1" } }],
+      s1.version,
+    );
+    const s2 = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.snapshot_recorded",
+          payload: {
+            eventIdx: 3,
+            treeSha: "t".repeat(40),
+            commitSha: snap,
+            parentSnap: base,
+            headSha: runHead,
+            headRef: null,
+            diffBaseSha: base,
+            committed: { filesChanged: 1, insertions: 1, deletions: 0 },
+            uncommitted: null,
+          },
+        },
+      ],
+      s2.version,
+    );
+    return { repo, base };
+  }
+
+  function captureLogs(): { logs: string[]; errs: string[] } {
+    const logs: string[] = [];
+    const errs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    (console.error as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.join(" "));
+    });
+    return { logs, errs };
+  }
+
+  test("accept: prints target branch + HEAD and refuses wrong_branch on a branch mismatch", async () => {
+    const { repo, base } = seedCommitRun("rwrong", "main");
+    try {
+      const { logs, errs } = captureLogs();
+      const code = await acceptCommand({ runId: "rwrong", dbPath: r.dbPath });
+      expect(code).toBe(1);
+      expect(logs.join("\n")).toContain(`target: other @ ${base.slice(0, 7)}`);
+      expect(errs.join("\n")).toContain("[wrong_branch]");
+      expect(wrote("rwrong", "intent.accept_run")).toBe(false);
+      expect(gitIn(repo, ["rev-parse", "HEAD"])).toBe(base);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("accept --onto <current> lands on the current branch", async () => {
+    const { repo } = seedCommitRun("ronto", "main");
+    try {
+      const { logs } = captureLogs();
+      const code = await acceptCommand({ runId: "ronto", dbPath: r.dbPath, onto: "other" });
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("accepted");
+      expect(wrote("ronto", "intent.accept_run")).toBe(true);
+      expect(gitIn(repo, ["log", "-1", "--format=%s", "other"])).toBe("run work");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("accept --force-branch lands despite the mismatch", async () => {
+    const { repo } = seedCommitRun("rforce", "main");
+    try {
+      const code = await acceptCommand({ runId: "rforce", dbPath: r.dbPath, forceBranch: true });
+      expect(code).toBe(0);
+      expect(wrote("rforce", "intent.accept_run")).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("accept --onto with --force-branch is a usage error", async () => {
+    const { repo, base } = seedCommitRun("rboth", "main");
+    try {
+      const code = await acceptCommand({ runId: "rboth", dbPath: r.dbPath, onto: "other", forceBranch: true });
+      expect(code).toBe(1);
+      expect(wrote("rboth", "intent.accept_run")).toBe(false);
+      expect(gitIn(repo, ["rev-parse", "HEAD"])).toBe(base);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("accept: dirty-base accept prints the unstaged land + undo recipe, and the autostash note", async () => {
     const { repo, s, head } = await seedDirtyRun("rdirty");
     try {

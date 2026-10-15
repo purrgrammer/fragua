@@ -9,6 +9,7 @@ import { join } from "node:path";
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@fragua/daemon";
 import { SqliteStore } from "@fragua/store";
+import { statusCommand } from "../src/commands/operator.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { coerceInputs, resolveInputArgs } from "../src/input-coerce.ts";
 
@@ -526,6 +527,142 @@ describe("fragua run --dirty", () => {
   });
 });
 
+describe("fragua run base line", () => {
+  const BLOCK = ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n";
+
+  function g(cwd: string, ...args: string[]): string {
+    const res = Bun.spawnSync({
+      cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (res.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr.toString()}`);
+    return res.stdout.toString().trim();
+  }
+
+  /** A committed project on `main` with a second commit on `feat`, left checked out on `feat`. */
+  function project(): { repo: string; main: string; feat: string } {
+    const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "fragua-base-line-")));
+    tmps.push(repo);
+    g(repo, "init", "-q", "-b", "main");
+    mkdirSync(join(repo, ".fragua"), { recursive: true });
+    writeFileSync(join(repo, ".fragua", "config.yaml"), "id: 0190a0a0-0000-7000-8000-000000000003\nname: p\n");
+    writeFileSync(join(repo, ".gitignore"), BLOCK);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "base");
+    const main = g(repo, "rev-parse", "HEAD");
+    g(repo, "switch", "-q", "-c", "feat");
+    writeFileSync(join(repo, "b.txt"), "b\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "feat");
+    return { repo, main, feat: g(repo, "rev-parse", "HEAD") };
+  }
+
+  function bareStore(): { dbPath: string; store: SqliteStore } {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-base-line-db-"));
+    tmps.push(dir);
+    const dbPath = join(dir, "fragua.db");
+    return { dbPath, store: new SqliteStore({ path: dbPath }) };
+  }
+
+  async function capture<T>(fn: () => Promise<T>): Promise<{ result: T; out: string; err: string }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const ol = console.log;
+    const oe = console.error;
+    console.log = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => err.push(a.map(String).join(" "));
+    try {
+      return { result: await fn(), out: out.join("\n"), err: err.join("\n") };
+    } finally {
+      console.log = ol;
+      console.error = oe;
+    }
+  }
+
+  const run = (dbPath: string, cwd: string, extra: Record<string, unknown> = {}) =>
+    capture(() => runCommand({ workflow: writeWorkflow(), dbPath, cwd, follow: false, ...extra }));
+
+  test("enqueue on a non-default branch prints the base line + notice and records ref and sha", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo, feat } = project();
+    const { result, out, err } = await run(dbPath, repo);
+    expect(result).toBe(0);
+    expect(out).toContain(`base: feat @ ${feat.slice(0, 7)} (clean)`);
+    expect(out.indexOf("base: feat")).toBeLessThan(out.indexOf("run queued:"));
+    expect(err).toContain("note: basing on feat, not main; pass --base main to pin");
+    const state = store.getState(store.listRunIds()[0]!)!;
+    expect(state.baseGitRef).toBe("feat");
+    expect(state.baseGitSha).toBe(feat);
+    store.close();
+  });
+
+  test("enqueue on the default branch prints no notice", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo, main } = project();
+    g(repo, "switch", "-q", "main");
+    const { result, out, err } = await run(dbPath, repo);
+    expect(result).toBe(0);
+    expect(out).toContain(`base: main @ ${main.slice(0, 7)} (clean)`);
+    expect(err).not.toContain("note: basing on");
+    store.close();
+  });
+
+  test("--base main from a feature branch records main's sha and prints no notice", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo, main } = project();
+    const { result, out, err } = await run(dbPath, repo, { base: "main" });
+    expect(result).toBe(0);
+    expect(out).toContain(`base: main @ ${main.slice(0, 7)} (clean)`);
+    expect(err).not.toContain("note:");
+    const state = store.getState(store.listRunIds()[0]!)!;
+    expect(state.baseGitSha).toBe(main);
+    expect(state.baseGitRef).toBe("main");
+    store.close();
+  });
+
+  test("detached HEAD prints (detached), records the sha, no ref, and notes the default", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo, feat } = project();
+    g(repo, "checkout", "-q", "--detach");
+    const { result, out, err } = await run(dbPath, repo);
+    expect(result).toBe(0);
+    expect(out).toContain(`base: HEAD @ ${feat.slice(0, 7)} (detached)`);
+    expect(err).toContain("note: basing on HEAD, not main; pass --base main to pin");
+    const state = store.getState(store.listRunIds()[0]!)!;
+    expect(state.baseGitSha).toBe(feat);
+    expect(state.baseGitRef).toBeNull();
+    store.close();
+  });
+
+  test("--dirty on a dirty tree prints dirty: N files", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo } = project();
+    writeFileSync(join(repo, "a.txt"), "wip\n");
+    const { result, out } = await run(dbPath, repo, { dirty: true });
+    expect(result).toBe(0);
+    const state = store.getState(store.listRunIds()[0]!)!;
+    expect(out).toContain(`base: feat @ ${state.baseGitSha!.slice(0, 7)} (dirty: 1 files)`);
+    store.close();
+  });
+
+  test("a queued run's runs status --json carries baseGitRef and baseGitSha", async () => {
+    const { dbPath, store } = bareStore();
+    const { repo, feat } = project();
+    expect((await run(dbPath, repo)).result).toBe(0);
+    const runId = store.listRunIds()[0]!;
+    const { result, out } = await capture(() => statusCommand({ runId, dbPath, json: true }));
+    expect(result).toBe(0);
+    const detail = JSON.parse(out) as { runStatus: string; baseGitRef?: string; baseGitSha?: string };
+    expect(detail.runStatus).toBe("queued");
+    expect(detail.baseGitRef).toBe("feat");
+    expect(detail.baseGitSha).toBe(feat);
+    store.close();
+  });
+});
+
 describe("fragua run --checkout", () => {
   const BLOCK = ".fragua/runs/\n.fragua/worktrees/\n.fragua/blobs/\n.fragua/fragua.db*\n.fragua/daemon/\n";
 
@@ -642,6 +779,8 @@ describe("fragua run --checkout", () => {
     const { result, out } = await run(dbPath, repo, { checkout: "." });
     expect(result).toBe(0);
     expect(out).toContain(`in checkout ${repo}`);
+    expect(out).toContain("base: main @");
+    expect(out).toContain("captured at first start");
     const state = store.getState(store.listRunIds()[0]!)!;
     expect(state.inCheckout).toBe(true);
     expect(state.checkoutPath).toBe(repo);
