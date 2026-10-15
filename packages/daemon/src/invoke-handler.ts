@@ -4,8 +4,8 @@
 // the abort registry (so operator intents / shutdown can abort the in-flight
 // handler) and the leak-detection watchdog (a handler that ignores its
 // AbortSignal past `maxMs + leakGrace` is "leaked"). Returns a structured
-// outcome — normal result, watchdog leak, or a thrown error tagged with whether
-// it looked like an abort by name — and leaves interpretation (abort-cause
+// outcome — normal result, watchdog leak, or a thrown error — and leaves
+// interpretation (abort-cause
 // classification, reactive-budget reclassification, fact mapping) to the
 // caller, which holds the per-turn signal + budget state.
 //
@@ -14,18 +14,16 @@
 
 import type * as core from "@fragua/core/handler";
 import type { AbortRegistry } from "./abort-registry.ts";
-import { isAbortError, TIMEOUT_SENTINEL } from "./executor-helpers.ts";
+import { TIMEOUT_SENTINEL } from "./executor-helpers.ts";
 
 export type HandlerInvocation =
   | { kind: "result"; result: core.HandlerResult }
   /** The watchdog tripped: the handler ignored its AbortSignal past
    * `maxMs + leakGrace`. The caller emits fact.handler_timeout_leaked. */
   | { kind: "leak" }
-  /** The handler (or a build step inside the awaited call) threw.
-   * `abortByName` is true when the error name is AbortError / TimeoutError;
-   * the caller may still reclassify (e.g. a reactive-budget abort surfaced
-   * as a plain Error). */
-  | { kind: "thrown"; error: unknown; abortByName: boolean };
+  /** The handler (or a build step inside the awaited call) threw. The caller
+   * classifies it by which dispatch signal fired, never by the error's name. */
+  | { kind: "thrown"; error: unknown };
 
 export async function invokeHandler(deps: {
   spec: core.HandlerSpec;
@@ -108,7 +106,7 @@ export async function invokeHandler(deps: {
     // operator intents are the operative ceiling. Steer + shutdown still abort.
     return { kind: "result", result: await spec.handler(ctx) };
   } catch (err) {
-    return { kind: "thrown", error: err, abortByName: isAbortError(err) };
+    return { kind: "thrown", error: err };
   } finally {
     if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
     ctx.signal.removeEventListener("abort", stampAbort);

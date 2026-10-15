@@ -460,10 +460,9 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
       sideEffect: "none",
       maxMs: 30,
       handler: async ({ signal }) => {
-        // Wait past the timeout. AbortSignal.timeout fires →
-        // signal.reason is a TimeoutError DOMException → executor's
-        // isAbortError recognises it → fact.node_aborted with cause
-        // "timeout" is emitted.
+        // Wait past the timeout. The armed deadline fires first, so the
+        // executor classifies the exit by that signal → fact.node_aborted
+        // with cause "timeout" is emitted.
         await new Promise<void>((res, rej) => {
           const t = setTimeout(res, 200);
           signal.addEventListener("abort", () => {

@@ -146,3 +146,19 @@ describe("resultToFacts — structured outputs", () => {
     expect(findFact(facts, "fact.run_terminated")).toBeUndefined();
   });
 });
+
+describe("resultToFacts — provider pauses", () => {
+  test("pause_provider clips errorMessage on both pause reasons", () => {
+    const errorMessage = `upstream body: ${"z".repeat(6000)}`;
+    for (const httpStatus of [402, 503]) {
+      const facts = resultToFacts(
+        { kind: "pause_provider", httpStatus, provider: "anthropic", errorMessage },
+        { state: minimalRunState("work"), appliedIntentSeqs: [] },
+      );
+      const pause = findFact(facts, "fact.run_paused");
+      expect(pause).toBeDefined();
+      expect(new TextEncoder().encode(JSON.stringify(pause?.payload)).length).toBeLessThan(4096);
+      expect((pause?.payload as { errorMessage: string }).errorMessage.startsWith("upstream body: ")).toBe(true);
+    }
+  });
+});

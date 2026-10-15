@@ -15,6 +15,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { planDispatchStarted } from "../src/lifecycle-planner.ts";
 import { planPreDispatch } from "../src/predispatch-planner.ts";
+import { IntentArrivedError } from "../src/supervisor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
@@ -149,9 +150,17 @@ function registerHandlers(r: ReturnType<typeof rig>, calls: Record<string, () =>
   llm("synth");
 }
 
-/** A steer-like abort: named AbortError, so the branch exit classifies as a
- * plain abort (re-drive + abort-loop streak), not a thrown-error halt. */
-function abortErr(message: string): Error {
+/** The registry of the run `drive` is currently driving. */
+let liveRegistry = new AbortRegistry();
+
+/** A steer-like abort: trips the branch's own dispatch controller (as an
+ * operator intent would), then returns the AbortError the handler throws, so
+ * the branch exit classifies as a plain abort (re-drive + abort-loop streak),
+ * not a thrown-error halt. */
+function abortErr(ctx: { runId: string; nodeId: string }, message: string): Error {
+  for (const h of liveRegistry.liveHandlers(ctx.runId)) {
+    if (h.nodeId === ctx.nodeId) h.controller.abort(new IntentArrivedError(ctx.runId, 0));
+  }
   return Object.assign(new Error(message), { name: "AbortError" });
 }
 
@@ -180,10 +189,11 @@ interface DriveOpts {
 
 async function drive(r: ReturnType<typeof rig>, runId: string, opts: DriveOpts = {}): Promise<void> {
   r.store.claimNextRun(1);
+  liveRegistry = new AbortRegistry();
   await runOne(runId, {
     store: r.store,
     dispatcher: r.dispatcher,
-    registry: new AbortRegistry(),
+    registry: liveRegistry,
     tools: r.tools,
     llmCall: r.llmCall,
     maxConcurrentRuns: 1,
@@ -284,10 +294,10 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1000,
-      handler: async () => {
+      handler: async (ctx) => {
         c["b_scan"]?.();
         bScanCalls++;
-        if (bScanCalls === 1) throw abortErr("transient");
+        if (bScanCalls === 1) throw abortErr(ctx, "transient");
         return {
           kind: "transition",
           outcomeStatus: "success",
@@ -395,9 +405,9 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1000,
-      handler: async () => {
+      handler: async (ctx) => {
         c["x_fail"]?.();
-        throw abortErr("always aborts");
+        throw abortErr(ctx, "always aborts");
       },
     });
     const okLlm = (id: string) =>
@@ -441,8 +451,8 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1000,
-      handler: async () => {
-        throw abortErr("always aborts");
+      handler: async (ctx) => {
+        throw abortErr(ctx, "always aborts");
       },
     });
     const okLlm = (id: string) =>
@@ -507,9 +517,9 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1000,
-      handler: async () => {
+      handler: async (ctx) => {
         bCalls++;
-        if (bCalls === 1) throw abortErr("transient abort");
+        if (bCalls === 1) throw abortErr(ctx, "transient abort");
         return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
       },
     });
@@ -1868,11 +1878,9 @@ steps:
       kind: "llm",
       sideEffect: "external",
       maxMs: 1000,
-      handler: async () => {
+      handler: async (ctx) => {
         aCalls++;
-        const err = new Error("transient");
-        err.name = "AbortError";
-        throw err;
+        throw abortErr(ctx, "transient");
       },
     });
     r.dispatcher.register(r.workflowSha, "b_scan", {

@@ -23,6 +23,7 @@ import { pbtRuns } from "../../../test/pbt-runs.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { CommittingRecorder } from "../src/recorder.ts";
+import { IntentArrivedError } from "../src/supervisor.ts";
 import { enqueue, rig } from "./helpers.ts";
 import { dispositionType } from "./invariants.ts";
 
@@ -613,15 +614,19 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
   // the underlying cause is fixed shouldn't have to re-enqueue the
   // run from scratch. Naked `intent.resume` grants one more attempt;
   // there's no per-run cap-adjustment intent because the ceiling is
-  // daemon config, not workflow-author authority.
+  // daemon config, not workflow-author authority. Each handler trips its own
+  // dispatch signal before throwing: an abort is classified by the signal
+  // that fired, so a bare AbortError on a live signal would be a thrown error.
   test("5 consecutive aborts with no progress → fact.run_paused{reason:'abort_loop'}, status=paused", async () => {
     const r = rig();
+    const registry = new AbortRegistry();
     // A handler that always aborts before emitting any transition.
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
       sideEffect: "none",
       maxMs: 100,
-      handler: async () => {
+      handler: async (ctx) => {
+        registry.trip(ctx.runId, new IntentArrivedError(ctx.runId, 0));
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       },
     });
@@ -632,7 +637,7 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
     await runOne("rp20", {
       store: r.store,
       dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
+      registry,
       tools: r.tools,
       llmCall: r.llmCall,
       maxConcurrentRuns: 1,
@@ -652,11 +657,13 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
 
   test("abort_loop_warning observability event fires one abort before the pause", async () => {
     const r = rig();
+    const registry = new AbortRegistry();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
       sideEffect: "none",
       maxMs: 100,
-      handler: async () => {
+      handler: async (ctx) => {
+        registry.trip(ctx.runId, new IntentArrivedError(ctx.runId, 0));
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       },
     });
@@ -666,7 +673,7 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
     await runOne("rp20w", {
       store: r.store,
       dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
+      registry,
       tools: r.tools,
       llmCall: r.llmCall,
       maxConcurrentRuns: 1,
@@ -694,11 +701,13 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
 
   test("abortLoopCeiling=2 pauses after 2 aborts (knob honoured)", async () => {
     const r = rig();
+    const registry = new AbortRegistry();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
       sideEffect: "none",
       maxMs: 100,
-      handler: async () => {
+      handler: async (ctx) => {
+        registry.trip(ctx.runId, new IntentArrivedError(ctx.runId, 0));
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       },
     });
@@ -708,7 +717,7 @@ describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
     await runOne("rp20c", {
       store: r.store,
       dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
+      registry,
       tools: r.tools,
       llmCall: r.llmCall,
       maxConcurrentRuns: 1,

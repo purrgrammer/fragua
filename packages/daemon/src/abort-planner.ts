@@ -14,8 +14,17 @@
 // commit after the streak bump, and the timeout-retry commit re-drives on an OCC
 // conflict. So `planExit` returns an `outcome` tag the driver switches on.
 
-import { AUTO_RESUME_AT_KEY, getRetry, readGoalGateRetries, timeoutRetriesKey } from "@fragua/core";
+import {
+  AUTO_RESUME_AT_KEY,
+  type BudgetInput,
+  clipPayloadText,
+  evaluateBudget,
+  getRetry,
+  readGoalGateRetries,
+  timeoutRetriesKey,
+} from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
+import type { AbortCause } from "./executor-helpers.ts";
 import { exitSpendFacts, type HaltUsage } from "./result-to-facts.ts";
 import { computeAdvanceAppliedTo, type PlannedObservability } from "./transition-planner.ts";
 
@@ -47,26 +56,21 @@ export interface BudgetBreach {
 
 export interface ExitClassifyInput {
   invocation: "leak" | "thrown";
-  /** The thrown error is named AbortError / TimeoutError. */
-  abortByName: boolean;
-  /** The dispatch's composed signal had tripped when the handler threw. */
-  signalAborted: boolean;
-  /** The daemon's shutdown signal had tripped. */
-  shutdownAborted: boolean;
-  /** `classifyAbortCause` over the composed signal + error. */
-  abortCause: "timeout" | "aborted";
-  /** The linear reactive budget gate tripped the steer controller. */
+  /** `classifyAbortCause` over the dispatch's signals — which one fired. */
+  cause: AbortCause;
+  /** The reactive budget gate tripped the steer controller. */
   budgetTripped: boolean;
 }
 
-/** Classify a non-result invocation. A throw while the dispatch's signal had
- * tripped is an abort even when the handler wrapped the AbortError. */
+/** Classify a non-result invocation by the dispatch signal that fired. A throw
+ * after any dispatch signal fired is an abort even when the handler wrapped the
+ * AbortError; a throw while none had fired is the handler's own error, whatever
+ * its name. */
 export function classifyExit(input: ExitClassifyInput): ExitKind {
   if (input.invocation === "leak") return "leak";
-  const aborted = input.abortByName || input.signalAborted || input.budgetTripped;
-  if (!aborted) return "throw";
-  if (input.abortCause === "timeout") return "timeout";
-  if (input.shutdownAborted) return "shutdown";
+  if (input.cause === "none") return input.budgetTripped ? "abort" : "throw";
+  if (input.cause === "timeout") return "timeout";
+  if (input.cause === "shutdown") return "shutdown";
   return "abort";
 }
 
@@ -114,6 +118,27 @@ export interface ExitPlan {
   routingPatch?: Record<string, unknown>;
   advanceAppliedTo?: number;
   outcome: ExitOutcome;
+}
+
+/** A mid-handler budget evaluation: the stop-policy halt detail or the
+ * pause-policy breach (halt wins), the `budget.*` events to stream, and the
+ * warn tags that fired. Neither field set ⇒ no trip. */
+export interface ReactiveBudgetPlan {
+  haltDetail?: string;
+  pauseBreach?: BudgetBreach;
+  events: PlannedObservability[];
+  newlyWarned: string[];
+}
+
+/** The reactive budget gate's decision, shared by the linear dispatch and every
+ * fan-out branch: evaluate the cumulative spend AFTER each `cost.recorded` and
+ * say whether the in-flight handler must be stopped. Pure. */
+export function planReactiveBudget(input: BudgetInput): ReactiveBudgetPlan {
+  const d = evaluateBudget(input);
+  const plan: ReactiveBudgetPlan = { events: d.events, newlyWarned: d.newlyWarned };
+  if (d.shouldHalt) plan.haltDetail = d.haltReason ?? "";
+  else if (d.pauseBreach !== undefined) plan.pauseBreach = d.pauseBreach;
+  return plan;
 }
 
 /** The single budget-breach fact producer: a stop-policy breach halts
@@ -222,7 +247,8 @@ export function planExit(input: ExitPlanInput): ExitPlan {
 
   if (exit === "throw") {
     const payload: { status: "errored"; reason: "error"; detail?: string } = { status: "errored", reason: "error" };
-    if (input.errorDetail !== undefined && input.errorDetail.length > 0) payload.detail = input.errorDetail;
+    if (input.errorDetail !== undefined && input.errorDetail.length > 0)
+      payload.detail = clipPayloadText(input.errorDetail);
     facts.push({ type: "fact.run_terminated", payload });
     return withBase("halt");
   }

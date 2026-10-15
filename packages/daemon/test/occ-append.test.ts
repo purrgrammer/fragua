@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventStore, type RunState } from "@fragua/store";
 import {
+  commitParkOrTerminal,
   commitWithOcc,
   HALT_APPEND_MAX_ATTEMPTS,
   makeOccController,
@@ -359,6 +360,114 @@ describe("commitWithOcc — claim lost", () => {
     };
     expect(await commitWithOcc(plan, [pausedFact])).toEqual({ kind: "terminal" });
     expect(parked).toBeUndefined();
+  });
+});
+
+describe("commitWithOcc — in-turn re-plan", () => {
+  const running = (version: number): RunState => ({ status: "running", version }) as unknown as RunState;
+  const replanned: FactEvent = { type: "fact.run_paused", payload: { reason: "operator", nodeId: "replanned" } };
+
+  test("a replan hook re-commits re-planned facts on a version-only conflict and never returns continue", async () => {
+    const committed: Array<{ facts: FactEvent[]; version: number }> = [];
+    let replans = 0;
+    let landed: FactEvent[] | undefined;
+    const out = await commitWithOcc(
+      {
+        occ: fakeOcc(),
+        nodeId: "n",
+        iteration: 0,
+        expectedVersion: 1,
+        commit: async (f) => {
+          committed.push({ facts: f, version: 1 });
+          return { ok: false, reason: "occ" };
+        },
+        successOutcome: { kind: "continue" },
+        statusOutcome: { kind: "terminal" },
+        readState: () => running(2),
+        replan: (fresh) => {
+          replans++;
+          return {
+            facts: [replanned],
+            expectedVersion: fresh.version,
+            commit: async (f) => {
+              committed.push({ facts: f, version: fresh.version });
+              return { ok: true };
+            },
+          };
+        },
+        onSuccess: (f) => {
+          landed = f;
+          return { kind: "terminal" };
+        },
+      },
+      [pausedFact],
+    );
+    expect(out).toEqual({ kind: "terminal" });
+    expect(replans).toBe(1);
+    expect(committed).toEqual([
+      { facts: [pausedFact], version: 1 },
+      { facts: [replanned], version: 2 },
+    ]);
+    expect(landed).toEqual([replanned]);
+  });
+
+  test("replan still escalates to occ_exhausted at the ceiling", async () => {
+    const appended: FactEvent[][] = [];
+    const store = stubStore({
+      getState: (() => running(5)) as unknown as IEventStore["getState"],
+      appendFact: ((_r: string, facts: FactEvent[]) => {
+        appended.push(facts);
+        if (facts.some((f) => f.type === "fact.run_terminated")) return {} as never;
+        throw new ConcurrencyError(1, 2);
+      }) as unknown as IEventStore["appendFact"],
+      appendObservabilityEvents: (() => []) as unknown as IEventStore["appendObservabilityEvents"],
+    });
+    const occ = makeOccController({ store, runId: "r", shutdownSignal: noSignal });
+    const out = await commitWithOcc(
+      {
+        occ,
+        nodeId: "n",
+        iteration: 0,
+        expectedVersion: 1,
+        commit: occAppendOnce(store, "r", 1),
+        successOutcome: { kind: "continue" },
+        statusOutcome: { kind: "continue" },
+        readState: () => store.getState("r"),
+        replan: (fresh) => ({
+          facts: [pausedFact],
+          expectedVersion: fresh.version,
+          commit: occAppendOnce(store, "r", fresh.version),
+        }),
+      },
+      [pausedFact],
+    );
+    expect(out).toEqual({ kind: "terminal" });
+    const halt = appended.flat().find((f) => f.type === "fact.run_terminated");
+    expect((halt?.payload as { reason?: string }).reason).toBe("occ_exhausted");
+    expect(appended.filter((b) => b.includes(pausedFact))).toHaveLength(3);
+  });
+
+  test("commitParkOrTerminal retries a version-only conflict against the fresh version", async () => {
+    const versions: number[] = [];
+    let current = 1;
+    const store = stubStore({
+      getState: (() => running(current)) as unknown as IEventStore["getState"],
+      appendFact: ((_r: string, _f: FactEvent[], expected: number) => {
+        versions.push(expected);
+        if (expected !== 2) {
+          current = 2;
+          throw new ConcurrencyError(expected, 2);
+        }
+        return {} as never;
+      }) as unknown as IEventStore["appendFact"],
+      appendObservabilityEvents: (() => []) as unknown as IEventStore["appendObservabilityEvents"],
+    });
+    const occ = makeOccController({ store, runId: "r", shutdownSignal: noSignal });
+    const out = await commitParkOrTerminal({ store, runId: "r", occ, nodeId: "n", iteration: 0, expectedVersion: 1 }, [
+      pausedFact,
+    ]);
+    expect(out).toEqual({ kind: "terminal" });
+    expect(versions).toEqual([1, 2]);
   });
 });
 

@@ -38,18 +38,17 @@ describe("invokeHandler", () => {
       expect(out.result).toEqual({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 });
   });
 
-  test("tags a thrown AbortError as abortByName, a plain error as not", async () => {
+  test("returns a thrown outcome carrying the raw error", async () => {
+    const named = Object.assign(new Error("x"), { name: "AbortError" });
     const aborted = await invokeHandler(
       deps({
         handler: async () => {
-          const e = new Error("x");
-          e.name = "AbortError";
-          throw e;
+          throw named;
         },
         maxMs: 1000,
       }),
     );
-    expect(aborted).toMatchObject({ kind: "thrown", abortByName: true });
+    expect(aborted).toEqual({ kind: "thrown", error: named });
 
     const plain = await invokeHandler(
       deps({
@@ -59,7 +58,7 @@ describe("invokeHandler", () => {
         maxMs: 1000,
       }),
     );
-    expect(plain).toMatchObject({ kind: "thrown", abortByName: false });
+    expect(plain.kind).toBe("thrown");
     if (plain.kind === "thrown") expect((plain.error as Error).message).toBe("boom");
   });
 

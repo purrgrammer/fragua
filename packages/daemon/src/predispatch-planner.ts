@@ -7,17 +7,14 @@
 // the decision here keeps SPEC §3.11 / I12's decision core complete — no store,
 // no clock, no RNG, no I/O. The driver applies the plan.
 
+import { clipPayloadText } from "@fragua/core";
 import type { FactEvent, RunState } from "@fragua/store";
 
-// The event-payload cap is 4KB; bound the appended parse error so a
-// pathological message can never make the halt append itself fail.
-const PARSE_ERROR_DETAIL_MAX = 300;
+const PARSE_ERROR_DETAIL_MAX_BYTES = 300;
 
 export function workflowParseFailedDetail(errorMessage: string | undefined): string {
   if (errorMessage == null || errorMessage === "") return "workflow_parse_failed";
-  const bounded =
-    errorMessage.length > PARSE_ERROR_DETAIL_MAX ? `${errorMessage.slice(0, PARSE_ERROR_DETAIL_MAX)}…` : errorMessage;
-  return `workflow_parse_failed: ${bounded}`;
+  return `workflow_parse_failed: ${clipPayloadText(errorMessage, PARSE_ERROR_DETAIL_MAX_BYTES)}`;
 }
 
 /** The one `fact.run_paused{max_loops}` shape, for every site that parks a run
@@ -110,7 +107,7 @@ export function planPreDispatch(input: PreDispatchInput): PreDispatchPlan {
           payload: {
             status: "errored",
             reason: "worktree_error",
-            detail: `worktree_provision_failed: ${input.worktreeError}`,
+            detail: `worktree_provision_failed: ${clipPayloadText(input.worktreeError)}`,
           },
         },
       ],

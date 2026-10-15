@@ -57,7 +57,7 @@ describe("planPreDispatch", () => {
     expect(payload).toMatchObject({ status: "errored", reason: "error" });
     expect(payload.detail.startsWith("workflow_parse_failed: ")).toBe(true);
     expect(payload.detail.length).toBeLessThan(long.length);
-    expect(payload.detail.endsWith("…")).toBe(true);
+    expect(payload.detail).toMatch(/ … \[clipped \d+ bytes\]$/);
   });
 
   test("worktree provision failure halts with worktree_error carrying the detail", () => {

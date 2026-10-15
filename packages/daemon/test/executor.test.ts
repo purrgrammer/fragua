@@ -3,6 +3,7 @@ import { OPERATOR_NOTES_KEY, type OperatorNote, readOperatorNotes } from "@fragu
 import * as handler from "@fragua/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
+import { IntentArrivedError } from "../src/supervisor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 import { dispositionType } from "./invariants.ts";
@@ -527,12 +528,14 @@ describe("executor — observability emission", () => {
 
   test("emit buffer flushes even when the handler throws / aborts", async () => {
     const r = rig();
+    const registry = new AbortRegistry();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "llm",
       sideEffect: "external",
       maxMs: 1_000,
       handler: async (ctx) => {
         ctx.emit("llm.text_delta", { delta: "before-abort" });
+        registry.trip(ctx.runId, new IntentArrivedError(ctx.runId, 0));
         const err = new Error("cancelled");
         err.name = "AbortError";
         throw err;
@@ -545,7 +548,7 @@ describe("executor — observability emission", () => {
     await runOne("obs-abort", {
       store: r.store,
       dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
+      registry,
       tools: r.tools,
       llmCall: r.llmCall,
       maxConcurrentRuns: 1,
@@ -554,6 +557,8 @@ describe("executor — observability emission", () => {
     });
     const types = r.store.getEvents("obs-abort").map((e) => e.type);
     expect(types).toContain("llm.text_delta");
+    const aborted = r.store.getEvents("obs-abort").find((e) => e.type === "fact.node_aborted");
+    expect((aborted?.payload as { cause?: string }).cause).toBe("aborted");
     r.store.close();
   });
 });

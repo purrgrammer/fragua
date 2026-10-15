@@ -12,7 +12,14 @@
 // correct semantics (the bug shape is "supervisor wedged this turn", which
 // doesn't survive a process restart).
 
-import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
+import {
+  ClaimLostError,
+  ConcurrencyError,
+  type FactEvent,
+  type IEventReader,
+  type IEventWriter,
+  type RunState,
+} from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 /**
@@ -228,11 +235,12 @@ export interface OccCommitPlan {
   successOutcome: DispatchOutcome | undefined;
   /** Returned when the run left `running` under us. `undefined` proceeds. */
   statusOutcome: DispatchOutcome | undefined;
-  /** Success side-effects. A returned `DispatchOutcome` overrides
+  /** Success side-effects, given the facts that landed (a re-plan may have
+   *  replaced the first batch). A returned `DispatchOutcome` overrides
    *  `successOutcome` (e.g. a follow-on abort-loop pause commit); a void return
    *  (side-effects only) falls through to `successOutcome`. */
   // biome-ignore lint/suspicious/noConfusingVoidType: the callback may return an outcome or nothing
-  onSuccess?: () => DispatchOutcome | void | Promise<DispatchOutcome | void>;
+  onSuccess?: (landed: FactEvent[]) => DispatchOutcome | void | Promise<DispatchOutcome | void>;
   /** Fires the instant a commit fails, before classifying occ vs status. */
   onFail?: () => void | Promise<void>;
   /** Fires before any non-halting exit (status-continue or occ-not-halted). */
@@ -240,6 +248,21 @@ export interface OccCommitPlan {
   /** Park/clear hook: called with the facts on a non-halted OCC conflict, and
    *  with undefined when the park is cleared (commit landed / status / halted). */
   onPark?: (facts: FactEvent[] | undefined) => void;
+  /** Re-plan the SAME handler result against fresh state after a version-only
+   *  conflict, so the commit is retried in this turn instead of re-dispatching
+   *  the handler. Undefined keeps the park-and-continue behaviour. Returning
+   *  undefined from the hook (the fresh state no longer fits the plan) parks. */
+  replan?: (fresh: RunState) => OccReplan | undefined;
+  /** Fresh-state reader the re-plan loop consults; required with `replan`. */
+  readState?: () => RunState | null;
+}
+
+/** One re-planned attempt: the facts, the version they were planned against,
+ * and the commit primitive bound to that version. */
+export interface OccReplan {
+  facts: FactEvent[];
+  expectedVersion: number;
+  commit: (facts: FactEvent[]) => Promise<CommitResult>;
 }
 
 export function commitWithOcc(
@@ -248,24 +271,28 @@ export function commitWithOcc(
 ): Promise<DispatchOutcome>;
 export function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Promise<DispatchOutcome | undefined>;
 export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Promise<DispatchOutcome | undefined> {
-  const res = await plan.commit(facts);
-  if (res.ok) {
-    const override = (await plan.onSuccess?.()) as DispatchOutcome | undefined;
-    plan.onPark?.(undefined);
-    return override ?? plan.successOutcome;
-  }
-  await plan.onFail?.();
-  if (res.reason === "claim_lost") {
-    await plan.onNonHalt?.();
-    plan.onPark?.(undefined);
-    return { kind: "terminal" };
-  }
-  if (res.reason === "occ") {
+  let attempt: OccReplan = { facts, expectedVersion: plan.expectedVersion, commit: plan.commit };
+  let replanned = false;
+  for (;;) {
+    const res = await attempt.commit(attempt.facts);
+    if (res.ok) {
+      if (replanned) plan.occ.onResolved(plan.nodeId, plan.iteration);
+      const override = (await plan.onSuccess?.(attempt.facts)) as DispatchOutcome | undefined;
+      plan.onPark?.(undefined);
+      return override ?? plan.successOutcome;
+    }
+    await plan.onFail?.();
+    if (res.reason === "claim_lost") {
+      await plan.onNonHalt?.();
+      plan.onPark?.(undefined);
+      return { kind: "terminal" };
+    }
+    if (res.reason !== "occ") break;
     const conflict = await plan.occ.onConflict(
-      plan.attemptedFactType ?? facts[0]?.type ?? "fact.unknown",
+      plan.attemptedFactType ?? attempt.facts[0]?.type ?? "fact.unknown",
       plan.nodeId,
       plan.iteration,
-      plan.expectedVersion,
+      attempt.expectedVersion,
     );
     if (conflict.halted) {
       plan.onPark?.(undefined);
@@ -276,13 +303,28 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
       plan.onPark?.(undefined);
       return { kind: "terminal" };
     }
-    await plan.onNonHalt?.();
-    plan.onPark?.(facts);
-    return { kind: "continue" };
+    const next = nextReplan(plan);
+    if (next === "status") break;
+    if (next === undefined) {
+      await plan.onNonHalt?.();
+      plan.onPark?.(attempt.facts);
+      return { kind: "continue" };
+    }
+    attempt = next;
+    replanned = true;
   }
   await plan.onNonHalt?.();
   plan.onPark?.(undefined);
   return plan.statusOutcome;
+}
+
+/** The re-plan for the next attempt: `status` when the run left `running` under
+ * us, undefined when the plan has no re-plan (or the hook declined). */
+function nextReplan(plan: OccCommitPlan): OccReplan | "status" | undefined {
+  if (plan.replan === undefined || plan.readState === undefined) return undefined;
+  const fresh = plan.readState();
+  if (fresh == null || fresh.status !== "running") return "status";
+  return plan.replan(fresh);
 }
 
 /** The linear path's commit primitive: a `ConcurrencyError` is an OCC conflict
@@ -302,28 +344,35 @@ export function occAppendOnce(
 /** Commit a run-parking or terminal fact batch HONESTLY — the run never stays
  * `running` with the fact silently lost on a lost OCC race (ARCH §1.6). Thin
  * wrapper over `commitWithOcc` pinning terminal-on-success / terminal-on-status
- * semantics (the run stopped). Shared by the linear and fan-out paths so neither
- * can strand the run. */
+ * semantics (the run stopped). With the default commit a version-only conflict
+ * re-commits the same batch against the fresh version in this call (bounded by
+ * the controller's ceiling); a caller-supplied commit (the fan-out lane) keeps
+ * park-and-continue. Shared by the linear and fan-out paths so neither can
+ * strand the run. */
 export async function commitParkOrTerminal(deps: ParkOrTerminalDeps, facts: FactEvent[]): Promise<DispatchOutcome> {
   const { store, runId, occ, nodeId, iteration, expectedVersion, onPark } = deps;
-  const commit =
-    deps.commit ??
-    (async (f: FactEvent[]): Promise<CommitResult> => {
-      const res = appendCommit(store, runId, expectedVersion, f, deps.appendOpts);
+  const defaultCommit =
+    (version: number) =>
+    async (f: FactEvent[]): Promise<CommitResult> => {
+      const res = appendCommit(store, runId, version, f, deps.appendOpts);
       if (res.ok || res.reason === "claim_lost") return res;
       const fresh = store.getState(runId);
       if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
       return { ok: false, reason: "occ" };
-    });
+    };
   const plan: OccCommitPlan & { successOutcome: DispatchOutcome; statusOutcome: DispatchOutcome } = {
     occ,
     nodeId,
     iteration,
     expectedVersion,
-    commit,
+    commit: deps.commit ?? defaultCommit(expectedVersion),
     successOutcome: { kind: "terminal" },
     statusOutcome: { kind: "terminal" },
   };
+  if (deps.commit === undefined) {
+    plan.readState = () => store.getState(runId);
+    plan.replan = (fresh) => ({ facts, expectedVersion: fresh.version, commit: defaultCommit(fresh.version) });
+  }
   if (onPark !== undefined) plan.onPark = onPark;
   return commitWithOcc(plan, facts);
 }
