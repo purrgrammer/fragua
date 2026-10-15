@@ -6,7 +6,9 @@ import { pbtRuns } from "../../../test/pbt-runs.ts";
 import {
   computeBackoffMs,
   decideProviderRetry,
+  formatDelayMs,
   isAutoRetryableStatus,
+  PROVIDER_RETRY_AFTER_MAX_MS,
   PROVIDER_RETRY_BASE_BACKOFF_MS,
   PROVIDER_RETRY_MAX_ATTEMPTS,
   PROVIDER_RETRY_MAX_CUMULATIVE_MS,
@@ -107,6 +109,61 @@ describe("decideProviderRetry — auto-retry classes", () => {
     });
     if (d.kind !== "auto-retry") throw new Error();
     expect(d.delayMs).toBe(60 * 60 * 1000);
+  });
+});
+
+describe("decideProviderRetry — long Retry-After cap", () => {
+  test("Retry-After of 12311000 ms (3h25m) under the cap → auto-retry with that exact delay", () => {
+    const now = 1_000_000;
+    const d = decideProviderRetry({
+      httpStatus: 429,
+      retryAfterMs: 12_311_000,
+      priorAttempt: 0,
+      now,
+      cumulativeDelayMs: 0,
+      random: () => 0.5,
+    });
+    expect(d).toEqual({
+      kind: "auto-retry",
+      attempt: 1,
+      delayMs: 12_311_000,
+      resumeAt: now + 12_311_000,
+      retryAfterMs: 12_311_000,
+    });
+  });
+
+  test("Retry-After above PROVIDER_RETRY_AFTER_MAX_MS (7h) → manual with requested delay and cap in detail", () => {
+    expect(PROVIDER_RETRY_AFTER_MAX_MS).toBe(6 * 60 * 60 * 1000);
+    const d = decideProviderRetry({
+      httpStatus: 429,
+      retryAfterMs: 7 * 60 * 60 * 1000,
+      priorAttempt: 0,
+      now: 0,
+      cumulativeDelayMs: 0,
+    });
+    expect(d.kind).toBe("manual");
+    if (d.kind !== "manual") throw new Error();
+    expect(d.detail).toContain("7h");
+    expect(d.detail).toContain("6h");
+  });
+
+  test("retryAfterMaxMs override lowers the cap", () => {
+    const d = decideProviderRetry({
+      httpStatus: 429,
+      retryAfterMs: 2 * 60 * 60 * 1000,
+      retryAfterMaxMs: 60 * 60 * 1000,
+      priorAttempt: 0,
+      now: 0,
+      cumulativeDelayMs: 0,
+    });
+    expect(d.kind).toBe("manual");
+  });
+
+  test("formatDelayMs renders compact operator durations", () => {
+    expect(formatDelayMs(45_000)).toBe("45s");
+    expect(formatDelayMs(12 * 60_000)).toBe("12m");
+    expect(formatDelayMs(12_311_000)).toBe("3h25m");
+    expect(formatDelayMs(6 * 60 * 60 * 1000)).toBe("6h");
   });
 });
 

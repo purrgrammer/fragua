@@ -179,3 +179,32 @@ describe("renderEvent — budget.warn highlighting", () => {
     expect(out()).toContain("fact.run_terminated");
   });
 });
+
+describe("renderEvent — provider_retry with a provider-requested delay", () => {
+  test("names the wake time and the provider's requested delay", () => {
+    const logs: string[] = [];
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    renderEvent({
+      seq: 7,
+      ts: 1000,
+      type: "fact.run_paused",
+      payload: {
+        reason: "provider_retry",
+        nodeId: "synthesize",
+        httpStatus: 429,
+        provider: "anthropic",
+        errorMessage: "rate limited",
+        attempt: 1,
+        resumeAt: Date.now() + 12_311_000,
+        retryAfterMs: 12_311_000,
+      },
+      runId: "r1",
+      writer: "daemon",
+    });
+    const out = logs.join("\n");
+    expect(out).toContain("auto-retry provider_retry (attempt 1)");
+    expect(out).toContain("provider asked for 3h25m");
+  });
+});

@@ -1013,3 +1013,54 @@ describe("planTransition — goal-gate / retry interaction", () => {
     expect(Object.keys(plan.routingPatch ?? {})).not.toContain(GOAL_GATE_RETRIES_KEY);
   });
 });
+
+describe("planTransition — provider Retry-After", () => {
+  function providerInput(retryAfterMs: number, routing: Record<string, unknown> = {}): TransitionInput {
+    return {
+      state: mkState("n1", routing),
+      decision: emptyDecision,
+      graph: spine(),
+      handlerResult: {
+        kind: "pause_provider",
+        httpStatus: 429,
+        provider: "anthropic",
+        errorMessage: "rate limited",
+        retryAfterMs,
+      },
+      accounting: zeroAccounting,
+      effectiveRouting: routing,
+      currentNode: "n1",
+      iteration: 0,
+      now: 1000,
+      random: () => 0.5,
+    } satisfies TransitionInput;
+  }
+
+  test("provider auto-retry with Retry-After — does not accrue the delay into cumulative_ms", () => {
+    const plan = planTransition(providerInput(12_311_000, { [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: 1_500 }));
+    const paused = plan.facts.find((f) => f.type === "fact.run_paused");
+    const payload = paused?.payload as { reason?: string; resumeAt?: number; retryAfterMs?: number };
+    expect(payload.reason).toBe("provider_retry");
+    expect(payload.resumeAt).toBe(1000 + 12_311_000);
+    expect(payload.retryAfterMs).toBe(12_311_000);
+    expect(plan.routingPatch?.[PROVIDER_RETRY_CUMULATIVE_MS_KEY]).toBe(1_500);
+    expect(plan.routingPatch?.[PROVIDER_RETRY_ATTEMPT_KEY]).toBe(1);
+  });
+
+  test("provider manual over cap — stamps detail + retryAfterMs on the provider_error pause", () => {
+    const plan = planTransition(providerInput(25_200_000));
+    const paused = plan.facts.find((f) => f.type === "fact.run_paused");
+    const payload = paused?.payload as { reason?: string; detail?: string; retryAfterMs?: number };
+    expect(payload.reason).toBe("provider_error");
+    expect(payload.detail).toContain("7h");
+    expect(payload.detail).toContain("6h");
+    expect(payload.retryAfterMs).toBe(25_200_000);
+    expect(plan.facts.some((f) => f.type === "fact.provider_retry_attempted")).toBe(false);
+  });
+
+  test("providerRetryAfterMaxMs input lowers the cap", () => {
+    const plan = planTransition({ ...providerInput(2 * 60 * 60 * 1000), providerRetryAfterMaxMs: 60 * 60 * 1000 });
+    const paused = plan.facts.find((f) => f.type === "fact.run_paused");
+    expect((paused?.payload as { reason?: string }).reason).toBe("provider_error");
+  });
+});

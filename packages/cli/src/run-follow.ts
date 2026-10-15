@@ -6,6 +6,7 @@
 // distinct codes for pause-vs-fail). A daemon must be running for events to
 // appear; with none the run sits queued and this waits (Ctrl-C to stop).
 
+import { formatDelayMs } from "@fragua/daemon";
 import type { StoredEvent } from "@fragua/store";
 import {
   AUTO_WAKE_PAUSE_REASONS,
@@ -223,6 +224,7 @@ export function renderEvent(ev: StoredEvent): void {
       text?: string;
       resumeAt?: number;
       attempt?: number;
+      retryAfterMs?: number;
     };
     const reason = p.reason ?? "operator";
     if (reason === "human") {
@@ -234,7 +236,12 @@ export function renderEvent(ev: StoredEvent): void {
     }
     if (AUTO_WAKE_PAUSE_REASONS.has(reason)) {
       const secs = typeof p.resumeAt === "number" ? Math.max(0, Math.round((p.resumeAt - Date.now()) / 1000)) : null;
-      const when = secs === null ? "shortly" : `in ~${secs}s`;
+      const when =
+        typeof p.resumeAt === "number" && typeof p.retryAfterMs === "number"
+          ? `at ${new Date(p.resumeAt).toLocaleTimeString()} (provider asked for ${formatDelayMs(p.retryAfterMs)})`
+          : secs === null
+            ? "shortly"
+            : `in ~${secs}s`;
       const attempt = typeof p.attempt === "number" ? ` (attempt ${p.attempt})` : "";
       console.log(
         `${chalk.dim(`[${ev.seq}]`)} ${chalk.yellow(`⏳ ${ev.type}`)} ` +

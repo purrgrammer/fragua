@@ -21,6 +21,7 @@ import type {
   RunExplanation,
   StepSnapshot,
 } from "@fragua/core/read-plane";
+import { formatDelayMs } from "@fragua/daemon";
 import {
   type ArtifactScope,
   isTerminal,
@@ -456,6 +457,38 @@ export function checkoutBadge(d: Pick<RunDetail, "runId" | "runStatus" | "checko
     : base;
 }
 
+/** Local wall-clock for a wake time: `HH:MM` today, `YYYY-MM-DD HH:MM` otherwise. */
+function formatWakeTime(ts: number, now: number): string {
+  const at = new Date(ts);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const hm = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  if (at.toDateString() === new Date(now).toDateString()) return hm;
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${hm}`;
+}
+
+/** Operator one-liner for the pause reasons whose payload carries a "when" or
+ * a "why" worth reading; `null` keeps the raw-payload fallback. */
+export interface PauseSummaryFields {
+  reason?: unknown;
+  resumeAt?: unknown;
+  retryAfterMs?: unknown;
+  attempt?: unknown;
+  detail?: unknown;
+}
+
+export function describePause(payload: PauseSummaryFields, now: number): string | null {
+  if (payload.reason === "provider_retry" && typeof payload.resumeAt === "number") {
+    const asked =
+      typeof payload.retryAfterMs === "number" ? ` (provider asked for ${formatDelayMs(payload.retryAfterMs)})` : "";
+    const attempt = typeof payload.attempt === "number" ? ` · attempt ${payload.attempt}` : "";
+    return `retrying at ${formatWakeTime(payload.resumeAt, now)}${asked}${attempt}`;
+  }
+  if (payload.reason === "provider_error" && typeof payload.detail === "string") {
+    return payload.detail;
+  }
+  return null;
+}
+
 function renderStatus(d: RunDetail, events: StoredEvent[]): void {
   const statusColor = d.status === "success" ? chalk.green : d.status === "fail" ? chalk.red : chalk.yellow;
   console.log(chalk.bold(d.runId));
@@ -500,7 +533,10 @@ function renderStatus(d: RunDetail, events: StoredEvent[]): void {
     if (e.type === "fact.run_resumed") break;
     if (e.type === "fact.run_paused") {
       const { reason, ...rest } = e.payload as { reason?: string };
-      console.log(`  paused:   ${chalk.yellow(reason ?? "?")} ${chalk.dim(JSON.stringify(rest))}`);
+      const summary = describePause(e.payload as PauseSummaryFields, Date.now());
+      console.log(
+        `  paused:   ${chalk.yellow(reason ?? "?")} ${summary !== null ? `— ${summary}` : chalk.dim(JSON.stringify(rest))}`,
+      );
       break;
     }
     if (e.type === "fact.run_terminated" && (e.payload as { status?: string }).status === "errored") {

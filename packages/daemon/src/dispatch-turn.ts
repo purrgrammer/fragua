@@ -742,6 +742,7 @@ async function commitTransition(
     iteration,
     now: deps.clock(),
     random: deps.random,
+    providerRetryAfterMaxMs: deps.providerRetryAfterMaxMs,
   });
   for (const ev of plan.observability) obs.push(ev);
   obs.flush();
