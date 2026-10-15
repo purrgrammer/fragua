@@ -36,6 +36,9 @@ guarantee.
 
 ### Fixed
 
+- **Skill files are served inertly.** `GET /skills/:locId/file` returns `text/plain` or `application/octet-stream` with `nosniff` and a sandboxed CSP, and `.html` / `.htm` / `.svg` / `.xml` download as attachments, so a skill file can no longer render as a page on the control-plane origin. The skills viewer now picks its renderer from the file extension.
+- **Enqueue accepts only operator-settable routing keys.** `POST /runs` and the intent plane reject `routing.inputs` (inputs go through the typed `inputs` field and are always validated) and any routing key outside the allow-list (budget overrides, `max_retries_override.<node>`, `max_goal_gate_retries_override`) with a 400 `invalid_routing`.
+- **A non-integer enqueue `priority` is a validation error.** `1.5`, `"high"` or `1e300` now return 400 `invalid_priority` instead of failing with a database error.
 - **A `tool` `run:` line with a literal `$` before a token (`$${{ … }}`) is now rejected** (E058 at save, a failed step at runtime), since the `$` would turn the escaped value into `$(…)`, `$'…'` or a variable expansion.
 - **A long provider `Retry-After` now auto-retries instead of pausing for an operator.** A rate-limit or overload error asking for a delay longer than the SDK's 60s in-process limit is retried at the requested time, up to 6h (config `provider-retry-after-max-ms`), without counting toward the 5-minute retry budget. `runs status` and the run page show `retrying at <time> (provider asked for 3h25m)`; a request above the cap pauses with a reason naming both durations.
 - **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.

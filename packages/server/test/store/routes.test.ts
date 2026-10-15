@@ -628,15 +628,46 @@ steps:
     expect(state!.routing["input"]).toBeUndefined();
   });
 
-  test("routing passed through body lands on routing (non-input keys preserved)", async () => {
+  test("POST /runs rejects non-allow-listed routing keys", async () => {
     const res = await req("POST", "/runs", {
       workflowSha: "wf",
       routing: { start_node: "s" },
     });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; routingErrors: Array<{ key: string; code: string }> };
+    expect(body.code).toBe("invalid_routing");
+    expect(body.routingErrors).toEqual([
+      expect.objectContaining({ key: "start_node", code: "routing_key_not_allowed" }),
+    ]);
+  });
+
+  test("POST /runs refuses smuggled routing.inputs and enqueues nothing (R2-B4)", async () => {
+    const before = store.runStateCounts().queued;
+    const res = await req("POST", "/runs", {
+      workflowSha: "wf",
+      routing: { inputs: { n: "a[$(id)]", mode: "zzz" }, "max_retries_override.x": -5 },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("invalid_routing");
+    expect(store.runStateCounts().queued).toBe(before);
+  });
+
+  test("POST /runs carries an allow-listed budget override onto routing", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", routing: { "budget_override.run.cost": 5 } });
+    expect(res.status).toBe(200);
     const { runId } = (await res.json()) as { runId: string };
-    const state = store.getState(runId);
-    expect(state!.routing["start_node"]).toBe("s");
-    expect(state!.routing["input"]).toBeUndefined();
+    expect(store.getState(runId)!.routing["budget_override.run.cost"]).toBe(5);
+  });
+
+  test("POST /runs rejects fractional priority without a SQLiteError (R2-B8)", async () => {
+    const before = store.runStateCounts().queued;
+    const res = await req("POST", "/runs", { workflowSha: "wf", priority: 1.5 });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("invalid_priority");
+    expect(body.error).not.toContain("SQLiteError");
+    expect(store.runStateCounts().queued).toBe(before);
   });
 
   test("no input field on enqueue → routing.input is absent", async () => {

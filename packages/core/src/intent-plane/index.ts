@@ -3,6 +3,8 @@ export {
   type CheckoutReleaseBuild,
   type CheckoutReleaseRefusal,
   type CheckoutReleaseState,
+  type EnqueueBuild,
+  type EnqueueBuildErrorCode,
   type IntentPlane,
   type IntentPlaneDeps,
   makeIntentPlane,
