@@ -610,6 +610,70 @@ describe("applyAccept with a pinned branch base", () => {
   });
 });
 
+describe("applyAccept branch guard", () => {
+  /** A one-commit run based on main@base, with the checkout switched to `other` at base. */
+  async function onOther(): Promise<{ cwd: string; base: string }> {
+    const { cwd, base } = await setupRepo();
+    await makeRun(cwd, base, 1, false);
+    await must(cwd, ["checkout", "-qb", "other", base]);
+    return { cwd, base };
+  }
+
+  test("refuses wrong_branch when the recorded branch differs from the current one, touching nothing", async () => {
+    const { cwd, base } = await onOther();
+    const r = await applyAccept(git, gate(cwd, base), { branch: { expected: "main" } });
+    expect(r).toMatchObject({ ok: false, reason: "wrong_branch" });
+    if (!r.ok) expect(r.detail).toContain("pass --onto other or --force-branch");
+    expect(await must(cwd, ["rev-parse", "HEAD"])).toBe(base);
+    expect(await clean(cwd)).toBe(true);
+  });
+
+  test("onto equal to the current branch proceeds", async () => {
+    const { cwd, base } = await onOther();
+    const r = await applyAccept(git, gate(cwd, base), { branch: { expected: "main", onto: "other" } });
+    expect(r).toMatchObject({ ok: true, replayed: 1 });
+    expect(await must(cwd, ["symbolic-ref", "--short", "HEAD"])).toBe("other");
+    expect(await has(cwd, "L02-RUN")).toBe(true);
+  });
+
+  test("onto naming a different branch than the current one refuses wrong_branch", async () => {
+    const { cwd, base } = await onOther();
+    const r = await applyAccept(git, gate(cwd, base), { branch: { expected: "main", onto: "main" } });
+    expect(r).toMatchObject({ ok: false, reason: "wrong_branch" });
+  });
+
+  test("force skips the check", async () => {
+    const { cwd, base } = await onOther();
+    const r = await applyAccept(git, gate(cwd, base), { branch: { expected: "main", force: true } });
+    expect(r).toMatchObject({ ok: true, replayed: 1 });
+  });
+
+  test("a recorded ref that is not a local branch (sha / tag / HEAD) is not checked", async () => {
+    for (const kind of ["sha", "tag", "HEAD"] as const) {
+      const { cwd, base } = await onOther();
+      await must(cwd, ["tag", "v1", base]);
+      const expected = kind === "sha" ? base : kind === "tag" ? "v1" : "HEAD";
+      const r = await applyAccept(git, gate(cwd, base), { branch: { expected } });
+      expect(r).toMatchObject({ ok: true, replayed: 1 });
+    }
+  });
+
+  test("a remote-tracking recorded ref compares on its branch name", async () => {
+    const onMain = await setupRepo();
+    await makeRun(onMain.cwd, onMain.base, 1, false);
+    await must(onMain.cwd, ["update-ref", "refs/remotes/origin/main", onMain.base]);
+    const ok = await applyAccept(git, gate(onMain.cwd, onMain.base), { branch: { expected: "origin/main" } });
+    expect(ok).toMatchObject({ ok: true });
+
+    const onFeat = await setupRepo();
+    await makeRun(onFeat.cwd, onFeat.base, 1, false);
+    await must(onFeat.cwd, ["update-ref", "refs/remotes/origin/main", onFeat.base]);
+    await must(onFeat.cwd, ["checkout", "-qb", "feat", onFeat.base]);
+    const refused = await applyAccept(git, gate(onFeat.cwd, onFeat.base), { branch: { expected: "origin/main" } });
+    expect(refused).toMatchObject({ ok: false, reason: "wrong_branch" });
+  });
+});
+
 describe("applyDiscard", () => {
   test("deletes both refs; idempotent", async () => {
     const { cwd, base } = await setupRepo();

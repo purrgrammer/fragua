@@ -1,4 +1,5 @@
 export * from "./abort-tool.ts";
+export * from "./base-resolve.ts";
 export * from "./blocklist.ts";
 export * from "./capture.ts";
 export * from "./checkout.ts";
