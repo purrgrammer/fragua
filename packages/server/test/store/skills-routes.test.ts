@@ -189,20 +189,21 @@ describe("GET /skills/:locId/tree", () => {
 });
 
 describe("GET /skills/:locId/file", () => {
-  test("returns SKILL.md bytes with text/markdown content type", async () => {
+  test("returns SKILL.md bytes as text/plain with nosniff", async () => {
     const cwd = join(tmp, "proj");
     const dir = await writeSkill(cwd, ".agents/skills/python", "python", "py helpers");
     build({ cwd, homeDir: join(tmp, "home") });
 
     const res = await get(`/skills/${b64url(dir)}/file?path=SKILL.md`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/markdown");
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     const text = await res.text();
     expect(text).toContain("name: python");
     expect(text).toContain("body");
   });
 
-  test("returns binary bytes for image with image/png content type", async () => {
+  test("serves a PNG as application/octet-stream with nosniff", async () => {
     const cwd = join(tmp, "proj");
     const dir = await writeSkill(cwd, ".agents/skills/visual", "visual", "ok");
     // Tiny PNG header — enough to verify mime dispatch.
@@ -212,10 +213,42 @@ describe("GET /skills/:locId/file", () => {
 
     const res = await get(`/skills/${b64url(dir)}/file?path=assets/hero.png`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     const buf = new Uint8Array(await res.arrayBuffer());
     expect(buf[0]).toBe(0x89);
     expect(buf[3]).toBe(0x47);
+  });
+
+  test("GET .html with no Origin serves an inert text/plain body (R2-B3)", async () => {
+    const cwd = join(tmp, "proj");
+    const dir = await writeSkill(cwd, ".agents/skills/web", "web", "ok");
+    await writeRaw(dir, "page.html", "<script>fetch('/runs',{method:'POST'})</script>");
+    build({ cwd, homeDir: join(tmp, "home") });
+
+    const res = await get(`/skills/${b64url(dir)}/file?path=page.html`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(res.headers.get("content-disposition")).toBe("attachment");
+    expect(await res.text()).toContain("<script>");
+  });
+
+  test(".svg and .xml are served as attachments; .md is not", async () => {
+    const cwd = join(tmp, "proj");
+    const dir = await writeSkill(cwd, ".agents/skills/assets", "assets", "ok");
+    await writeRaw(dir, "logo.svg", "<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>");
+    await writeRaw(dir, "feed.xml", "<rss/>");
+    build({ cwd, homeDir: join(tmp, "home") });
+
+    for (const path of ["logo.svg", "feed.xml"]) {
+      const res = await get(`/skills/${b64url(dir)}/file?path=${path}`);
+      expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(res.headers.get("content-disposition")).toBe("attachment");
+    }
+    const md = await get(`/skills/${b64url(dir)}/file?path=SKILL.md`);
+    expect(md.headers.get("content-disposition")).toBeNull();
   });
 
   test("rejects ../ path escape with 403", async () => {
