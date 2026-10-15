@@ -2,8 +2,39 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { crashRequeueActiveMsDelta, type FactEvent } from "../src/index.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { crashRequeueActiveMsDelta, deriveRunState, type FactEvent, SqliteStore } from "../src/index.ts";
+import type { StoreCtx } from "../src/store-ctx.ts";
+import { SWEEP_BUSY_ATTEMPTS, startupSweep } from "../src/sweep.ts";
 import { freshStore, seedRun } from "./helpers.ts";
+
+function startRun(store: SqliteStore, runId: string): void {
+  const s0 = store.getState(runId)!;
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: { workflowSha: s0.workflowSha, contractVersion: s0.contractVersion, startNode: "a" },
+      },
+    ],
+    s0.version,
+  );
+}
+
+async function readUntil(stream: ReadableStream<Uint8Array>, marker: string): Promise<void> {
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (!buf.includes(marker)) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error(`stream ended before ${marker}: ${buf}`);
+    buf += dec.decode(value);
+  }
+  reader.releaseLock();
+}
 
 describe("startupSweep", () => {
   test("a poisoned run_state row does not abort the sweep of a healthy sibling", async () => {
@@ -39,6 +70,105 @@ describe("startupSweep", () => {
     expect(failures).toHaveLength(1);
     expect((failures[0]!.payload as { runId: string }).runId).toBe(poisoned);
     expect((failures[0]!.payload as { error: string }).error).toContain("UNIQUE constraint");
+    expect((failures[0]!.payload as { attempts: number }).attempts).toBe(1);
+    store.close();
+  });
+
+  test("sweep quarantine credits the open dispatch span exactly as replay does", async () => {
+    let t = 1_700_000_000_000;
+    const store = new SqliteStore({ path: ":memory:", now: () => t });
+    const runId = await seedRun(store);
+    startRun(store, runId);
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.side_effect_intent",
+          payload: { nodeId: "a", iteration: 0, toolName: "charge", argsHash: "h", attempt: 1, idempotencyKey: "k" },
+        },
+      ],
+      store.getState(runId)!.version,
+    );
+    expect(store.getState(runId)!.dispatchStartedAt).not.toBeNull();
+    t += 61_000;
+
+    store.startupSweep();
+
+    const live = store.getState(runId)!;
+    expect(live.status).toBe("quarantined");
+    expect(live.dispatchStartedAt).toBeNull();
+    const replay = deriveRunState(runId, store.getEvents(runId));
+    expect(live.metrics.activeMs).toBe(replay.metrics.activeMs);
+    expect(live.metrics.activeMs).toBe(61_000);
+    store.close();
+  });
+
+  test("a writer holding the lock during startupSweep delays but does not fail the requeue", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fragua-sweep-busy-"));
+    const path = join(dir, "fragua.db");
+    const store = new SqliteStore({ path });
+    try {
+      const runId = await seedRun(store);
+      startRun(store, runId);
+      const holder = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `const { Database } = require("bun:sqlite");
+           const db = new Database(${JSON.stringify(path)});
+           db.exec("BEGIN IMMEDIATE");
+           db.exec("UPDATE run_state SET updated_at = updated_at");
+           console.log("locked");
+           Bun.sleepSync(300);
+           db.exec("COMMIT");
+           db.close();`,
+        ],
+        { stdout: "pipe", stderr: "inherit" },
+      );
+      await readUntil(holder.stdout, "locked");
+
+      const result = store.startupSweep();
+      expect(await holder.exited).toBe(0);
+
+      expect(result.requeued).toContain(runId);
+      expect(store.getState(runId)!.status).toBe("queued");
+      expect(store.getDaemonEvents({ runId }).some((e) => e.type === "daemon.sweep_run_failed")).toBe(false);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("BUSY past the retry budget logs sweep_run_failed and leaves siblings healed", async () => {
+    const store = freshStore();
+    const a = await seedRun(store);
+    const b = await seedRun(store);
+    startRun(store, a);
+    startRun(store, b);
+    const ctx = (store as unknown as { ctx: StoreCtx }).ctx;
+    let calls = 0;
+    const busyCtx: StoreCtx = {
+      ...ctx,
+      writeTxn: (fn) => {
+        calls++;
+        if (calls <= SWEEP_BUSY_ATTEMPTS) {
+          throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        }
+        ctx.writeTxn(fn);
+      },
+    };
+
+    const result = startupSweep(busyCtx);
+
+    expect(result.requeued).toHaveLength(1);
+    const healed = result.requeued[0]!;
+    const failed = healed === a ? b : a;
+    expect(store.getState(healed)!.status).toBe("queued");
+    expect(store.getState(failed)!.status).toBe("running");
+    const failures = store.getDaemonEvents({ runId: failed }).filter((e) => e.type === "daemon.sweep_run_failed");
+    expect(failures).toHaveLength(1);
+    expect((failures[0]!.payload as { attempts: number }).attempts).toBe(SWEEP_BUSY_ATTEMPTS);
+    expect(store.getDaemonEvents({ runId: healed }).some((e) => e.type === "daemon.sweep_run_failed")).toBe(false);
     store.close();
   });
 

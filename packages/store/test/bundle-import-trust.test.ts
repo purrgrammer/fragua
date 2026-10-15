@@ -11,6 +11,7 @@ import {
   decodeJsonl,
   deriveRunState,
   encodeJsonl,
+  ImportedRunError,
   newRunId,
   readTar,
   runEventsPath,
@@ -220,6 +221,29 @@ describe("bundle import — re-import of an imported run (C1)", () => {
     expect(dst.importRunBundle(b1).runs).toEqual([{ runId, imported: false }]);
     expect(dst.getEvents(runId).length).toBe(eventsBefore);
     expect(dst.getState(runId)!.version).toBe(before.version);
+    dst.close();
+  });
+
+  test("appendIntent on an imported run throws ImportedRunError and writes nothing", async () => {
+    const { runId, b1 } = await twoBundles();
+    const dst = freshStore();
+    dst.importRunBundle(b1);
+    const before = dst.getState(runId)!;
+    const eventsBefore = dst.getEvents(runId).length;
+
+    expect(() => dst.appendIntent(runId, { type: "intent.cancel_requested", payload: {} })).toThrow(ImportedRunError);
+    expect(dst.getState(runId)!.nextSeq).toBe(before.nextSeq);
+    expect(dst.getEvents(runId).length).toBe(eventsBefore);
+    dst.close();
+  });
+
+  test("re-importing an identical bundle after a refused intent is a no-op", async () => {
+    const { runId, b1 } = await twoBundles();
+    const dst = freshStore();
+    dst.importRunBundle(b1);
+    expect(() => dst.appendIntent(runId, { type: "intent.pause_requested", payload: {} })).toThrow(ImportedRunError);
+
+    expect(dst.importRunBundle(b1).runs).toEqual([{ runId, imported: false }]);
     dst.close();
   });
 

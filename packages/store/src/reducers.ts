@@ -493,9 +493,16 @@ export function foldFacts(initial: RunState, facts: FactEvent[], now: number): R
 
 function closeDispatchInterval(next: RunState, now: number): void {
   if (next.dispatchStartedAt != null) {
-    next.metrics.activeMs += now - next.dispatchStartedAt;
+    next.metrics.activeMs += dispatchIntervalActiveMsDelta(next.dispatchStartedAt, now);
     next.dispatchStartedAt = null;
   }
+}
+
+/** activeMs credited when a fact closes the open dispatch interval at `now`.
+ * Shared by the reducer and the sweep's SQL quarantine so the live projection
+ * and a replay fold credit the same span. */
+export function dispatchIntervalActiveMsDelta(dispatchStartedAt: number | null, now: number): number {
+  return dispatchStartedAt == null ? 0 : now - dispatchStartedAt;
 }
 
 /** activeMs to credit for a crash requeue's pre-crash dispatch span. Returns

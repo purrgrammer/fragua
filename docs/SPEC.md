@@ -329,7 +329,7 @@ The decision core may order only a fixed **plan vocabulary** — the shape of `T
 |---|---|
 | **I1** | Every write is one SQLite transaction; events + projection updated together. |
 | **I2** | No handler state outside the projection. |
-| **I3** | Intents always-appendable; facts OCC-checked. |
+| **I3** | Intents always-appendable (except on an imported run — I14); facts OCC-checked. |
 | **I4** | Handlers receive `AbortSignal`; respecting it is contract. |
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay. |
 | **I6** | `run_state.routing` ≤ 8KB — a defense-in-depth **tripwire**, not a functional budget: payload lives in messages/artifacts, and reads go through bounded, typed accessors (`packages/core/src/routing.ts`) over the flat dotted bytes, so the CHECK should never fire in correct operation. Kept as a backstop that catches a payload leaking into a variable-length namespace. |
@@ -339,7 +339,8 @@ The decision core may order only a fixed **plan vocabulary** — the shape of `T
 | **I10** | Seq assignment is O(1) via per-run counter; never scanned. |
 | **I11** | A `parallel` region is single-entry/single-exit: `wait_all` is its only join, pause is run-global (one shared `AbortSignal` aborts every branch), and the per-branch active set is a log-derived **diagnostic** — the scalar `run_state.status` stays the sole lifecycle authority. Branches commit through the one daemon writer (the commit unit is the branch-step, not a synchronised superstep). |
 | **I12** | The executor's decision core (`planTransition` → `TransitionPlan`, `planExit` → `ExitPlan`) is pure: no store I/O, no clock (`now` is a parameter), no RNG (`random` is injected), no subprocess/network. It may order only the fixed plan vocabulary — `fact.*` events, an optional routing patch, an `advanceAppliedTo` watermark advance, observability events (`TransitionPlan` only), and (exit arm only) a commit-strategy `outcome` tag. The driver (`runOne` / `runFanout`) owns every effect: OCC commit, worktree/subprocess/provider work, timers, and `AbortSignal`. See §3.11. |
-| **I13** | At most one fiber commits facts per run per claim epoch. A claim or crash requeue bumps the run's `claim_epoch`, and the writer rejects a fact append carrying a stale one (`ClaimLostError`); the fenced fiber exits without writing. |
+| **I13** | At most one fiber writes to a run per claim epoch. A claim or crash requeue bumps the run's `claim_epoch`, and the store rejects any claim-holder write carrying a stale one — fact appends, transcript messages, artifacts, and observability events alike (`ClaimLostError`, checked inside the write transaction); the fenced fiber exits without writing. |
+| **I14** | An imported run is inert. Nothing dispatches, sweeps, or folds it, and the store refuses every intent on it (`ImportedRunError`), so its stored log stays a prefix of the source's and a re-import of the same or an extended bundle stays well-defined. |
 
 Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core/test/handler/discipline.test.ts`) and the property-test matrix ([`ARCHITECTURE.md`](./ARCHITECTURE.md) §10).
 

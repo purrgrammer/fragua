@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,6 +76,19 @@ describe("fragua runs release", () => {
     expect(types.slice(-2)).toEqual(["intent.checkout_release", "fact.checkout_released"]);
     expect(store.getCheckoutHolder("/co")).toBeNull();
     expect(out.join("\n")).toContain("released checkout /co");
+  });
+
+  test("release on an imported run exits 1 with an imported-run message", async () => {
+    store.enqueueRun({ runId: "imp", workflowSha: "wf", cwd: "/tmp/repo", inCheckout: true, checkoutPath: "/co4" });
+    started("imp");
+    append("imp", { type: "fact.run_terminated", payload: { status: "errored", reason: "error" } });
+    const db = (store as unknown as { db: Database }).db;
+    db.query("INSERT INTO imported_runs (run_id, imported_at) VALUES (?, ?)").run("imp", 0);
+    const seqBefore = store.getState("imp")!.nextSeq;
+
+    expect(await releaseCommand({ runId: "imp", dbPath })).toBe(1);
+    expect(err.join("\n")).toContain("imported run");
+    expect(store.getState("imp")!.nextSeq).toBe(seqBefore);
   });
 
   test("a completed run without a recorded snapshot: the message names the snapshot caveat", async () => {

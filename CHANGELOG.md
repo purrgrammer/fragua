@@ -36,6 +36,11 @@ guarantee.
 
 ### Fixed
 
+- **The daemon's startup sweep no longer leaves a run `running` when another process is writing.** Each run heals in its own `BEGIN IMMEDIATE` transaction that waits for the lock, retries on `SQLITE_BUSY`, and logs `daemon.sweep_run_failed` (now with `attempts`) only for a non-BUSY error or once the retries are spent.
+- **A run quarantined by the startup sweep keeps its active time.** The open dispatch span is credited to `activeMs`, matching what a replay of the run's log computes.
+- **A fenced executor fiber can no longer write messages, artifacts or telemetry for a run it no longer owns.** `appendMessage`, `putArtifact` and `appendObservabilityEvents` now take the same claim-epoch check as fact appends and throw `ClaimLostError` without writing.
+- **`fragua runs release` no longer swallows an earlier pending intent.** A cancel or accept filed before the release stays unapplied, so the daemon still folds it.
+- **Intents on imported runs are refused.** The web API returns 409 `imported_run` and the CLI prints an error. Re-importing the same bundle afterwards still succeeds.
 - **A long provider `Retry-After` now auto-retries instead of pausing for an operator.** A rate-limit or overload error asking for a delay longer than the SDK's 60s in-process limit is retried at the requested time, up to 6h (config `provider-retry-after-max-ms`), without counting toward the 5-minute retry budget. `runs status` and the run page show `retrying at <time> (provider asked for 3h25m)`; a request above the cap pauses with a reason naming both durations.
 - **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.
 - **A provider pause keeps the turn's spend.** Cost recorded before a `payment_required` / `provider_error` / `provider_retry` pause now lands on a `fact.node_aborted` and counts toward run totals and budgets.

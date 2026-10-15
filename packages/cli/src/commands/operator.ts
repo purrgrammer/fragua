@@ -24,6 +24,7 @@ import type {
 import { formatDelayMs } from "@fragua/daemon";
 import {
   type ArtifactScope,
+  ImportedRunError,
   isTerminal,
   type NarrowMessage,
   RUN_STATUSES,
@@ -856,9 +857,15 @@ export async function respondCommand(opts: RespondOptions): Promise<number> {
       console.error(chalk.red(`respond: ${built.error}`));
       return 1;
     }
-    const { seq } = plane.commit(opts.runId, built.intent);
-    console.log(chalk.green("human input recorded") + chalk.dim(` (run ${opts.runId}, intent seq ${seq})`));
-    return 0;
+    try {
+      const { seq } = plane.commit(opts.runId, built.intent);
+      console.log(chalk.green("human input recorded") + chalk.dim(` (run ${opts.runId}, intent seq ${seq})`));
+      return 0;
+    } catch (err) {
+      if (!(err instanceof ImportedRunError)) throw err;
+      console.error(chalk.red(`respond: ${err.message}`));
+      return 1;
+    }
   });
 }
 

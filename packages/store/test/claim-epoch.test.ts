@@ -71,6 +71,62 @@ describe("claim_epoch", () => {
     store.close();
   });
 
+  test("appendMessage with a stale claimEpoch throws ClaimLostError and adds no message or event", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const { claimEpoch } = store.claimNextRun(1)!;
+    const row = { content: { role: "user", content: "hi", timestamp: 0 }, nodeId: "a", iteration: 0 } as Parameters<
+      SqliteStore["appendMessage"]
+    >[1];
+    store.appendMessage(runId, row, { claimEpoch });
+    store.startupSweep();
+    store.claimNextRun(1);
+    const messagesBefore = store.getMessages(runId).length;
+    const seqBefore = seq(store, runId);
+
+    expect(() => store.appendMessage(runId, row, { claimEpoch })).toThrow(ClaimLostError);
+    expect(store.getMessages(runId).length).toBe(messagesBefore);
+    expect(seq(store, runId)).toBe(seqBefore);
+    store.close();
+  });
+
+  test("putArtifact with a stale claimEpoch throws ClaimLostError and leaves the artifact row unchanged", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const { claimEpoch } = store.claimNextRun(1)!;
+    const scope = { runId, nodeId: "a", iteration: 0, key: "out" };
+    const original = store.putArtifact(scope, new TextEncoder().encode("fresh"), "text/plain", { claimEpoch });
+    store.startupSweep();
+    store.claimNextRun(1);
+
+    expect(() =>
+      store.putArtifact(scope, new TextEncoder().encode("stale"), "text/plain", { replace: true, claimEpoch }),
+    ).toThrow(ClaimLostError);
+    expect(store.getArtifactRef(scope)?.sha256).toBe(original.sha256);
+    expect(new TextDecoder().decode(store.getArtifact(scope))).toBe("fresh");
+    store.close();
+  });
+
+  test("appendObservabilityEvents with a stale claimEpoch throws and writes nothing", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const { claimEpoch } = store.claimNextRun(1)!;
+    store.startupSweep();
+    store.claimNextRun(1);
+    const seqBefore = seq(store, runId);
+
+    expect(() =>
+      store.appendObservabilityEvents(runId, [{ type: "llm.text_delta", payload: { nodeId: "a" } }], { claimEpoch }),
+    ).toThrow(ClaimLostError);
+    expect(seq(store, runId)).toBe(seqBefore);
+    expect(() =>
+      store.appendObservabilityEvents(runId, [{ type: "llm.text_delta", payload: { nodeId: "a" } }], {
+        claimEpoch: store.getClaimEpoch(runId)!,
+      }),
+    ).not.toThrow();
+    store.close();
+  });
+
   test("appendFact of fact.run_requeued_after_crash bumps claim_epoch", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
