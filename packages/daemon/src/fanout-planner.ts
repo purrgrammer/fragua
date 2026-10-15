@@ -10,13 +10,15 @@
 //
 // The run-level DISPOSITION decisions a fan-out superstep makes as branches
 // settle — the halt-over-pause precedence, the fail-closed branch-terminal halt,
-// and the per-branch abort-loop pause — are lifted here too (pure fact choices,
-// no store / clock / RNG), so the driver only applies them.
+// and the sibling settlement an early bail commits — are lifted here too (pure
+// fact choices, no store / clock / RNG), so the driver only applies them. The
+// per-branch abort-loop and budget-breach facts come from `abort-planner.ts`,
+// the same producers the linear path uses.
 
-import type { BudgetDecision } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import { nodeRetryCount, passField } from "./executor-helpers.ts";
 import { planDispatchStarted } from "./lifecycle-planner.ts";
+import { exitSpendFacts, type HaltUsage } from "./result-to-facts.ts";
 
 /** The frontier of one `type: parallel` node at the start of a fan-out turn,
  * as plain data. `active`/`redispatch` are already folded by the caller — the
@@ -95,39 +97,6 @@ export function planFanoutMalformed(): FactEvent {
     type: "fact.run_terminated",
     payload: { status: "errored", reason: "error", detail: "fanout_malformed" },
   };
-}
-
-/** The per-branch abort-loop pause: a branch that aborted `ceiling` turns in a
- * row parks the run regardless of sibling success. Returns the first such
- * branch's pause fact, or undefined when every streak is below the ceiling. */
-export function planBranchAbortLoop(branchAborts: ReadonlyMap<string, number>, ceiling: number): FactEvent | undefined {
-  for (const [nodeId, streak] of branchAborts) {
-    if (streak >= ceiling) {
-      return { type: "fact.run_paused", payload: { reason: "abort_loop", nodeId, consecutiveAborts: streak } };
-    }
-  }
-  return undefined;
-}
-
-/** Map a run-level budget evaluation into the parallel node's disposition fact:
- * a `stop`-policy breach halts (`run_terminated{budget}`), a `pause`-policy
- * breach parks (`run_paused{budget}`), no breach is undefined. The caller keeps
- * the store reads + `evaluateBudget` call (I/O); this is only the fact choice,
- * symmetric with the linear path's `planAbort` budget arms. */
-export function planBudgetDisposition(budget: BudgetDecision, nodeId: string): FactEvent | undefined {
-  if (budget.shouldHalt) {
-    const payload: { status: "errored"; reason: "budget"; detail?: string } = { status: "errored", reason: "budget" };
-    if (budget.haltReason !== undefined && budget.haltReason.length > 0) payload.detail = budget.haltReason;
-    return { type: "fact.run_terminated", payload };
-  }
-  if (budget.pauseBreach !== undefined) {
-    const b = budget.pauseBreach;
-    return {
-      type: "fact.run_paused",
-      payload: { reason: "budget", nodeId, scope: b.scope, metric: b.metric, limit: b.limit, actual: b.actual },
-    };
-  }
-  return undefined;
 }
 
 /** The single `fact.fanout_started` that seeds a fresh frontier over the
@@ -242,4 +211,23 @@ export function planBranchSettlement(args: {
     );
   }
   return { branchFacts, disposition, successor, terminal };
+}
+
+/** The node-scoped facts a sibling settlement may carry into an early-bail
+ * commit. Successor markers and run-level facts are dropped: the bail's own
+ * terminal ends the run. */
+const BAIL_KEPT_FACTS = new Set<string>(["fact.node_completed", "fact.node_aborted", "fact.handler_timeout_leaked"]);
+
+/** The sibling facts an early-terminal bail commits ahead of its terminal: each
+ * settled sibling's completion or exit spend, and — for a sibling still running
+ * when the bounded drain gave up — its accrued usage on `fact.node_aborted`, so
+ * no branch's spend leaves run totals with the bail. */
+export function planBailSettlement(args: {
+  settled: readonly { facts: readonly FactEvent[] }[];
+  unsettled: readonly { nodeId: string; iteration: number; pass: number; usage: HaltUsage }[];
+}): FactEvent[] {
+  const out: FactEvent[] = [];
+  for (const s of args.settled) for (const f of s.facts) if (BAIL_KEPT_FACTS.has(f.type)) out.push(f);
+  for (const u of args.unsettled) out.push(...exitSpendFacts(u.nodeId, u.iteration, "aborted", u.usage, u.pass));
+  return out;
 }

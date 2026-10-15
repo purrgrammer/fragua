@@ -81,6 +81,11 @@ describe("provider auto-retry — pause classification", () => {
     expect(attempted.length).toBe(1);
     expect((attempted[0]!.payload as { attempt: number }).attempt).toBe(1);
 
+    // The pause batch leads with the turn's spend-bearing node_aborted.
+    const aborted = events.find((e) => e.type === "fact.node_aborted");
+    expect((aborted?.payload as { cause?: string } | undefined)?.cause).toBe("provider_pause");
+    expect(aborted!.seq).toBeLessThan(pause!.seq);
+
     const state = r.store.getState("auto-429");
     expect(state?.status).toBe("paused_auto");
     expect(state?.routing["internal.auto_resume_at"]).toBeGreaterThan(0);

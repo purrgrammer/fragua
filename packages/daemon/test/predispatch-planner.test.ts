@@ -1,12 +1,10 @@
-// Unit tests for the PURE pre-dispatch planner (`planPreDispatch` /
-// `planLeakHalt`). No store, clock, or randomness — every case is the
+// Unit tests for the PURE pre-dispatch planner (`planPreDispatch`). No store, clock, or randomness — every case is the
 // plain-data decision the executor's driver reads, then applies.
 
 import { describe, expect, test } from "bun:test";
 import type { FactEvent, RunState } from "@fragua/store";
 import {
   maxLoopsPause,
-  planLeakHalt,
   planLoopCeiling,
   planPreDispatch,
   workflowParseFailedDetail,
@@ -142,18 +140,6 @@ describe("planPreDispatch", () => {
     const input = { state: mkState({ contractVersion: 42 }), contractWindow: WINDOW, ...clear };
     expect(planPreDispatch(input)).toEqual(planPreDispatch(input));
     expect(planPreDispatch(input).facts.filter(isParkingFact)).toHaveLength(1);
-  });
-});
-
-describe("planLeakHalt", () => {
-  test("emits handler_timeout_leaked then a run_terminated, with the injected leakedAt", () => {
-    const plan = planLeakHalt({ nodeId: "slow", leakedAt: 12345 });
-    expect(plan.terminal).toBe(true);
-    expect(plan.facts).toEqual([
-      { type: "fact.handler_timeout_leaked", payload: { nodeId: "slow", leakedAt: 12345 } },
-      { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
-    ]);
-    expect(plan.facts.filter(isParkingFact)).toHaveLength(1);
   });
 });
 

@@ -429,16 +429,31 @@ each owning one concern and reaching only into the store API:
 - **Pure decision core** (no store / clock / RNG / I/O — injected `now` /
   `random` / `leakedAt`, guarded by `decision-core-discipline.test.ts`;
   SPEC §3.11 / I12): `transition-planner.ts` (`planTransition` — the
-  successful turn), `abort-planner.ts` (`planAbort` for the abort arm +
-  `planAbortLoop` for the trend-warn / ceiling-pause), `predispatch-planner.ts`
+  successful turn), `abort-planner.ts` (`planExit` — the **single exit
+  planner** for every non-success handler exit on both dispatch paths — plus
+  `classifyExit`, `planBudgetBreach`, and `planAbortLoop` / `planAbortLoops`
+  for the trend-warn / ceiling-pause), `predispatch-planner.ts`
   (`planPreDispatch` — the contract-version gate, unparseable-workflow refusal,
   worktree-provision failure, and `max_loops` ceiling, the last via
-  `planLoopCeiling`; `planLeakHalt` — the leaked-handler halt),
+  `planLoopCeiling`),
   `lifecycle-planner.ts` (`planOperatorPause` / `planRunStarted` /
   `planDispatchStarted` / `planCrashHalt`), and `fanout-planner.ts`
   (`planFanoutStep` — the seed/join/dispatch frontier decision; plus the
   run-level disposition helpers `noteDisposition` / `planBranchTerminal` /
-  `planBranchAbortLoop`). Each returns a plan the driver applies.
+  `planBailSettlement`). Each returns a plan the driver applies.
+  **Single exit planner.** `classifyExit` maps a non-result invocation to one
+  exit kind — `throw` (a plain error on a live signal), `timeout`, `abort`
+  (steer / operator / budget, or any throw after the signal tripped),
+  `shutdown`, `leak` — and `planExit` turns it into facts plus an outcome tag
+  (`halt` / `pause` / `timeout_retry` / `abort_step` / `shutdown`). Precedence:
+  leak > reactive budget halt > budget pause > shutdown > timeout (retry, then
+  `timeout_exhausted`) > throw (`run_terminated{error}`) > abort. Every plan
+  leads with `fact.node_aborted` carrying the dispatch's spend (the one producer
+  is `exitSpendFacts` in `result-to-facts.ts`, which the `pause_provider` arm of
+  `resultToFacts` also calls), so a run-parking or terminal fact never carries
+  spend and the reducer's existing `node_aborted` fold credits it on every
+  contract version. The linear driver and the fan-out branch both call it, so
+  the same failing handler commits the same exit facts on either path.
   **Single-producer rule (dispatch drivers):** the facts the linear and
   fan-out paths share have one producer in a scanned planner module —
   `fact.dispatch_started` via `planDispatchStarted`, and the
@@ -446,7 +461,9 @@ each owning one concern and reaching only into the store API:
   the two dispatch drivers (`dispatch-turn.ts`, `fanout.ts`) call it rather
   than building the literal, so both paths emit byte-identical facts and the
   producer stays under the purity scan. `decision-core-discipline.test.ts`
-  rejects a `fact.dispatch_started` / `max_loops` literal in either driver.
+  rejects a `fact.dispatch_started` / `max_loops` literal in either driver,
+  and likewise a `fact.node_aborted` / `fact.handler_timeout_leaked` /
+  `abort_loop` literal (those come from `planExit` / `planAbortLoop`).
   Not yet under the rule: `occ-append.ts` builds `run_terminated{occ_exhausted}`
   inline and `wake-pending.ts` builds `run_terminated{aborted}` inline (both
   IO_ALLOWED, so unscanned).
@@ -468,7 +485,8 @@ each owning one concern and reaching only into the store API:
 - `dispatch-turn.ts` — `dispatchOne` (the linear turn) and its commit arms:
   the contract-version entry gate, the cancel / operator-pause commits, the
   run-start emit + auto-title seed, the dispatch-started marker, the `max_loops`
-  gate, the handler dispatch, and the leak / abort / transition commits. It
+  gate, the handler dispatch, and the exit (`commitExit` / `commitLeak`, both
+  applying `planExit`) / transition commits. It
   delegates a `type: parallel` node to `runFanout`.
 - `fanout.ts` — the parallel fan-out region driver: `runFanout` (the on-log
   reactive frontier superstep), `executeBranchNode`, and the serialized
@@ -513,17 +531,17 @@ at or below 200 lines, so no turn function silently re-grows into a monolith.
 
 ### 6.2 Parallel fan-out execution
 
-A `type: parallel` node hands control to `runFanout` (in `executor.ts`), which drives the whole region to its `wait_all` join before the outer `dispatchOne` loop advances. The model is an **on-log reactive frontier**, not a bulk-synchronous superstep:
+A `type: parallel` node hands control to `runFanout` (in `fanout.ts`), which drives the whole region to its `wait_all` join before the outer `dispatchOne` loop advances. The model is an **on-log reactive frontier**, not a bulk-synchronous superstep:
 
 - **The frontier is a fold of the log.** `fact.fanout_started` seeds the active set (`routing["internal.active_nodes"]`); each branch's `fact.node_completed` removes its node while a bundled `fact.dispatch_started` adds the successor; `fact.node_aborted` is a no-op on the set (the branch stays active to re-dispatch). The live frontier and a from-scratch `deriveRunState` fold therefore agree by construction — the active set is **diagnostic, derived, never an authority**; the scalar `run_state.status` is the lifecycle truth that claim / sweep / SSE read.
 - **Reactive pool, not a batch.** Branches dispatch concurrently into a `Promise.race` pool; the instant one settles, its fact commits and its successor dispatches — a fast branch never waits on a slow sibling (no head-of-line blocking). This is why the **commit unit is the branch-step, not a superstep**: there is no per-superstep barrier, and the log is legitimately interleaved.
 - **One writer, OCC intact.** Every branch commits through the single daemon writer's serialized lane (`commitFanoutFact`), re-reading the live `version` per attempt and retrying the *append* (never re-executing the handler) on a sibling-moved-version conflict. K concurrent branches are OCC-contention-free because only one writer ever commits; `fanout_joined` is the linearization point that closes the region. A commit that fails because the run left `running` (operator pause / cancel) is classified `status`, not OCC, so it never spuriously feeds the conflict counter.
-- **Planner-driven fact-selection, symmetric with the linear path.** The fan-out driver (`fanout.ts`) chooses *no* facts of its own: the seed (`planSeedFanout`), the join / deferred-pause transition (`planJoin`), the per-branch settlement (`planBranchSettlement` — the run-level-vs-branch fact partition, the fail-closed branch-terminal halt via `planBranchTerminal`, and the bundled successor `dispatch_started`), the run-budget disposition (`planBudgetDisposition`), and the frontier step (`planFanoutStep`) are all pure functions in `fanout-planner.ts`, exactly as the linear path delegates to `predispatch-/transition-/abort-planner.ts`. The `dispatch_started` and `max_loops` facts the two paths share come from the same producer: both the successor marker and the aborted-branch re-dispatch marker are built by `planDispatchStarted` (the one the linear path uses), and the pool's per-branch loop gate calls `planLoopCeiling`, the `max_loops` arm of `planPreDispatch` (a literal of either in `fanout.ts` / `dispatch-turn.ts` fails `decision-core-discipline.test.ts`). The driver reads the store, calls the planner, and commits the returned facts — and every OCC conflict arm on both paths goes through the one shared `commitWithOcc` helper (§6.1), so the two paths can't drift on how a fact is chosen or how a lost race is handled. `fanout-planner.ts` is covered by the decision-core purity lint (no store handle, clock, or RNG).
+- **Planner-driven fact-selection, symmetric with the linear path.** The fan-out driver (`fanout.ts`) chooses *no* facts of its own: the seed (`planSeedFanout`), the join / deferred-pause transition (`planJoin`), the per-branch settlement (`planBranchSettlement` — the run-level-vs-branch fact partition, the fail-closed branch-terminal halt via `planBranchTerminal`, and the bundled successor `dispatch_started`), the early-bail sibling settlement (`planBailSettlement`), and the frontier step (`planFanoutStep`) are pure functions in `fanout-planner.ts`; a branch's non-result exit, the per-branch abort-loop pause, and the run-budget disposition come from the same `abort-planner.ts` producers the linear path calls (`planExit`, `planAbortLoops`, `planBudgetBreach`). **Fan-out parity:** a branch that throws halts the run (`reason:"error"`), a timed-out branch backs off with a `timeout_retry` pause and exhausts to `timeout_exhausted`, a provider pause or shutdown commits the branch's spend on `fact.node_aborted` — exactly as a linear node does; the branch's node-scoped facts (and a timeout-retry's counter / wake patch) commit on the branch lane, while the plan's park/terminal fact joins the pool's disposition slot. The `dispatch_started` and `max_loops` facts the two paths share come from the same producer: both the successor marker and the aborted-branch re-dispatch marker are built by `planDispatchStarted` (the one the linear path uses), and the pool's per-branch loop gate calls `planLoopCeiling`, the `max_loops` arm of `planPreDispatch` (a literal of either in `fanout.ts` / `dispatch-turn.ts` fails `decision-core-discipline.test.ts`). The driver reads the store, calls the planner, and commits the returned facts — and every OCC conflict arm on both paths goes through the one shared `commitWithOcc` helper (§6.1), so the two paths can't drift on how a fact is chosen or how a lost race is handled. `fanout-planner.ts` is covered by the decision-core purity lint (no store handle, clock, or RNG).
 - **Two-level recovery.** A mid-region stop recovers at two granularities. **Frontier-level:** a sub-node that already committed `node_completed` is gone from the active set, so recovery re-dispatches only the unfinished sub-nodes — no re-execution of completed work, and **no barrier is needed to know it**, because each branch's cursor *is* its position in the folded active set (so an asymmetric crash — branch A deep, branch B shallow — recovers each branch independently). **Transcript-level:** an interrupted sub-node rehydrates its own thread (`node:<id>#<iter>`) and continues from where it died, exactly like a linear node's resume (an abort does not bump the iteration).
-- **Pause is run-global.** There is no per-branch pause seam (and none will be built until there is demand). The operator's pause / cancel — or a budget breach detected at any branch commit — trips the run's one shared `AbortSignal`, aborting every in-flight branch; on resume each branch re-enters from its logged checkpoint. A branch that hard-fails every turn trips a **per-branch** abort-loop ceiling (process-local, like the linear counter — it resets on restart; the durable backstops are the per-branch wall-clock timeout and the run budget). The supervisor's per-handler watchdog reclaims a leaked branch (one that ignores its signal) via `fact.handler_timeout_leaked`, and an early-terminal pool bail aborts the still-in-flight branches rather than leaving them burning cost.
+- **Pause is run-global.** There is no per-branch pause seam (and none will be built until there is demand). The operator's pause / cancel — or a budget breach detected at any branch commit — trips the run's one shared `AbortSignal`, aborting every in-flight branch; on resume each branch re-enters from its logged checkpoint. A branch that is aborted every turn (steer / operator) trips a **per-branch** abort-loop ceiling (process-local, like the linear counter — it resets on restart; the durable backstops are the per-branch watchdog timeout-retry cap and the run budget); a branch that throws halts the run as a linear node would. The supervisor's per-handler watchdog reclaims a leaked branch (one that ignores its signal) via `fact.handler_timeout_leaked`. That leak bails the pool: it aborts the still-in-flight branches rather than leaving them burning cost, waits for them (bounded by `leakGrace`), and commits each settled sibling's completion or `node_aborted`, plus the accrued spend of any still running, in the same batch as — and ahead of — the leak's terminal fact.
 - **Bounded routing.** The branch set is **static per run** — materialised at parse time, never grown during dispatch — and the frontier holds at most one node per branch. So a fan-out's `routing` footprint scales with the (static) branch width, not with runtime dispatch; realistic fan-outs sit far under I6 (`routing` < 8 KB), and the column CHECK enforces it at the seed `fanout_started` append. There is no *max*-branch validator bound today (only E036's ≥2 minimum), so a pathologically wide fan-out fails its seed loudly (`PayloadTooLargeError`) rather than corrupting — a latent validator gap to close if very wide fan-outs become real, not an active risk. A hypothetical dynamic ("fork N at runtime") variant would still materialise the full branch set at plan time, never stream branches during dispatch.
 
-Well-formedness is checked at parse time (E036–E045): ≥2 distinct branch entries, disjoint closures (E044) each reaching the join (E039), branch nodes are read-class `llm` (E041 / E042 — no write tools, no nested `parallel` via E040, no explicit `thread` via E043), the join is a defined step (E038), and the serialized branch list fits the seed fact's event-payload budget (E045 — `fact.fanout_started` embeds it whole under the 4 KiB cap). The per-branch values the join reads are typed `outputs:` (§3.8), so the join's `${{ outputs.<branch>.<field> }}` reads fail closed when a branch never populated them. See `packages/daemon/src/executor.ts` (`runFanout`) and [`docs/proposals/archive/fan-out-nodes.md`](proposals/archive/fan-out-nodes.md).
+Well-formedness is checked at parse time (E036–E045): ≥2 distinct branch entries, disjoint closures (E044) each reaching the join (E039), branch nodes are read-class `llm` (E041 / E042 — no write tools, no nested `parallel` via E040, no explicit `thread` via E043), the join is a defined step (E038), and the serialized branch list fits the seed fact's event-payload budget (E045 — `fact.fanout_started` embeds it whole under the 4 KiB cap). The per-branch values the join reads are typed `outputs:` (§3.8), so the join's `${{ outputs.<branch>.<field> }}` reads fail closed when a branch never populated them. See `packages/daemon/src/fanout.ts` (`runFanout`) and [`docs/proposals/archive/fan-out-nodes.md`](proposals/archive/fan-out-nodes.md).
 
 ---
 

@@ -26,16 +26,26 @@ import {
 import * as core from "@fragua/core/handler";
 import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type RunState } from "@fragua/store";
 import {
+  classifyExit,
+  type ExitKind,
+  type ExitPlan,
+  planAbortLoops,
+  planBudgetBreach,
+  planExit,
+} from "./abort-planner.ts";
+import {
   buildDispatchContext,
   type FanoutAppendOpts,
   graphFor,
   invalidateOutputsCacheIf,
   mergeFanoutAppendOpts,
   type RunDeps,
+  type UsageAccumulator,
 } from "./dispatch-wiring.ts";
 import {
   BUDGET_WARNED_KEY,
   classifyAbortCause,
+  errorMessage,
   fireNodeExited,
   nodeRetryCount,
   readBudgetOverrides,
@@ -45,19 +55,18 @@ import {
 import {
   type FanoutPlan,
   noteDisposition,
-  planBranchAbortLoop,
+  planBailSettlement,
   planBranchSettlement,
-  planBudgetDisposition,
   planFanoutMalformed,
   planFanoutStep,
   planJoin,
   planSeedFanout,
 } from "./fanout-planner.ts";
+import { FanoutBailError, PROCEED_DECISION, type ProceedDecision, Semaphore } from "./fanout-support.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { planDispatchStarted } from "./lifecycle-planner.ts";
 import { type CommitResult, commitParkOrTerminal, commitWithOcc, type DispatchOutcome } from "./occ-append.ts";
-import { planLeakHalt, planLoopCeiling } from "./predispatch-planner.ts";
-import { abortResultToFacts } from "./result-to-facts.ts";
+import { planLoopCeiling } from "./predispatch-planner.ts";
 import { bumpBranchAbort, clearBranchAbort, countDispatch, type RunTurnState } from "./run-turn-state.ts";
 import { computeAdvanceAppliedTo, planTransition } from "./transition-planner.ts";
 
@@ -68,61 +77,20 @@ const DEFAULT_FANOUT_CONCURRENCY = 8;
 /** Append attempts for a serialized fan-out commit before giving up. */
 const FANOUT_COMMIT_ATTEMPTS = 8;
 
-/** Bounded-concurrency gate for fan-out sub-node dispatch. A slot transfers
- * directly to the next waiter on `release()` so `active` never exceeds `limit`. */
-class Semaphore {
-  private active = 0;
-  private readonly waiters: Array<() => void> = [];
-  constructor(private readonly limit: number) {}
-  async acquire(): Promise<void> {
-    if (this.active < this.limit) {
-      this.active++;
-      return;
-    }
-    await new Promise<void>((resolve) => this.waiters.push(resolve));
-  }
-  release(): void {
-    const next = this.waiters.shift();
-    if (next !== undefined) next();
-    else this.active--;
-  }
-}
-
-/** Signalled into an in-flight branch's controller when the fan-out pool takes
- * an early-terminal exit. Named `AbortError` so the branch classifies it as a
- * plain abort (not a timeout, not a leak). */
-class FanoutBailError extends Error {
-  constructor(public readonly runId: string) {
-    super(`fan-out pool bailed for ${runId}`);
-    this.name = "AbortError";
-  }
-}
-
-/** Outcome of executing one fan-out branch sub-node. */
+/** Outcome of executing one fan-out branch sub-node. A non-result exit carries
+ * the same `planExit` plan the linear path commits. */
 type BranchOutcome =
   | { kind: "success"; nodeId: string; nextNode: string | undefined; facts: FactEvent[]; appendOpts: FanoutAppendOpts }
-  | { kind: "abort"; nodeId: string; facts: FactEvent[] }
-  | { kind: "leak"; nodeId: string; leakedAt: number }
+  | { kind: "exit"; nodeId: string; exit: ExitKind; plan: ExitPlan; appendOpts: FanoutAppendOpts }
   | { kind: "skipped"; nodeId: string };
 
-/** A clean proceed decision for a branch sub-node — deep-frozen so the shared
- * constant can't be cross-corrupted across concurrent branches. */
-const PROCEED_DECISION: Extract<core.IntentDecision, { kind: "proceed" }> = (() => {
-  const d: Extract<core.IntentDecision, { kind: "proceed" }> = {
-    kind: "proceed",
-    routingDelta: {},
-    shouldPause: false,
-    shouldPauseAfterDispatch: false,
-    appliedSeqs: [],
-    dropped: [],
-  };
-  Object.freeze(d.routingDelta);
-  Object.freeze(d.appliedSeqs);
-  Object.freeze(d.dropped);
-  return Object.freeze(d);
-})();
-
-type ProceedDecision = Extract<core.IntentDecision, { kind: "proceed" }>;
+/** A branch whose handler is still running — what an early bail credits when
+ * the bounded drain gives up on it. */
+interface InflightBranch {
+  usage: UsageAccumulator;
+  iteration: number;
+  pass: number;
+}
 
 /** Active fan-out branches whose latest lifecycle fact is `node_aborted` — they
  * are being re-dispatched and need a fresh `dispatch_started` so they project as
@@ -185,6 +153,7 @@ async function executeBranchNode(
   branchRouting: Readonly<Record<string, unknown>>,
   branchTimeoutMs: number,
   foldSteer: string | undefined,
+  inflight: Map<string, InflightBranch>,
 ): Promise<BranchOutcome> {
   const graph = graphFor(deps, ts, baseState.workflowSha);
   const spec = deps.opts.dispatcher.get(baseState.workflowSha, branchNode);
@@ -212,6 +181,7 @@ async function executeBranchNode(
   if (branchSteer.length > 0) ctxOpts.steering = branchSteer.join("\n");
   const ctx = core.buildHandlerContext(ctxOpts);
 
+  inflight.set(branchNode, { usage, iteration, pass: branchPass });
   const invocation = await invokeHandler({
     spec,
     ctx,
@@ -221,18 +191,40 @@ async function executeBranchNode(
     leakGraceMs: deps.leakGrace,
     maxMsOverride: branchTimeoutMs,
   });
+  inflight.delete(branchNode);
   for (const disarm of deadlines) disarm();
   if (invocation.kind !== "leak") releaseSignal();
   obs.flush();
 
-  if (invocation.kind === "leak") return { kind: "leak", nodeId: branchNode, leakedAt: deps.clock() };
-  if (invocation.kind === "thrown") {
-    const cause = classifyAbortCause(signal, invocation.error);
-    return {
-      kind: "abort",
-      nodeId: branchNode,
-      facts: abortResultToFacts(branchNode, iteration, cause, usage.totals(), branchPass),
-    };
+  if (invocation.kind !== "result") {
+    const thrown = invocation.kind === "thrown" ? invocation : undefined;
+    const exit = classifyExit({
+      invocation: invocation.kind,
+      abortByName: thrown?.abortByName ?? false,
+      signalAborted: signal.aborted,
+      shutdownAborted: deps.opts.shutdownSignal.aborted,
+      abortCause: thrown !== undefined ? classifyAbortCause(signal, thrown.error) : "aborted",
+      budgetTripped: false,
+    });
+    const now = deps.clock();
+    const plan = planExit({
+      exit,
+      currentNode: branchNode,
+      iteration,
+      ...(thrown !== undefined ? { errorDetail: errorMessage(thrown.error) } : {}),
+      leakedAt: now,
+      reactiveBudgetHaltDetail: undefined,
+      reactiveBudgetPauseBreach: undefined,
+      usage: usage.totals(),
+      routingDelta: {},
+      appliedSeqs: [],
+      effectiveRouting: branchRouting,
+      now,
+      attemptedMs: spec.maxMs !== undefined ? Math.min(spec.maxMs, branchTimeoutMs) : branchTimeoutMs,
+    });
+    const exitOpts: FanoutAppendOpts = {};
+    if (plan.routingPatch !== undefined) exitOpts.routingPatch = plan.routingPatch;
+    return { kind: "exit", nodeId: branchNode, exit, plan, appendOpts: exitOpts };
   }
 
   const plan = planTransition({
@@ -285,6 +277,7 @@ interface FanoutCtx {
   foldPending: boolean;
   sem: Semaphore;
   pool: Map<string, Promise<{ nodeId: string; outcome: BranchOutcome }>>;
+  inflight: Map<string, InflightBranch>;
   liveRouting: Readonly<Record<string, unknown>>;
   disposition: FactEvent | undefined;
   poolBailed: boolean;
@@ -360,7 +353,10 @@ function fanoutBudgetDisposition(ctx: FanoutCtx, gate: { fresh?: boolean } = {})
     );
     for (const t of budget.newlyWarned) ts.pendingWarnTags.add(t);
   }
-  return planBudgetDisposition(budget, parallelNode);
+  return planBudgetBreach(
+    { haltDetail: budget.shouldHalt ? (budget.haltReason ?? "") : undefined, pauseBreach: budget.pauseBreach },
+    parallelNode,
+  );
 }
 
 /** Fold committed same-turn retry-count bumps into `liveRouting` so a successor
@@ -421,6 +417,7 @@ function poolDispatch(ctx: FanoutCtx, nodeId: string): void {
             routingForBranch(ctx, nodeId),
             ctx.branchTimeoutMs,
             ctx.decision.steering,
+            ctx.inflight,
           ),
         };
       } finally {
@@ -438,13 +435,87 @@ function abortInflightPool(ctx: FanoutCtx): void {
 }
 
 /** After an early bail, wait for the just-aborted handlers to tear down —
- * bounded by `leakGrace` so a genuinely-leaked handler can't dam the turn. */
-async function drainInflightPool(ctx: FanoutCtx): Promise<void> {
-  if (ctx.pool.size === 0) return;
-  await Promise.race([
-    Promise.allSettled([...ctx.pool.values()]),
-    sleep(ctx.deps.leakGrace, ctx.deps.opts.shutdownSignal),
-  ]);
+ * bounded by `leakGrace` so a genuinely-leaked handler can't dam the turn.
+ * Returns the outcomes that settled inside the bound. */
+async function drainInflightPool(ctx: FanoutCtx): Promise<BranchOutcome[]> {
+  if (ctx.pool.size === 0) return [];
+  const settled: BranchOutcome[] = [];
+  const tracked = [...ctx.pool.values()].map((p) =>
+    p.then(
+      (r) => {
+        settled.push(r.outcome);
+      },
+      () => undefined,
+    ),
+  );
+  await Promise.race([Promise.all(tracked), sleep(ctx.deps.leakGrace, ctx.deps.opts.shutdownSignal)]);
+  return settled;
+}
+
+/** A leaked branch bails the pool: abort the in-flight siblings, wait for them
+ * (bounded), and commit their completions / exits and the spend of any still
+ * running ahead of the leak's own halt in one batch. */
+async function bailWithSiblings(
+  ctx: FanoutCtx,
+  outcome: Extract<BranchOutcome, { kind: "exit" }>,
+): Promise<DispatchOutcome> {
+  const { deps } = ctx;
+  deps.leakBudget.recordLeak(deps.runId, outcome.nodeId);
+  abortInflightPool(ctx);
+  const settled = await drainInflightPool(ctx);
+  const siblings = planBailSettlement({
+    settled: settled.flatMap((o) =>
+      o.kind === "success" ? [{ facts: o.facts }] : o.kind === "exit" ? [{ facts: o.plan.facts }] : [],
+    ),
+    unsettled: [...ctx.inflight].map(([nodeId, b]) => ({
+      nodeId,
+      iteration: b.iteration,
+      pass: b.pass,
+      usage: b.usage.totals(),
+    })),
+  });
+  return commitFanoutDisposition(ctx, [...siblings, ...outcome.plan.facts]);
+}
+
+/** Fold one branch's non-result exit: node-scoped facts (the spend-bearing
+ * `node_aborted`, plus a timeout-retry's counter patch) commit on the branch
+ * lane; the plan's park/terminal fact joins the pool disposition. A leak bails. */
+async function settleExit(
+  ctx: FanoutCtx,
+  outcome: Extract<BranchOutcome, { kind: "exit" }>,
+): Promise<DispatchOutcome | undefined> {
+  const { deps, ts } = ctx;
+  if (outcome.exit === "leak") return bailWithSiblings(ctx, outcome);
+  const branchFacts: FactEvent[] = [];
+  for (const f of outcome.plan.facts) {
+    if (f.type === "fact.run_paused" || f.type === "fact.run_terminated") {
+      ctx.disposition = noteDisposition(ctx.disposition, f);
+    } else {
+      branchFacts.push(f);
+    }
+  }
+  return commitWithOcc(
+    {
+      occ: deps.occ,
+      nodeId: outcome.nodeId,
+      iteration: nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
+      expectedVersion: ctx.runState.version,
+      attemptedFactType: "fact.node_aborted",
+      commit: (f) => commitFanoutFact(deps, ts, f, mergeFanoutAppendOpts(takeFold(ctx), outcome.appendOpts)),
+      successOutcome: undefined,
+      statusOutcome: { kind: "continue" },
+      onFail: () => abortInflightPool(ctx),
+      onNonHalt: async () => {
+        await drainInflightPool(ctx);
+      },
+      onSuccess: () => {
+        foldCommittedRetryCounts(ctx);
+        if (outcome.plan.outcome === "abort_step") bumpBranchAbort(ts, outcome.nodeId);
+        captureDisposition(ctx);
+      },
+    },
+    branchFacts,
+  );
 }
 
 /** Fold one settled branch outcome. Returns a DispatchOutcome to return from
@@ -453,35 +524,7 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
   const { deps, ts } = ctx;
   if (outcome.kind === "skipped") return undefined;
 
-  if (outcome.kind === "leak") {
-    deps.leakBudget.recordLeak(deps.runId, outcome.nodeId);
-    abortInflightPool(ctx);
-    await drainInflightPool(ctx);
-    return commitFanoutDisposition(ctx, planLeakHalt({ nodeId: outcome.nodeId, leakedAt: outcome.leakedAt }).facts);
-  }
-
-  if (outcome.kind === "abort") {
-    return commitWithOcc(
-      {
-        occ: deps.occ,
-        nodeId: outcome.nodeId,
-        iteration: nodeRetryCount(ctx.liveRouting as Record<string, unknown>, outcome.nodeId),
-        expectedVersion: ctx.runState.version,
-        attemptedFactType: "fact.node_aborted",
-        commit: (f) => commitFanoutFact(deps, ts, f, takeFold(ctx)),
-        successOutcome: undefined,
-        statusOutcome: { kind: "continue" },
-        onFail: () => abortInflightPool(ctx),
-        onNonHalt: () => drainInflightPool(ctx),
-        onSuccess: () => {
-          foldCommittedRetryCounts(ctx);
-          bumpBranchAbort(ts, outcome.nodeId);
-          captureDisposition(ctx);
-        },
-      },
-      outcome.facts,
-    );
-  }
+  if (outcome.kind === "exit") return settleExit(ctx, outcome);
 
   const settlement = planBranchSettlement({
     nodeId: outcome.nodeId,
@@ -507,7 +550,9 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
       successOutcome: undefined,
       statusOutcome: { kind: "continue" },
       onFail: () => abortInflightPool(ctx),
-      onNonHalt: () => drainInflightPool(ctx),
+      onNonHalt: async () => {
+        await drainInflightPool(ctx);
+      },
       onSuccess: () => {
         foldCommittedRetryCounts(ctx);
         clearBranchAbort(ts, outcome.nodeId);
@@ -639,8 +684,9 @@ async function runFanoutPool(
   }
 
   if (ctx.disposition !== undefined) return commitFanoutDisposition(ctx, [ctx.disposition]);
-  const branchLoopPause = planBranchAbortLoop(ts.branchAborts, deps.abortLoopCeiling);
-  if (branchLoopPause !== undefined) return commitFanoutDisposition(ctx, [branchLoopPause]);
+  const abortLoops = planAbortLoops(ts.branchAborts, deps.abortLoopCeiling);
+  if (abortLoops.warns.length > 0) deps.opts.store.appendObservabilityEvents(deps.runId, abortLoops.warns);
+  if (abortLoops.pause !== undefined) return commitFanoutDisposition(ctx, [abortLoops.pause]);
   if (ts.branchAborts.size > 0) return { kind: "continue" };
   const barrier = fanoutBudgetDisposition(ctx, { fresh: true });
   if (barrier !== undefined) return commitFanoutDisposition(ctx, [barrier]);
@@ -722,6 +768,7 @@ export async function runFanout(
     foldPending,
     sem: new Semaphore(concurrency),
     pool: new Map(),
+    inflight: new Map(),
     liveRouting: effectiveRouting,
     disposition: undefined,
     poolBailed: false,

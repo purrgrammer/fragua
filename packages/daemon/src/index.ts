@@ -15,8 +15,8 @@ export { formatDelayMs, PROVIDER_RETRY_AFTER_MAX_MS } from "./provider-retry-pol
 export { CommittingRecorder } from "./recorder.ts";
 export type { ResultContext } from "./result-to-facts.ts";
 export {
-  abortResultToFacts,
   cancelToFacts,
+  exitSpendFacts,
   resultToFacts,
 } from "./result-to-facts.ts";
 export type { ScheduleDispatcherOpts } from "./schedule-dispatcher.ts";

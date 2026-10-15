@@ -1,18 +1,19 @@
-// Property-based tests over the pure planAbort (executor PBT Phase 4 — the
-// abort arm, sibling of transition-planner.property.test.ts for the success
-// arm). planAbort is referentially transparent, so its invariants become
-// properties over a generated AbortPlanInput — no store, no driven run.
+// Property-based tests over the pure planExit (the exit arm, sibling of
+// transition-planner.property.test.ts for the success arm). planExit is
+// referentially transparent, so its invariants become properties over a
+// generated ExitPlanInput — no store, no driven run.
 //
-// The decision order it must honour: reactive-budget halt > reactive-budget
-// pause > watchdog timeout-retry/exhausted > plain abort. node_aborted is
-// always recorded (partial spend); at most one terminal/pause fact rides with
-// it; the executor's abort-loop ceiling (a second commit) is NOT in the plan.
+// The decision order it must honour: leak > reactive-budget halt >
+// reactive-budget pause > shutdown > watchdog timeout-retry/exhausted > throw >
+// plain abort. node_aborted is always recorded first with the turn's spend; at
+// most one terminal/pause fact rides with it; the driver's abort-loop ceiling
+// (a second commit) is NOT in the plan.
 
 import { describe, expect, test } from "bun:test";
 import { AUTO_RESUME_AT_KEY } from "@fragua/core";
 import fc from "fast-check";
 import { pbtFaultRuns } from "../../../test/pbt-runs.ts";
-import { type AbortPlanInput, planAbort } from "../src/abort-planner.ts";
+import { type ExitKind, type ExitPlanInput, planExit } from "../src/abort-planner.ts";
 
 const NODE_IDS = ["plan", "implement", "review", "gate"] as const;
 const timeoutKey = (node: string): string => `internal.timeout_retries.${node}`;
@@ -41,15 +42,19 @@ const arbPauseBreach = fc.record({
   actual: usd,
 });
 
-/** A full AbortPlanInput. `priorTimeoutAttempts` is woven into effectiveRouting
+const EXIT_KINDS: readonly ExitKind[] = ["throw", "timeout", "abort", "shutdown", "leak"];
+
+/** A full ExitPlanInput. `priorTimeoutAttempts` is woven into effectiveRouting
  * under the per-node counter key so the timeout-retry/exhaustion boundary is
- * exercised (max 5 reaches well past the cap). Budget flags + abortCause are
- * independently optional so all four outcomes are generated. */
-const arbAbortInput: fc.Arbitrary<AbortPlanInput> = fc
+ * exercised (max 5 reaches well past the cap). Budget flags + exit kind are
+ * independently generated so every outcome is reached. */
+const arbAbortInput: fc.Arbitrary<ExitPlanInput> = fc
   .record({
     node: fc.constantFrom(...NODE_IDS),
     iteration: fc.nat({ max: 10 }),
-    abortCause: fc.constantFrom("timeout", "aborted"),
+    exit: fc.constantFrom(...EXIT_KINDS),
+    errorDetail: fc.string({ maxLength: 24 }),
+    leakedAt: fc.nat({ max: 2_000_000_000_000 }),
     reactiveBudgetHaltDetail: fc.option(fc.string({ maxLength: 24 }), { nil: undefined }),
     reactiveBudgetPauseBreach: fc.option(arbPauseBreach, { nil: undefined }),
     usage: arbUsage,
@@ -61,9 +66,11 @@ const arbAbortInput: fc.Arbitrary<AbortPlanInput> = fc
     attemptedMs: fc.nat({ max: 600_000 }),
   })
   .map((r) => ({
+    exit: r.exit,
     currentNode: r.node,
     iteration: r.iteration,
-    abortCause: r.abortCause,
+    errorDetail: r.errorDetail,
+    leakedAt: r.leakedAt,
     reactiveBudgetHaltDetail: r.reactiveBudgetHaltDetail,
     reactiveBudgetPauseBreach: r.reactiveBudgetPauseBreach,
     usage: r.usage,
@@ -81,13 +88,13 @@ const has = (facts: { type: string }[], type: string): boolean => facts.some((f)
 const hasStatus = (facts: { type: string; payload: unknown }[], status: string): boolean =>
   facts.some((f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === status);
 
-describe("planAbort — properties", () => {
+describe("planExit — properties", () => {
   test("A: pure — same input ⇒ equal plan, input never mutated", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
         const before = structuredClone(input);
-        const a = planAbort(input);
-        const b = planAbort(input);
+        const a = planExit(input);
+        const b = planExit(input);
         expect(a).toEqual(b);
         expect(input).toEqual(before);
       }),
@@ -95,23 +102,28 @@ describe("planAbort — properties", () => {
     );
   });
 
-  test("B: fact.node_aborted is always recorded first", () => {
+  test("planExit — every exit plan leads with spend-bearing node_aborted", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const { facts } = planAbort(input);
+        const { facts } = planExit(input);
         expect(facts.length).toBeGreaterThanOrEqual(1);
         expect(facts[0]?.type).toBe("fact.node_aborted");
-        // ...and only once.
+        const p = facts[0]!.payload as { partialCostUsd: number; partialTokens: number };
+        expect(p.partialCostUsd).toBe(input.usage.totalCostUsd);
+        expect(p.partialTokens).toBe(input.usage.turnBilled);
         expect(facts.filter((f) => f.type === "fact.node_aborted").length).toBe(1);
       }),
       { numRuns: pbtFaultRuns(1000) },
     );
   });
 
-  test("C: at most one terminal/pause fact rides with the abort", () => {
+  test("planExit — at most one run-parking fact; none for abort_step/shutdown", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const { facts } = planAbort(input);
+        const { facts, outcome } = planExit(input);
+        const parking = facts.filter((f) => f.type === "fact.run_terminated" || f.type === "fact.run_paused");
+        expect(parking.length).toBeLessThanOrEqual(1);
+        if (outcome === "abort_step" || outcome === "shutdown") expect(parking.length).toBe(0);
         const extra = facts.filter(
           (f) =>
             (f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored") ||
@@ -129,7 +141,7 @@ describe("planAbort — properties", () => {
   test("D: outcome ⇄ fact shape", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const plan = planAbort(input);
+        const plan = planExit(input);
         switch (plan.outcome) {
           case "halt":
             expect(hasStatus(plan.facts, "errored")).toBe(true);
@@ -148,8 +160,9 @@ describe("planAbort — properties", () => {
             break;
           }
           case "abort_step":
-            // Plain abort: node_aborted ONLY. The abort-loop ceiling pause is
-            // the executor's second commit, never in the plan.
+          case "shutdown":
+            // node_aborted ONLY. The abort-loop ceiling pause is the driver's
+            // second commit, never in the plan; shutdown never bumps it.
             expect(plan.facts.length).toBe(1);
             break;
         }
@@ -158,21 +171,28 @@ describe("planAbort — properties", () => {
     );
   });
 
-  test("ABORT-OUTCOME-PARTITION: outcome is exactly one of halt|pause|timeout_retry|abort_step", () => {
+  test("ABORT-OUTCOME-PARTITION: outcome is exactly one of halt|pause|timeout_retry|abort_step|shutdown", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const { outcome } = planAbort(input);
-        expect(["halt", "pause", "timeout_retry", "abort_step"]).toContain(outcome);
+        const { outcome } = planExit(input);
+        expect(["halt", "pause", "timeout_retry", "abort_step", "shutdown"]).toContain(outcome);
       }),
       { numRuns: pbtFaultRuns(1000) },
     );
   });
 
-  test("E: reactive-budget precedence — halt beats pause beats everything else", () => {
+  test("E: precedence — a leak beats everything, then budget halt beats pause beats the rest", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const plan = planAbort(input);
-        if (input.reactiveBudgetHaltDetail !== undefined) {
+        const plan = planExit(input);
+        if (input.exit === "leak") {
+          expect(plan.outcome).toBe("halt");
+          expect(plan.facts.map((f) => f.type)).toEqual([
+            "fact.node_aborted",
+            "fact.handler_timeout_leaked",
+            "fact.run_terminated",
+          ]);
+        } else if (input.reactiveBudgetHaltDetail !== undefined) {
           expect(plan.outcome).toBe("halt");
           const halted = plan.facts.find(
             (f) => f.type === "fact.run_terminated" && (f.payload as { status?: string }).status === "errored",
@@ -192,13 +212,13 @@ describe("planAbort — properties", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
         // Isolate the timeout arm: no budget breach, cause = timeout.
-        const timeoutInput: AbortPlanInput = {
+        const timeoutInput: ExitPlanInput = {
           ...input,
-          abortCause: "timeout",
+          exit: "timeout",
           reactiveBudgetHaltDetail: undefined,
           reactiveBudgetPauseBreach: undefined,
         };
-        const plan = planAbort(timeoutInput);
+        const plan = planExit(timeoutInput);
         const prior = (timeoutInput.effectiveRouting[timeoutKey(timeoutInput.currentNode)] as number) ?? 0;
         if (plan.outcome === "timeout_retry") {
           // Counter advanced by exactly one, auto-resume is in the future.
@@ -221,10 +241,31 @@ describe("planAbort — properties", () => {
     );
   });
 
+  test("H: an unbudgeted throw halts with reason=error carrying the error detail", () => {
+    fc.assert(
+      fc.property(arbAbortInput, (input) => {
+        const plan = planExit({
+          ...input,
+          exit: "throw",
+          reactiveBudgetHaltDetail: undefined,
+          reactiveBudgetPauseBreach: undefined,
+        });
+        expect(plan.outcome).toBe("halt");
+        const halted = plan.facts.find((f) => f.type === "fact.run_terminated");
+        expect(reasonOf(halted!)).toBe("error");
+        const detail = (halted!.payload as { detail?: string }).detail;
+        if (input.errorDetail === undefined || input.errorDetail === "") expect(detail).toBeUndefined();
+        else expect(detail).toBe(input.errorDetail);
+        expect((plan.facts[0]!.payload as { cause: string }).cause).toBe("error");
+      }),
+      { numRuns: pbtFaultRuns(1000) },
+    );
+  });
+
   test("G: appendOpts — advanceAppliedTo = max(appliedSeqs)|undefined; routingPatch ⊇ routingDelta", () => {
     fc.assert(
       fc.property(arbAbortInput, (input) => {
-        const plan = planAbort(input);
+        const plan = planExit(input);
         if (input.appliedSeqs.length === 0) {
           expect(plan.advanceAppliedTo).toBeUndefined();
         } else {

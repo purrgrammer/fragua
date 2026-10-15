@@ -1,12 +1,11 @@
 // Pure pre-dispatch decision planner — the driver-side twin of
-// transition-planner.ts (the success arm) and abort-planner.ts (the abort arm),
-// for the fact-choosing decisions that fire BEFORE, or INSTEAD OF, a handler
-// dispatch: the event-contract version gate, the unparseable-workflow refusal, a
-// worktree-provision failure, and the per-run max_loops dispatch ceiling. The
-// leaked-handler halt (a post-dispatch structural terminal) is planned by the
-// sibling `planLeakHalt`. Each was inline in the executor's driver; lifting the
-// decision here keeps SPEC §3.11 / I12's decision core complete — no store, no
-// clock (`leakedAt` is a value), no RNG, no I/O. The driver applies the plan.
+// transition-planner.ts (the success arm) and abort-planner.ts (every
+// non-success exit, including a leaked handler), for the fact-choosing decisions
+// that fire BEFORE a handler dispatch: the event-contract version gate, the
+// unparseable-workflow refusal, a worktree-provision failure, and the per-run
+// max_loops dispatch ceiling. Each was inline in the executor's driver; lifting
+// the decision here keeps SPEC §3.11 / I12's decision core complete — no store,
+// no clock, no RNG, no I/O. The driver applies the plan.
 
 import type { FactEvent, RunState } from "@fragua/store";
 
@@ -122,18 +121,4 @@ export function planPreDispatch(input: PreDispatchInput): PreDispatchPlan {
   if (ceiling !== undefined) return { terminal: true, facts: [ceiling] };
 
   return { terminal: false, facts: [] };
-}
-
-/** The leaked-handler structural halt (a handler that ignored its abort past
- * `maxMs + leakGrace`). Two facts — the diagnostic `handler_timeout_leaked`
- * then the terminal `run_terminated` — with `leakedAt` threaded as a value so
- * the planner stays clock-free. The driver still records the leak-budget hit. */
-export function planLeakHalt(input: { nodeId: string; leakedAt: number }): PreDispatchPlan {
-  return {
-    terminal: true,
-    facts: [
-      { type: "fact.handler_timeout_leaked", payload: { nodeId: input.nodeId, leakedAt: input.leakedAt } },
-      { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "handler_leaked" } },
-    ],
-  };
 }
