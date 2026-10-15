@@ -6,6 +6,7 @@
 //   - GET /metrics/global aggregates via generated columns + json_each pivot
 //   - P19: SSE replay via Last-Event-ID
 
+import type { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -718,6 +719,19 @@ steps:
     expect(body.code).toBe("payload_too_large");
     expect(body.sizeBytes).toBeGreaterThan(body.maxBytes);
     expect(body.maxBytes).toBe(4096);
+  });
+
+  test("intent on an imported run → 409 code=imported_run", async () => {
+    store.enqueueRun({ runId: "rimported", workflowSha: "wf" });
+    const db = (store as unknown as { db: Database }).db;
+    db.query("INSERT INTO imported_runs (run_id, imported_at) VALUES (?, ?)").run("rimported", 0);
+    const seqBefore = store.getState("rimported")!.nextSeq;
+    const res = await req("POST", "/runs/rimported/cancel", {});
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("imported_run");
+    expect(body.error).toMatch(/imported run/);
+    expect(store.getState("rimported")!.nextSeq).toBe(seqBefore);
   });
 
   test("over-long steer text → 400 at validation (before the store payload cap)", async () => {

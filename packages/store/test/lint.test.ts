@@ -2,8 +2,8 @@
 //
 // Every store write runs inside a `this.writeTxn(() => ...)` (or a raw
 // `db.transaction(() => ...)`) callback whose body executes under the SQLite
-// write lock. A `SAVEPOINT`-wrapped closure (the startup sweep's per-run
-// `sweepRun(runId, () => ...)`) runs under the same lock, so its callback is a
+// write lock. A closure handed to a same-file `SAVEPOINT` wrapper (e.g.
+// `wrap(id, () => ...)`) runs under the same lock, so its callback is a
 // transaction scope too. Inside any such body we MUST NOT `await` (blocks the
 // lock), serialize or parse JSON (allocates on the hot path under the lock),
 // reach the network (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` —
@@ -125,7 +125,7 @@ function isSavepointOpener(node: ts.CallExpression): boolean {
 }
 
 /** Names of same-file functions whose body opens a `SAVEPOINT` — their
- * callback arguments run under the write lock (the sweep's `sweepRun`). */
+ * callback arguments run under the write lock. */
 function savepointWrapperNames(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   for (const [name, body] of sameFileFunctionBodies(sf)) {

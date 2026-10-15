@@ -36,6 +36,11 @@ guarantee.
 
 ### Fixed
 
+- **The daemon's startup sweep no longer leaves a run `running` when another process is writing.** Each run heals in its own `BEGIN IMMEDIATE` transaction that waits for the lock, retries on `SQLITE_BUSY`, and logs `daemon.sweep_run_failed` (now with `attempts`) only for a non-BUSY error or once the retries are spent.
+- **A run quarantined by the startup sweep keeps its active time.** The open dispatch span is credited to `activeMs`, matching what a replay of the run's log computes.
+- **A fenced executor fiber can no longer write messages, artifacts or telemetry for a run it no longer owns.** `appendMessage`, `putArtifact` and `appendObservabilityEvents` now take the same claim-epoch check as fact appends and throw `ClaimLostError` without writing.
+- **`fragua runs release` no longer swallows an earlier pending intent.** A cancel or accept filed before the release stays unapplied, so the daemon still folds it.
+- **Intents on imported runs are refused.** The web API returns 409 `imported_run` and the CLI prints an error. Re-importing the same bundle afterwards still succeeds.
 - **Skill files are served inertly.** `GET /skills/:locId/file` returns `text/plain` or `application/octet-stream` with `nosniff` and a sandboxed CSP, and `.html` / `.htm` / `.svg` / `.xml` download as attachments, so a skill file can no longer render as a page on the control-plane origin. The skills viewer now picks its renderer from the file extension.
 - **Enqueue accepts only operator-settable routing keys.** `POST /runs` and the intent plane reject `routing.inputs` (inputs go through the typed `inputs` field and are always validated) and any routing key outside the allow-list (budget overrides, `max_retries_override.<node>`, `max_goal_gate_retries_override`) with a 400 `invalid_routing`.
 - **A non-integer enqueue `priority` is a validation error.** `1.5`, `"high"` or `1e300` now return 400 `invalid_priority` instead of failing with a database error.

@@ -54,9 +54,11 @@ import * as schedules from "./store-schedules.ts";
 import * as writer from "./store-writer.ts";
 import {
   type AppendFactOpts,
+  type AppendMessageOpts,
   type ArtifactListRow,
   type ArtifactRef,
   type ArtifactScope,
+  type ClaimFenceOpts,
   type CreateScheduleParams,
   type DaemonEvent,
   type DaemonEventRow,
@@ -87,6 +89,7 @@ import {
   PayloadTooLargeError,
   type ProviderConfigRow,
   type ProviderCredentialRow,
+  type PutArtifactOpts,
   type RunState,
   type Schedule,
   type ServerEndpointRow,
@@ -182,8 +185,8 @@ export class SqliteStore implements IEventStore {
     return writer.appendIntentWithFact(this.ctx, runId, intent, facts, expectedVersion);
   }
 
-  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] } {
-    return writer.appendObservabilityEvents(this.ctx, runId, events);
+  appendObservabilityEvents(runId: string, events: ObservabilityEvent[], opts?: ClaimFenceOpts): { seqs: number[] } {
+    return writer.appendObservabilityEvents(this.ctx, runId, events, opts);
   }
 
   enqueueRun(params: EnqueueRunParams): void {
@@ -209,12 +212,12 @@ export class SqliteStore implements IEventStore {
   appendMessage(
     runId: string,
     row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
-    opts?: { dedup?: boolean },
+    opts?: AppendMessageOpts,
   ): { ordinal: number } {
     return writer.appendMessage(this.ctx, runId, row, opts);
   }
 
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef {
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: PutArtifactOpts): ArtifactRef {
     return writer.putArtifact(this.ctx, scope, content, mime, opts);
   }
 

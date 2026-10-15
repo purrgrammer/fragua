@@ -4,7 +4,7 @@
 // `not_terminal`, `already_released`, then commits `intent.checkout_release`
 // together with its `fact.checkout_released` in one store transaction.
 
-import { ConcurrencyError } from "@fragua/store";
+import { ConcurrencyError, ImportedRunError } from "@fragua/store";
 import chalk from "chalk";
 import { withStoreClient } from "../store-client.ts";
 
@@ -42,6 +42,10 @@ export function releaseCommand(opts: ReleaseOptions): Promise<number> {
       }
       return 0;
     } catch (err) {
+      if (err instanceof ImportedRunError) {
+        console.error(chalk.red(`release: ${err.message}`));
+        return 1;
+      }
       if (err instanceof ConcurrencyError) {
         console.error(chalk.red("release: the run changed while releasing; retry"));
         return 1;

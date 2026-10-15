@@ -467,6 +467,21 @@ export interface AppendFactOpts {
   claimEpoch?: number;
 }
 
+/** The claim fence for a run fiber's non-fact writes: when `claimEpoch` is
+ * set, the write is rejected with {@link ClaimLostError} inside its
+ * transaction unless it still equals `run_state.claim_epoch`. */
+export interface ClaimFenceOpts {
+  claimEpoch?: number;
+}
+
+export interface AppendMessageOpts extends ClaimFenceOpts {
+  dedup?: boolean;
+}
+
+export interface PutArtifactOpts extends ClaimFenceOpts {
+  replace?: boolean;
+}
+
 export interface IntentAppendResult {
   seq: number;
   ts: number;
@@ -583,6 +598,17 @@ export class RunNotFoundError extends Error {
   constructor(public readonly runId: string) {
     super(`unknown run ${runId}`);
     this.name = "RunNotFoundError";
+  }
+}
+
+/** An intent targeted a run merged in by `fragua import`. Imported runs are
+ * inert: nothing here folds their intents, and an appended one would make the
+ * stored log diverge from the source's, breaking every later re-import.
+ * Thrown from inside the append transaction, so nothing was written. */
+export class ImportedRunError extends Error {
+  constructor(public readonly runId: string) {
+    super(`run ${runId} is an imported run (inspect-only here); act on it in the store that executed it`);
+    this.name = "ImportedRunError";
   }
 }
 
@@ -807,11 +833,16 @@ export interface GetDaemonEventsOpts {
 
 export interface IEventWriter {
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
+  /** Append an operator intent. Throws {@link ImportedRunError} on an
+   * imported (inert) run: nothing would fold it, and it would fork the
+   * stored log away from the source's. */
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
   /**
    * Append an operator intent AND the fact it folds into in ONE transaction,
    * OCC-checked against `expectedVersion`, advancing `last_applied_seq` to the
-   * intent's seq. Used only for the synchronous `fragua runs release`, whose
+   * intent's seq unless an earlier operator intent is still awaiting its fold
+   * (then the watermark stays put so the fold still sees it). Throws
+   * {@link ImportedRunError} on an imported run. Used only for the synchronous `fragua runs release`, whose
    * fold needs no daemon (its intent-plane builder already refused every
    * invalid state).
    */
@@ -827,9 +858,9 @@ export interface IEventWriter {
    * `/runs/:id/events` sees them interleaved in causal order — but they do
    * NOT trigger the reducer, do NOT bump `run_state.version`, and do NOT
    * require an expectedVersion (so handlers can emit mid-step without
-   * racing the terminal appendFact).
+   * racing the terminal appendFact). `opts.claimEpoch` fences a stale fiber.
    */
-  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
+  appendObservabilityEvents(runId: string, events: ObservabilityEvent[], opts?: ClaimFenceOpts): { seqs: number[] };
 
   // ─── Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
@@ -874,11 +905,12 @@ export interface IEventWriter {
    * ordinal instead of minting a duplicate row. Default OFF because agent
    * transcripts carry per-call timestamps that differ even when the
    * semantic message is the same; opting in is the caller's job.
+   * `opts.claimEpoch` fences a stale fiber (`ClaimLostError`, nothing written).
    */
   appendMessage(
     runId: string,
     row: Omit<Message, "runId" | "ordinal" | "pass"> & { pass?: number },
-    opts?: { dedup?: boolean },
+    opts?: AppendMessageOpts,
   ): {
     ordinal: number;
   };
@@ -889,8 +921,9 @@ export interface IEventWriter {
    *  - Identical content at the same scope → returns the existing ref (no-op).
    *  - Different content + `replace: false` (default) → throws `ArtifactCollisionError`.
    *  - Different content + `replace: true` → overwrites.
+   * `opts.claimEpoch` fences a stale fiber (`ClaimLostError`, no row written).
    */
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: PutArtifactOpts): ArtifactRef;
 
   // ─── Workflow catalog (write)
   saveWorkflow(sha: string, name: string, source: string, ir: string, irVersion: number): void;
