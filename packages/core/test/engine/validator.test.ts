@@ -2,6 +2,7 @@
 // the parser is exercised in packages/core/test/parser/yaml.test.ts.
 
 import { describe, expect, test } from "bun:test";
+import { UNSAFE_SHELL_POSITIONS } from "../../src/engine/shell-quote.ts";
 import { ValidationError, validate, validateOrThrow } from "../../src/engine/validator.ts";
 import type { NodeAttrs } from "../../src/types/graph.ts";
 import { type EdgeSpec, mkGraph } from "../helpers/build-graph.ts";
@@ -368,10 +369,10 @@ describe("validate — E057 retry_target on a non-goal-gate step", () => {
   });
 });
 
-function toolGraph(toolCommand: string, type: "tool" | "llm" = "tool") {
+function toolGraph(toolCommand: string, type: "tool" | "llm" = "tool", inputNames: string[] = ["v"]) {
   const attrs: NodeAttrs = type === "tool" ? { tool_command: toolCommand } : { prompt: toolCommand };
   return mkGraph({
-    attrs: { inputs: [{ name: "v", type: "string", required: false }] },
+    attrs: { inputs: inputNames.map((name) => ({ name, type: "string" as const, required: false })) },
     nodes: { s: "start", run: { type, attrs }, done: "exit" },
     edges: [
       ["s", "run"],
@@ -412,6 +413,23 @@ describe("validate — E058 shell quoting context in a tool run:", () => {
       expect(e058[0]?.severity).toBe("error");
       expect(e058[0]?.message).toContain(where);
     }
+  });
+
+  test("a token directly after a literal $ in run: → E058 dollar-prefix", () => {
+    const { where, fix } = UNSAFE_SHELL_POSITIONS["dollar-prefix"];
+    for (const cmd of ['echo "Price: $${{ inputs.p }}"', "echo $${{ inputs.v }}"]) {
+      const diags = validate(toolGraph(cmd, "tool", ["p", "v"]));
+      expect(diags.filter((d) => d.severity === "error" && d.code !== "E058")).toEqual([]);
+      const e058 = diags.filter((d) => d.code === "E058");
+      expect(e058).toHaveLength(1);
+      expect(e058[0]).toMatchObject({ code: "E058", severity: "error", nodeId: "run" });
+      expect(e058[0]?.message).toContain(where);
+      expect(e058[0]?.message).toContain(fix);
+    }
+  });
+
+  test("a backslash-escaped $ before a token does not trip dollar-prefix", () => {
+    expect(codesOf(toolGraph('echo "\\$${{ inputs.v }}"'))).not.toContain("E058");
   });
 });
 
