@@ -41,7 +41,7 @@ import { type Diagnostic, validate } from "../engine/validator.ts";
 import { sha256Hex } from "../handler/sha256.ts";
 import { CURRENT_IR_VERSION, serializeGraph } from "../ir.ts";
 import { parseWorkflow } from "../parser/yaml.ts";
-import { hasInputs, setInputs } from "../routing.ts";
+import { type EnqueueRoutingError, setInputs, validateEnqueueRouting } from "../routing.ts";
 import type { Graph, InputDecl } from "../types/graph.ts";
 import * as S from "./schemas.ts";
 
@@ -115,7 +115,10 @@ export interface EnqueueInput {
    * already-parsed JSON values (the CLI coerces by declared type; the server
    * receives parsed JSON). Validated against `inputDecls` at enqueue. */
   inputs?: Record<string, unknown> | undefined;
+  /** Operator overrides only — every key must be on
+   * `ENQUEUE_ROUTING_ALLOWLIST`; `routing.inputs` is refused. */
   routing?: Record<string, unknown> | undefined;
+  /** Dispatch priority; must be a safe integer (`run_state.priority` is INTEGER). */
   priority?: number | undefined;
   cwd?: string | undefined;
   projectId?: string | undefined;
@@ -142,9 +145,17 @@ export interface EnqueueInput {
   baseHeadSha?: string | undefined;
 }
 
+export type EnqueueBuildErrorCode = "invalid_inputs" | "invalid_routing" | "invalid_priority";
+
 export type EnqueueBuild =
   | { ok: true; runId: string; params: EnqueueRunParams }
-  | { ok: false; error: string; inputErrors: InputBindingError[] };
+  | {
+      ok: false;
+      code: EnqueueBuildErrorCode;
+      error: string;
+      inputErrors: InputBindingError[];
+      routingErrors?: EnqueueRoutingError[];
+    };
 
 const MAX_REPORTED_ERRORS = 10;
 
@@ -432,6 +443,26 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       return { ok: true, sha: sha256Hex(source), ir: serializeGraph(graph), irVersion: CURRENT_IR_VERSION, graph };
     },
     buildEnqueue(input) {
+      if (input.priority !== undefined && !Number.isSafeInteger(input.priority)) {
+        return {
+          ok: false,
+          code: "invalid_priority",
+          error: `priority must be a safe integer, got ${JSON.stringify(input.priority) ?? String(input.priority)}`,
+          inputErrors: [],
+        };
+      }
+      if (input.routing !== undefined) {
+        const routingErrors = validateEnqueueRouting(input.routing);
+        if (routingErrors.length > 0) {
+          return {
+            ok: false,
+            code: "invalid_routing",
+            error: routingErrors.map((e) => e.message).join("; "),
+            inputErrors: [],
+            routingErrors,
+          };
+        }
+      }
       // Coerce string-typed inputs to their declared scalar / structured type
       // BEFORE validating — the single shared step both clients route through, so
       // the web UI (raw strings) and the CLI agree without per-client coercion.
@@ -439,25 +470,27 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
       if (input.inputDecls !== undefined) {
         const coerced = coerceInputBindings(input.inputDecls, input.inputs ?? {});
         if (coerced.errors.length > 0) {
-          return { ok: false, error: coerced.errors.map((e) => e.message).join("; "), inputErrors: coerced.errors };
+          return {
+            ok: false,
+            code: "invalid_inputs",
+            error: coerced.errors.map((e) => e.message).join("; "),
+            inputErrors: coerced.errors,
+          };
         }
         effectiveInputs = coerced.values;
         const errs = validateInputBindings(input.inputDecls, effectiveInputs);
         if (errs.length > 0) {
-          return { ok: false, error: errs.map((e) => e.message).join("; "), inputErrors: errs };
+          return { ok: false, code: "invalid_inputs", error: errs.map((e) => e.message).join("; "), inputErrors: errs };
         }
       }
       const initialRouting: Record<string, unknown> = { ...(input.routing ?? {}) };
       // Pre-check the genesis event's 4 KiB payload cap, but ONLY against the
-      // non-spillable inputs — and only when `input.inputs` actually reaches the
-      // genesis payload (an explicit `routing.inputs` wins the merge below, so a
-      // discarded `input.inputs` must not trip a false-positive rejection).
-      // String inputs spill via `spillRoutingInputs`, so size-checking them here
-      // would reject a payload the spill would shrink; only object / array inputs
+      // non-spillable inputs. String inputs spill via `spillRoutingInputs`, so
+      // size-checking them here would reject a payload the spill would shrink; only object / array inputs
       // can't spill yet, so an oversized one gets a clean validation error
       // instead of a raw `PayloadTooLargeError`. Measured in UTF-8 bytes (not
       // `String#length` / UTF-16 units) so multibyte inputs can't slip past.
-      if (effectiveInputs != null && Object.keys(effectiveInputs).length > 0 && !hasInputs(initialRouting)) {
+      if (effectiveInputs != null && Object.keys(effectiveInputs).length > 0) {
         const structured = new Set((input.inputDecls ?? []).filter((d) => isStructuredInput(d)).map((d) => d.name));
         const nonSpillable: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(effectiveInputs)) {
@@ -481,6 +514,7 @@ export function makeIntentPlane(deps: IntentPlaneDeps): IntentPlane {
               : `combined structured inputs (${utf8ByteLength(JSON.stringify({ inputs: nonSpillable }))} bytes) exceed`;
           return {
             ok: false,
+            code: "invalid_inputs",
             error:
               `input payload too large: ${detail} the ${GENESIS_INPUTS_MAX_BYTES}-byte ` +
               `genesis inputs limit. Trim the inputs, or pass large values as file references instead of inlining them.`,

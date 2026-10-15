@@ -53,10 +53,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const enqueueRes = await app.request("/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workflowSha: "wf-sha",
-        routing: { start_node: "start" },
-      }),
+      body: JSON.stringify({ workflowSha: "wf-sha" }),
     });
     expect(enqueueRes.status).toBe(200);
     const { runId } = (await enqueueRes.json()) as { runId: string };
@@ -126,6 +123,12 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
       CURRENT_IR_VERSION,
     );
     const dispatcher = new Dispatcher();
+    dispatcher.register("wf-sha", "start", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 1_000,
+      handler: async () => ({ kind: "transition", nextNode: "ask", tokens: 0, costUsd: 0 }),
+    });
     dispatcher.register(
       "wf-sha",
       "ask",
@@ -148,10 +151,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const enqueueRes = await app1.request("/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workflowSha: "wf-sha",
-        routing: { start_node: "ask" },
-      }),
+      body: JSON.stringify({ workflowSha: "wf-sha" }),
     });
     const { runId } = (await enqueueRes.json()) as { runId: string };
 

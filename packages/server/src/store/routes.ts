@@ -288,6 +288,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       workflowSha?: string;
       priority?: number;
       runId?: string;
+      /** Operator overrides only, gated by `ENQUEUE_ROUTING_ALLOWLIST`. */
       routing?: Record<string, unknown>;
       /** Typed run inputs (`--input name=value`) — validated against the
        * workflow's `inputs:` block, then stored on `routing.inputs` for
@@ -428,17 +429,16 @@ export function createRoutes(deps: ServerDeps): Hono {
         );
       }
     }
-    // Input-binding validation, routing assembly, run-id mint, and the
-    // enqueue params are the plane's; the adapter passes the resolved
-    // identity/location fields (§3.6). `inputDecls: …attrs.inputs ?? []` when
-    // the graph is known means a defined (possibly empty) array — so unknown
-    // inputs are rejected even for a no-`inputs:` workflow; `undefined` (graph
-    // unknown, by-sha not-yet-stored) skips validation, as before.
+    // Input, routing-allow-list and priority validation, run-id mint, and the
+    // enqueue params are the plane's; the adapter passes the resolved fields
+    // (§3.6). A known graph passes a defined (possibly empty) `inputDecls`, so
+    // unknown inputs are rejected even for a no-`inputs:` workflow; an unknown
+    // graph (by-sha, not yet stored) skips input validation.
     const enq = plane.buildEnqueue({
       workflowSha,
       ...(resolvedGraph !== undefined ? { inputDecls: resolvedGraph.attrs.inputs ?? [] } : {}),
       ...(body.inputs != null ? { inputs: body.inputs } : {}),
-      ...(body.routing != null ? { routing: body.routing } : {}),
+      ...(body.routing !== undefined ? { routing: body.routing } : {}),
       ...(body.priority !== undefined ? { priority: body.priority } : {}),
       ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
       ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
@@ -454,7 +454,8 @@ export function createRoutes(deps: ServerDeps): Hono {
       ...(typeof body.title === "string" && body.title.length > 0 ? { title: body.title } : {}),
     });
     if (!enq.ok) {
-      return c.json({ error: enq.error, code: "invalid_inputs", inputErrors: enq.inputErrors }, 400);
+      const { ok: _ok, ...failure } = enq;
+      return c.json(failure, 400);
     }
     if (pendingSave !== undefined) plane.commitSaveWorkflow(pendingSave);
     try {
