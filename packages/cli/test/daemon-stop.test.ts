@@ -1,8 +1,9 @@
 // Unit tests for `fragua daemon stop`. The happy SIGTERM path requires a
 // live child process and a kernel signal round-trip; rather than spawn
-// one here we exercise the two deterministic branches:
+// one here we exercise the deterministic branches:
 //   - no lock row present          → prints "no daemon running", exit 0
 //   - lock row references a dead pid → stale lock cleared, exit 0
+//   - foreign host / live supervising harness → refuses, exit 1
 // The live-pid branch is covered by manual + e2e testing; mocking
 // process.kill cleanly would couple the test to an implementation
 // detail (polling cadence) without adding real confidence.
@@ -65,5 +66,20 @@ describe("daemonStopCommand", () => {
     s.close();
     const code = await daemonStopCommand({ dbPath });
     expect(code).toBe(1);
+  });
+
+  test("child supervised by a live harness → refuses with exit 1 and leaves the lock", async () => {
+    const s = new SqliteStore({ path: dbPath });
+    const childPid = 1 << 30;
+    s.forceAcquireDaemonLock(childPid, hostname());
+    s.heartbeatDaemonLock(childPid, { harnessPid: process.pid });
+    s.close();
+
+    const code = await daemonStopCommand({ dbPath });
+    expect(code).toBe(1);
+
+    const s2 = new SqliteStore({ path: dbPath });
+    expect(s2.currentDaemonLock()?.pid).toBe(childPid);
+    s2.close();
   });
 });

@@ -25,9 +25,10 @@ import {
 } from "@fragua/agent";
 import { JUDGE_DEFAULT_PROVIDER } from "@fragua/core";
 import { createServer, daemonInfoFromStore, isLoopbackBind, registryPreflight, type ServerPorts } from "@fragua/server";
-import { SqliteStore } from "@fragua/store";
+import { hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
 import { loadConfig, loadGlobalConfig } from "../config.ts";
+import { probePidState } from "../pid-probe.ts";
 import { streamSimpleProviderTester } from "../provider-tester.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
@@ -297,7 +298,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const existing = store.currentServerEndpoint();
   const published = existing === null || existing.pid === process.pid || !pidAlive(existing.pid);
   if (published) {
-    store.setServerEndpoint({ url, port, pid: process.pid, version: opts.version ?? null });
+    store.setServerEndpoint({ url, port, pid: process.pid, version: opts.version ?? null, hostname: hostnameSafe() });
   } else {
     console.warn(
       chalk.yellow(
@@ -396,13 +397,8 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   return 0;
 }
 
-/** `kill(pid, 0)` liveness: only ESRCH means gone; EPERM (another user's
- *  process) is treated as alive so a foreign row is never overwritten. */
+/** Only a provably dead pid frees the row; EPERM (another user's process) is
+ *  treated as alive so a foreign row is never overwritten. */
 function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+  return probePidState(pid) !== "dead";
 }

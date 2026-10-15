@@ -481,8 +481,8 @@ export class SqliteStore implements IEventStore {
     return coordinator.forceAcquireDaemonLock(this.ctx, pid, hostname);
   }
 
-  heartbeatDaemonLock(pid: number): boolean {
-    return coordinator.heartbeatDaemonLock(this.ctx, pid);
+  heartbeatDaemonLock(pid: number, opts?: { harnessPid?: number }): boolean {
+    return coordinator.heartbeatDaemonLock(this.ctx, pid, opts);
   }
 
   releaseDaemonLock(pid: number): void {
@@ -509,7 +509,13 @@ export class SqliteStore implements IEventStore {
     return coordinator.currentServerEndpoint(this.ctx);
   }
 
-  setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void {
+  setServerEndpoint(args: {
+    url: string;
+    port: number;
+    pid: number;
+    version: string | null;
+    hostname: string | null;
+  }): void {
     coordinator.setServerEndpoint(this.ctx, args);
   }
 

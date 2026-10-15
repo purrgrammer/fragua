@@ -83,7 +83,13 @@ describe("startServer", () => {
     const dbPath = join(scratch, "fragua.db");
     const seed = new SqliteStore({ path: dbPath });
     // The parent process is alive for the whole test and is not us.
-    seed.setServerEndpoint({ url: "http://127.0.0.1:1/api", port: 1, pid: process.ppid, version: null });
+    seed.setServerEndpoint({
+      url: "http://127.0.0.1:1/api",
+      port: 1,
+      pid: process.ppid,
+      version: null,
+      hostname: null,
+    });
     seed.close();
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, dbPath });
     const during = new SqliteStore({ path: dbPath, migrate: false });
@@ -102,7 +108,7 @@ describe("startServer", () => {
     const dbPath = join(scratch, "fragua.db");
     const gone = Bun.spawnSync(["true"]).pid;
     const seed = new SqliteStore({ path: dbPath });
-    seed.setServerEndpoint({ url: "http://127.0.0.1:1/api", port: 1, pid: gone, version: null });
+    seed.setServerEndpoint({ url: "http://127.0.0.1:1/api", port: 1, pid: gone, version: null, hostname: null });
     seed.close();
     handle = await startServer({ port: 0, cwd: scratch, homeDir: scratchHome, dbPath });
     const during = new SqliteStore({ path: dbPath, migrate: false });

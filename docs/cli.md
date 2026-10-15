@@ -401,7 +401,14 @@ behind (the release never runs); before respawning, the harness evicts that row
 only when the holder is provably gone — its heartbeat is past the lock TTL, or
 `kill(pid, 0)` reports the pid dead — so a still-live daemon (e.g. an orphan from
 a SIGKILLed sibling harness) keeps its lock and single-writer holds. Readiness
-gates on the replacement holding the lock under its own pid. On Ctrl-C the daemon
+gates on the replacement holding the lock under its own pid, after which the
+harness stamps its own pid into the lock (`harness_pid`). The harness never
+evicts its own live child; on every reaper tick (5s) it re-asserts that child's
+heartbeat instead, so a child whose own tick is starved (long GC, blocked loop)
+does not read as stale. The re-assert only updates a row the child still holds:
+a child that lost its lock still shuts down and is respawned. `fragua daemon
+stop` refuses to signal a child whose harness is alive — stop the harness
+instead. On Ctrl-C the daemon
 is sent SIGTERM and, if it has not stopped within 5s, SIGKILL; the wait after
 SIGKILL is bounded too, so a wedged child can never hang shutdown.
 
@@ -420,6 +427,26 @@ fragua db gc-blobs [--limit N]           # delete orphaned blob rows
 fragua db backup --to <path>             # online backup to a file
 fragua db migrate [--to <version>] [--dry-run] [--allow-data-loss] [--no-backup]
 ```
+
+`doctor` is read-only (it never writes, evicts or clears a row) and judges
+liveness from the processes and the rows together. Every pid it reports is
+probed with `kill(pid, 0)`, but only when the row's hostname is this host; a
+foreign-host row, or a pid owned by another user (EPERM), is taken at its word
+and marked `not probed`. The `daemon:` line reads:
+
+| Row | Process | Rendered |
+|---|---|---|
+| lock, fresh heartbeat | alive | `alive (Ns)` |
+| lock, heartbeat past the TTL | alive | `alive, heartbeat stale Ns (host slept? the harness will respawn it)` |
+| lock | gone | `dead (pid N gone; stale lock, next harness start evicts it)` |
+| no lock | newest `daemon.started` pid alive | `running without a lock: pid N` |
+| no lock | none | `no daemon` |
+
+The lock's supervising harness is shown as `harness pid M`. When no daemon
+process is running, a `last exit:` line follows. The `server:` line probes
+`server_endpoint.pid`: `<url> alive`, `dead (pid N gone; stale endpoint)`,
+`running without an endpoint row: harness pid M` (no row, but the lock's live
+harness serves in-process), or `none`.
 
 `gc` is an operator-invoked sweep over settled runs (`completed` / `halted` /
 `cancelled`, not awaiting an inbox decision) older than `--older-than` (default

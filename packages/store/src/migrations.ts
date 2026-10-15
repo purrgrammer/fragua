@@ -140,6 +140,26 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     },
     down: (db) => db.exec("ALTER TABLE run_state DROP COLUMN claim_epoch"),
   },
+  // v8 → v9: `daemon_lock.harness_pid` (which harness supervises the holder)
+  // and `server_endpoint.hostname` (where the server pid lives). Guarded ADD
+  // COLUMN like v8. `down` is not lossy: both are liveness bookkeeping the
+  // harness rewrites on its next reaper tick / the server on its next bind.
+  9: {
+    up: (db) => {
+      const lockCols = db.query<{ name: string }, []>("PRAGMA table_info(daemon_lock)").all();
+      if (!lockCols.some((c) => c.name === "harness_pid")) {
+        db.exec("ALTER TABLE daemon_lock ADD COLUMN harness_pid INTEGER");
+      }
+      const endpointCols = db.query<{ name: string }, []>("PRAGMA table_info(server_endpoint)").all();
+      if (!endpointCols.some((c) => c.name === "hostname")) {
+        db.exec("ALTER TABLE server_endpoint ADD COLUMN hostname TEXT");
+      }
+    },
+    down: (db) => {
+      db.exec("ALTER TABLE server_endpoint DROP COLUMN hostname");
+      db.exec("ALTER TABLE daemon_lock DROP COLUMN harness_pid");
+    },
+  },
 };
 
 /** The held-checkout lookup index. Kept out of `schema.sql` because that file

@@ -415,6 +415,9 @@ export interface DaemonLockRow {
   hostname: string;
   startedAt: number;
   heartbeatAt: number;
+  /** The harness supervising `pid`, stamped by its heartbeat re-assert; null
+   *  for an unsupervised daemon or before the harness's first re-assert. */
+  harnessPid: number | null;
 }
 
 /** Where the HTTP server fronting this store is listening. Written by the
@@ -426,6 +429,8 @@ export interface ServerEndpointRow {
   pid: number;
   startedAt: number;
   harnessVersion: string | null;
+  /** Host `pid` lives on; null for a row written before schema v9. */
+  hostname: string | null;
 }
 
 export interface DaemonLockResult {
@@ -1264,8 +1269,10 @@ export interface IDaemonCoordinator {
   /** Advance the heartbeat of the lock held by `pid`. Returns false when the
    * row is absent or held by another pid: the caller no longer owns the lock
    * (evicted as stale, e.g. after the host slept) and must stop acting as the
-   * singleton. */
-  heartbeatDaemonLock(pid: number): boolean;
+   * singleton. A supervising harness also calls this for its live child's
+   * pid, passing `harnessPid` to record itself as the supervisor: the write is
+   * an UPDATE scoped to `pid`, so it never recreates a lock the child lost. */
+  heartbeatDaemonLock(pid: number, opts?: { harnessPid?: number }): boolean;
   releaseDaemonLock(pid: number): void;
   /**
    * Unconditionally delete whatever `daemon_lock` row exists, in a single
@@ -1296,7 +1303,13 @@ export interface IDaemonCoordinator {
   }): { evicted: boolean; swept?: SweepResult; stalePid?: number; priorHeartbeatAt?: number };
   currentDaemonLock(): DaemonLockRow | null;
   currentServerEndpoint(): ServerEndpointRow | null;
-  setServerEndpoint(args: { url: string; port: number; pid: number; version: string | null }): void;
+  setServerEndpoint(args: {
+    url: string;
+    port: number;
+    pid: number;
+    version: string | null;
+    hostname: string | null;
+  }): void;
   clearServerEndpoint(pid: number): void;
 
   // ─── Schedules

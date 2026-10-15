@@ -81,7 +81,7 @@ export function acquireDaemonLock(ctx: StoreCtx, pid: number, hostname: string):
     insertDaemonLock(ctx.db, pid, hostname, now);
     result = {
       acquired: true,
-      current: { pid, hostname, startedAt: now, heartbeatAt: now },
+      current: { pid, hostname, startedAt: now, heartbeatAt: now, harnessPid: null },
     };
   });
   return result!;
@@ -92,16 +92,17 @@ export function forceAcquireDaemonLock(ctx: StoreCtx, pid: number, hostname: str
   let current!: DaemonLockRow;
   ctx.writeTxn(() => {
     upsertDaemonLock(ctx.db, pid, hostname, now);
-    current = { pid, hostname, startedAt: now, heartbeatAt: now };
+    current = { pid, hostname, startedAt: now, heartbeatAt: now, harnessPid: null };
   });
   return { acquired: true, current };
 }
 
-export function heartbeatDaemonLock(ctx: StoreCtx, pid: number): boolean {
+export function heartbeatDaemonLock(ctx: StoreCtx, pid: number, opts?: { harnessPid?: number }): boolean {
   const now = ctx.now();
+  const harnessPid = opts?.harnessPid ?? null;
   let owned = false;
   ctx.writeTxn(() => {
-    owned = updateDaemonLockHeartbeat(ctx.db, pid, now);
+    owned = updateDaemonLockHeartbeat(ctx.db, pid, now, harnessPid);
   });
   return owned;
 }
@@ -184,6 +185,7 @@ export function currentDaemonLock(ctx: StoreCtx): DaemonLockRow | null {
     hostname: row.hostname,
     startedAt: row.started_at,
     heartbeatAt: row.heartbeat_at,
+    harnessPid: row.harness_pid,
   };
 }
 
@@ -196,6 +198,7 @@ export function currentServerEndpoint(ctx: StoreCtx): ServerEndpointRow | null {
     pid: row.pid,
     startedAt: row.started_at,
     harnessVersion: row.harness_version,
+    hostname: row.hostname,
   };
 }
 
@@ -203,10 +206,11 @@ export function currentServerEndpoint(ctx: StoreCtx): ServerEndpointRow | null {
  *  Written by the harness's in-process server or a standalone `fragua serve`. */
 export function setServerEndpoint(
   ctx: StoreCtx,
-  args: { url: string; port: number; pid: number; version: string | null },
+  args: { url: string; port: number; pid: number; version: string | null; hostname: string | null },
 ): void {
+  const now = ctx.now();
   ctx.writeTxn(() => {
-    upsertServerEndpoint(ctx.db, args.url, args.port, args.pid, ctx.now(), args.version);
+    upsertServerEndpoint(ctx.db, args.url, args.port, args.pid, now, args.version, args.hostname);
   });
 }
 

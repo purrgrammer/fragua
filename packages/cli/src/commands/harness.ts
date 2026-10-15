@@ -19,14 +19,16 @@
 //      the daemon's lock insert/release can never clobber it (no re-assert loop).
 //   2. Spawn `fragua daemon start --db <path>`. The daemon acquires
 //      daemon_lock as part of its boot.
-//   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS) for readiness.
+//   3. Wait for the lock row to appear (poll up to LOCK_WAIT_MS) for readiness,
+//      then stamp this harness's pid into `daemon_lock.harness_pid`.
 //   4. Supervise: an unexpected daemon exit triggers a restart with exponential
 //      backoff (RESTART_INITIAL_BACKOFF_MS doubling to RESTART_MAX_BACKOFF_MS,
 //      reset after HEALTHY_RESET_MS of uptime); MAX_FAST_FAILURES consecutive
 //      fast crashes give up and stop the harness non-zero. A periodic reaper
 //      tick (REAPER_TICK_MS) reclaims a crashed daemon's stale lock even inside
-//      a long restart backoff, so takeover never waits on a client GET. Block on
-//      SIGINT / SIGTERM otherwise.
+//      a long restart backoff, so takeover never waits on a client GET, and
+//      re-asserts the live child's heartbeat so a child whose own tick is
+//      starved never reads as stale. Block on SIGINT / SIGTERM otherwise.
 //   5. On shutdown: SIGTERM the daemon, wait up to SHUTDOWN_GRACE_MS, then
 //      SIGKILL; `serverHandle.close()` clears `server_endpoint` and stops the
 //      HTTP server.
@@ -36,6 +38,7 @@ import { dirname, resolve } from "node:path";
 import { getFraguaHome } from "@fragua/agent";
 import { DAEMON_LOCK_TTL_MS, hostnameSafe, SqliteStore } from "@fragua/store";
 import chalk from "chalk";
+import { probePidState } from "../pid-probe.ts";
 import { startUpdateNotice } from "../update-notice.ts";
 import { FRAGUA_VERSION } from "../version.ts";
 import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
@@ -161,8 +164,11 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   const live = liveDaemonHolder(dbPath);
   if (live !== null) {
     console.error(
-      chalk.red(`harness: a daemon is already running on this host (pid=${live.pid}, heartbeat ${live.ageS}s ago)`) +
-        chalk.dim(" — stop it first (`fragua daemon stop`), or point this harness at another --db"),
+      chalk.red(
+        `harness: a daemon is already running on this host (pid=${live.pid}${
+          live.harnessPid !== null ? `, supervised by harness pid=${live.harnessPid}` : ""
+        }, heartbeat ${live.ageS}s ago)`,
+      ) + chalk.dim(" — stop it first (`fragua daemon stop`), or point this harness at another --db"),
     );
     return 1;
   }
@@ -325,6 +331,11 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
         return;
       }
       current.state = "ready";
+      try {
+        reassertChildLiveness(cfg.dbPath, proc.pid);
+      } catch {
+        // Best-effort — the next reaper tick stamps it.
+      }
       // Credit uptime only once the gate confirms the child is up, so a failed
       // gate never advances the healthy-reset clock.
       lastStart = Date.now();
@@ -369,11 +380,12 @@ export async function superviseDaemon(spawn: SpawnDaemon, argv: string[], cfg: S
     process.once("SIGTERM", onSigterm);
 
     // Periodic stale-lock reaper. Runs for the whole supervision lifetime and
-    // is TTL/liveness-gated inside `evictStaleLock`, so it never touches the
-    // live child's lock — it only reclaims a crashed daemon's lock during the
-    // restart-backoff window, where `bootOrRestart`'s per-spawn reap wouldn't
-    // fire until the next attempt. `unref` so an idle tick never keeps the
-    // process alive past shutdown.
+    // is TTL/liveness-gated inside `evictStaleLock`, so it never evicts the
+    // live child's lock — it re-asserts that child's heartbeat instead, and
+    // only reclaims a crashed daemon's lock during the restart-backoff window,
+    // where `bootOrRestart`'s per-spawn reap wouldn't fire until the next
+    // attempt. `unref` so an idle tick never keeps the process alive past
+    // shutdown.
     if (cfg.reaperTickMs > 0) {
       reaperTimer = setInterval(() => {
         if (stopping) return;
@@ -420,23 +432,6 @@ async function gateReady(
   }
 }
 
-/** `process.kill(pid, 0)` liveness probe: send no signal, just test whether the
- *  pid is reachable. `ESRCH` → the process is gone (`"dead"`); a successful
- *  probe → `"alive"`; `EPERM` → the pid exists but belongs to another user, so
- *  we can't attribute it to our crashed daemon (a recycled pid is common in
- *  small PID namespaces) — `"unknown"`, decided by the TTL instead. Only
- *  `ESRCH` yields `"dead"`: every other errno (EINVAL, and whatever a future
- *  runtime adds) is a probe we could not complete, and defaulting those to the
- *  eviction-permitting branch would evict on a failure to know. */
-function probePidState(pid: number): "alive" | "dead" | "unknown" {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "dead" : "unknown";
-  }
-}
-
 /** Liveness adapter for `evictDaemonLockIfStale`: only a provably-dead pid
  *  (`"dead"`) accelerates eviction of a still-fresh lock. `"alive"` and
  *  `"unknown"` both defer to the store's TTL arm — an EPERM pid is never
@@ -462,9 +457,12 @@ export function evictStaleLock(
   opts?: {
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;
-    /** A pid whose lock is left alone even past the TTL — the supervisor's own
-     *  live child. A stale heartbeat on it is reported, not acted on. */
+    /** A pid whose lock is never evicted, even past the TTL — the supervisor's
+     *  own live child. Its heartbeat is re-asserted instead. */
     protectPid?: number;
+    /** Recorded as `daemon_lock.harness_pid` on the re-assert. Default
+     *  `process.pid`. */
+    harnessPid?: number;
   },
 ): void {
   const isPidAlive = opts?.isPidAlive ?? pidHolderAlive;
@@ -474,10 +472,11 @@ export function evictStaleLock(
       const lock = store.currentDaemonLock();
       if (lock !== null && lock.pid === opts.protectPid) {
         const age = (opts.now ?? Date.now)() - lock.heartbeatAt;
-        if (age > DAEMON_LOCK_TTL_MS) {
+        const reasserted = store.heartbeatDaemonLock(lock.pid, { harnessPid: opts.harnessPid ?? process.pid });
+        if (reasserted && age > DAEMON_LOCK_TTL_MS) {
           console.warn(
             chalk.yellow(
-              `harness: daemon pid=${lock.pid} is alive but its heartbeat is ${Math.round(age / 1000)}s old`,
+              `harness: daemon pid=${lock.pid} is alive but its heartbeat was ${Math.round(age / 1000)}s old — re-asserted`,
             ),
           );
         }
@@ -497,13 +496,26 @@ export function evictStaleLock(
   }
 }
 
+/** Advance the heartbeat of the lock held by `childPid` on the supervisor's
+ *  behalf and record `harnessPid` as its supervisor. UPDATE-only: a lock the
+ *  child lost stays lost, so the child still shuts down on its next beat.
+ *  Returns whether the row was held by `childPid`. */
+export function reassertChildLiveness(dbPath: string, childPid: number, harnessPid: number = process.pid): boolean {
+  const store = new SqliteStore({ path: dbPath, migrate: false });
+  try {
+    return store.heartbeatDaemonLock(childPid, { harnessPid });
+  } finally {
+    store.close();
+  }
+}
+
 /** The `daemon_lock` holder when it is a live process on this host with a
  *  fresh heartbeat; `null` when there is no store yet, no lock, a stale or
  *  foreign-host lock (the reaper's business), or a provably dead pid. */
 export function liveDaemonHolder(
   dbPath: string,
   opts?: { now?: () => number; isPidAlive?: (pid: number) => boolean },
-): { pid: number; ageS: number } | null {
+): { pid: number; ageS: number; harnessPid: number | null } | null {
   if (!existsSync(dbPath)) return null;
   let store: SqliteStore;
   try {
@@ -517,7 +529,7 @@ export function liveDaemonHolder(
     const age = (opts?.now ?? Date.now)() - lock.heartbeatAt;
     if (age > DAEMON_LOCK_TTL_MS) return null;
     if (!(opts?.isPidAlive ?? pidHolderAlive)(lock.pid)) return null;
-    return { pid: lock.pid, ageS: Math.max(0, Math.round(age / 1000)) };
+    return { pid: lock.pid, ageS: Math.max(0, Math.round(age / 1000)), harnessPid: lock.harnessPid };
   } finally {
     store.close();
   }

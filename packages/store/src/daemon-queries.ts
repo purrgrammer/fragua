@@ -96,10 +96,11 @@ interface DaemonLockDbRow {
   hostname: string;
   started_at: number;
   heartbeat_at: number;
+  harness_pid: number | null;
 }
 
 const SELECT_DAEMON_LOCK_SQL = `
-  SELECT pid, hostname, started_at, heartbeat_at
+  SELECT pid, hostname, started_at, heartbeat_at, harness_pid
     FROM daemon_lock WHERE id = 1
 `;
 
@@ -113,10 +114,11 @@ export interface ServerEndpointDbRow {
   pid: number;
   started_at: number;
   harness_version: string | null;
+  hostname: string | null;
 }
 
 const SELECT_SERVER_ENDPOINT_SQL = `
-  SELECT url, port, pid, started_at, harness_version
+  SELECT url, port, pid, started_at, harness_version, hostname
     FROM server_endpoint WHERE id = 1
 `;
 
@@ -125,14 +127,15 @@ export function selectServerEndpoint(db: Database): ServerEndpointDbRow | null {
 }
 
 const UPSERT_SERVER_ENDPOINT_SQL = `
-  INSERT INTO server_endpoint (id, url, port, pid, started_at, harness_version)
-  VALUES (1, ?, ?, ?, ?, ?)
+  INSERT INTO server_endpoint (id, url, port, pid, started_at, harness_version, hostname)
+  VALUES (1, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     url            = excluded.url,
     port           = excluded.port,
     pid            = excluded.pid,
     started_at     = excluded.started_at,
-    harness_version = excluded.harness_version
+    harness_version = excluded.harness_version,
+    hostname       = excluded.hostname
 `;
 
 /** Publish where the HTTP server can be reached. Written after the listener
@@ -145,8 +148,9 @@ export function upsertServerEndpoint(
   pid: number,
   startedAt: number,
   version: string | null,
+  hostname: string | null,
 ): void {
-  db.query(UPSERT_SERVER_ENDPOINT_SQL).run(url, port, pid, startedAt, version);
+  db.query(UPSERT_SERVER_ENDPOINT_SQL).run(url, port, pid, startedAt, version, hostname);
 }
 
 const DELETE_SERVER_ENDPOINT_SQL = `
@@ -160,8 +164,8 @@ export function deleteServerEndpoint(db: Database, pid: number): void {
 }
 
 const INSERT_DAEMON_LOCK_SQL = `
-  INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at)
-  VALUES (1, ?, ?, ?, ?)
+  INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at, harness_pid)
+  VALUES (1, ?, ?, ?, ?, NULL)
 `;
 
 /** Cooperative acquire — fails if the row already exists. Caller checks
@@ -172,28 +176,34 @@ export function insertDaemonLock(db: Database, pid: number, hostname: string, no
 }
 
 const UPSERT_DAEMON_LOCK_SQL = `
-  INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at)
-  VALUES (1, ?, ?, ?, ?)
+  INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at, harness_pid)
+  VALUES (1, ?, ?, ?, ?, NULL)
   ON CONFLICT(id) DO UPDATE SET
     pid          = excluded.pid,
     hostname     = excluded.hostname,
     started_at   = excluded.started_at,
-    heartbeat_at = excluded.heartbeat_at
+    heartbeat_at = excluded.heartbeat_at,
+    harness_pid  = NULL
 `;
 
-/** Reaper takeover — overwrites the existing row unconditionally. */
+/** Reaper takeover — overwrites the existing row unconditionally. The new
+ *  holder never inherits the predecessor's harness attribution. */
 export function upsertDaemonLock(db: Database, pid: number, hostname: string, now: number): void {
   db.query(UPSERT_DAEMON_LOCK_SQL).run(pid, hostname, now, now);
 }
 
 const UPDATE_DAEMON_LOCK_HEARTBEAT_SQL = `
-  UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?
+  UPDATE daemon_lock
+     SET heartbeat_at = ?, harness_pid = COALESCE(?, harness_pid)
+   WHERE id = 1 AND pid = ?
 `;
 
 /** True when the singleton row belonged to `pid` and was advanced; false when
- *  the row is absent or held by another pid — the holder lost its lock. */
-export function updateDaemonLockHeartbeat(db: Database, pid: number, now: number): boolean {
-  return db.query(UPDATE_DAEMON_LOCK_HEARTBEAT_SQL).run(now, pid).changes > 0;
+ *  the row is absent or held by another pid — the holder lost its lock.
+ *  UPDATE-only, so a supervising harness re-asserting for its child can never
+ *  recreate a lock the child lost. A null `harnessPid` keeps the stored one. */
+export function updateDaemonLockHeartbeat(db: Database, pid: number, now: number, harnessPid: number | null): boolean {
+  return db.query(UPDATE_DAEMON_LOCK_HEARTBEAT_SQL).run(now, harnessPid, pid).changes > 0;
 }
 
 const DELETE_DAEMON_LOCK_SQL = `

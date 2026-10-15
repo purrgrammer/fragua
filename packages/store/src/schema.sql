@@ -263,13 +263,16 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_blob ON artifacts(blob_sha);
 -- heartbeat). Where to reach the HTTP server lives in `server_endpoint`,
 -- not here: the harness co-locates daemon + server, but the CI primitive
 -- runs them as separate processes, so "is the daemon alive" and "where is
--- the server" are distinct facts.
+-- the server" are distinct facts. `heartbeat_at` has two writers: the daemon
+-- itself and its supervising harness, which re-asserts it for its live child
+-- and records itself in `harness_pid` (NULL for an unsupervised daemon).
 CREATE TABLE IF NOT EXISTS daemon_lock (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   pid INTEGER NOT NULL,
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL
+  heartbeat_at INTEGER NOT NULL,
+  harness_pid INTEGER
 ) STRICT;
 
 -- Server discovery rendezvous — the singleton row whoever binds the HTTP
@@ -283,7 +286,8 @@ CREATE TABLE IF NOT EXISTS server_endpoint (
   port INTEGER NOT NULL,
   pid INTEGER NOT NULL,
   started_at INTEGER NOT NULL,
-  harness_version TEXT
+  harness_version TEXT,
+  hostname TEXT
 ) STRICT;
 
 -- Daemon-level audit log for process lifecycle, sweep activity,
