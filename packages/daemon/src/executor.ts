@@ -14,16 +14,23 @@
 // (run-turn-state.ts) records. See ARCHITECTURE.md §6.1.
 
 import type * as core from "@fragua/core/handler";
-import type { FactEvent, IDaemonCoordinator, IEventReader, IEventWriter } from "@fragua/store";
+import {
+  ClaimLostError,
+  type FactEvent,
+  type IDaemonCoordinator,
+  type IEventReader,
+  type IEventWriter,
+} from "@fragua/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
+import { bindClaim } from "./claim-bound-store.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { dispatchOne } from "./dispatch-turn.ts";
 import type { RunDeps } from "./dispatch-wiring.ts";
 import { errorMessage, sleep, TERMINAL_STATUSES } from "./executor-helpers.ts";
 import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 import { planCrashHalt } from "./lifecycle-planner.ts";
-import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController } from "./occ-append.ts";
+import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController, type OccController } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
 import { create as createTurnState } from "./run-turn-state.ts";
 import { disposeTerminalWorktree } from "./snapshot-service.ts";
@@ -181,7 +188,7 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
       await sleep(pollMs, opts.shutdownSignal);
       continue;
     }
-    const p = runOneSafe(claimed.runId, opts, leakBudget);
+    const p = runOneSafe(claimed.runId, opts, leakBudget, { epoch: claimed.claimEpoch });
     inflight.add(p);
     p.finally(() => inflight.delete(p));
   }
@@ -209,9 +216,14 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
 
 /** runOne that never rejects — logs unhandled errors and ensures a
  * terminal fact was already appended by runOne's own crash path. */
-async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBudget): Promise<void> {
+async function runOneSafe(
+  runId: string,
+  opts: ExecutorOpts,
+  leakBudget: LeakBudget,
+  claim: { epoch: number },
+): Promise<void> {
   try {
-    await runOne(runId, opts, leakBudget);
+    await runOne(runId, opts, leakBudget, claim);
   } catch (err) {
     // runOne appends `fact.run_terminated{errored}` before rethrowing on crash; this
     // catch just prevents an unhandled promise rejection from crashing
@@ -226,9 +238,19 @@ async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBud
   }
 }
 
-export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: LeakBudget): Promise<void> {
+/** Drive one claimed run until it stops progressing. `claim.epoch` is the
+ * `claim_epoch` `claimNextRun` returned; every fact this fiber appends carries
+ * it, so a crash requeue or re-claim fences the fiber out. Omitted, the run's
+ * current epoch is adopted (callers that drive an already-claimed run). */
+export async function runOne(
+  runId: string,
+  opts: ExecutorOpts,
+  leakBudget?: LeakBudget,
+  claim?: { epoch: number },
+): Promise<void> {
+  const epoch = claim?.epoch ?? opts.store.getClaimEpoch(runId) ?? 0;
   try {
-    await runOneGuarded(runId, opts, leakBudget);
+    await runOneGuarded(runId, { ...opts, store: bindClaim(opts.store, epoch) }, epoch, leakBudget);
   } finally {
     notifyRunTerminal(runId, opts);
   }
@@ -247,11 +269,14 @@ function notifyRunTerminal(runId: string, opts: ExecutorOpts): void {
   }
 }
 
-async function runOneGuarded(runId: string, opts: ExecutorOpts, leakBudget?: LeakBudget): Promise<void> {
+async function runOneGuarded(runId: string, opts: ExecutorOpts, epoch: number, leakBudget?: LeakBudget): Promise<void> {
   const budget = leakBudget ?? makeLeakBudget(opts);
   try {
-    await runOneInner(runId, opts, budget);
+    await runOneInner(runId, opts, epoch, budget);
   } catch (err) {
+    // The run was requeued or re-claimed under us: it is another fiber's, so
+    // there is nothing to terminalise.
+    if (err instanceof ClaimLostError) return;
     // Outer safety net: if the main body escaped without terminalising
     // the run, terminate it IN-PROCESS so the `running` capacity slot
     // doesn't leak. Covers throws outside the existing inner try/catch
@@ -280,12 +305,21 @@ async function runOneGuarded(runId: string, opts: ExecutorOpts, leakBudget?: Lea
         );
         if (outcome.kind === "terminal") break;
       }
+      releaseIfAbandoned(runId, opts, epoch, occ);
     }
     throw err;
   }
 }
 
-async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBudget): Promise<void> {
+/** Every `occ_exhausted` halt append lost its race and the run is still
+ * `running`: give the claim back (requeue) so the run never sits `running`
+ * with no fiber driving it. */
+function releaseIfAbandoned(runId: string, opts: ExecutorOpts, epoch: number, occ: OccController): void {
+  if (!occ.wasAbandoned()) return;
+  opts.store.releaseClaim(runId, epoch, { lastAliveAt: (opts.clock ?? Date.now)() });
+}
+
+async function runOneInner(runId: string, opts: ExecutorOpts, epoch: number, leakBudget: LeakBudget): Promise<void> {
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
   const loader = opts.graphLoader ?? makeGraphLoader(opts.store);
@@ -307,8 +341,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     while (!opts.shutdownSignal.aborted && state.turns < maxTurns) {
       state.turns++;
       const { outcome } = await dispatchOne(deps, state);
-      if (outcome.kind === "terminal") return;
+      if (outcome.kind === "terminal") break;
     }
+    releaseIfAbandoned(runId, opts, epoch, occ);
   } finally {
     // On a hard-terminal status, capture the terminal snapshot and dispose
     // the worktree (gated on the snapshot fact landing). See snapshot-service.

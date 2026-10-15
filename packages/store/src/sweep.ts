@@ -7,6 +7,7 @@ import {
   selectRunningNonImportedRuns,
   selectRunStateRow,
   updateRunStateQuarantinedBySweep,
+  updateRunStateReleasedClaim,
   updateRunStateRequeuedAfterCrash,
 } from "./run-state-queries.ts";
 import type { SweepResult } from "./types.ts";
@@ -122,27 +123,17 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     sweepRun(row.run_id, () => {
       const current = selectRunStateRow(db, row.run_id);
       if (current == null || current.status !== "running") return;
-      const ts = now();
-      const seq = bumpRunSeq(db, row.run_id);
-      insertEventDaemon(
-        db,
-        row.run_id,
-        seq,
-        "fact.run_requeued_after_crash",
-        requeuePayloads.get(row.run_id) ?? "{}",
-        ts,
-      );
       // Sweep bypasses the reducer, so the activeMs credit in applyFact for
       // fact.run_requeued_after_crash doesn't fire here. Compute it via the
       // same shared helper the reducer calls, then apply it in SQL — one
       // source of truth so the fold and the projection can't drift.
       const activeMsDelta = crashRequeueActiveMsDelta(current.dispatch_started_at, opts?.priorHeartbeatAt);
-      // Preserve current_node so the executor resumes on the in-flight node
-      // instead of re-emitting fact.run_started and re-running the workflow
-      // from the start node. Partial-side-effect safety is covered by the
-      // orphan quarantine pass above; rerun-from-start was never the
-      // intended recovery semantics.
-      updateRunStateRequeuedAfterCrash(db, { runId: row.run_id, readyAt: ts, now: ts, activeMsDelta });
+      appendCrashRequeue(db, {
+        runId: row.run_id,
+        payloadJson: requeuePayloads.get(row.run_id) ?? "{}",
+        ts: now(),
+        activeMsDelta,
+      });
       requeued.push(row.run_id);
     });
   }
@@ -151,4 +142,34 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     requeued,
     quarantined: Array.from(quarantined.keys()),
   };
+}
+
+/**
+ * Requeue a `running` run in SQL: append `fact.run_requeued_after_crash` and
+ * flip the projection to `queued`, bumping `claim_epoch` so the fiber that held
+ * the run can no longer commit. `current_node` is preserved so the executor
+ * resumes on the in-flight node instead of re-running from the start node
+ * (partial-side-effect safety is the orphan quarantine pass's job).
+ *
+ * With `claimEpoch` set (the executor releasing its own claim) the flip is
+ * guarded on the run still being `running` under that epoch and nothing is
+ * written when it isn't; the startup sweep omits it. Pure SQL — callers
+ * pre-serialize `payloadJson` and compute `activeMsDelta` (via
+ * `crashRequeueActiveMsDelta`) so this is safe inside a write transaction.
+ */
+export function appendCrashRequeue(
+  db: Database,
+  args: { runId: string; payloadJson: string; ts: number; activeMsDelta: number; claimEpoch?: number },
+): boolean {
+  const { runId, ts, activeMsDelta } = args;
+  if (args.claimEpoch !== undefined) {
+    if (!updateRunStateReleasedClaim(db, { runId, claimEpoch: args.claimEpoch, readyAt: ts, now: ts, activeMsDelta })) {
+      return false;
+    }
+  } else {
+    updateRunStateRequeuedAfterCrash(db, { runId, readyAt: ts, now: ts, activeMsDelta });
+  }
+  const seq = bumpRunSeq(db, runId);
+  insertEventDaemon(db, runId, seq, "fact.run_requeued_after_crash", args.payloadJson, ts);
+  return true;
 }

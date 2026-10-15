@@ -23,6 +23,7 @@
 // intent and an unquarantine / human_input ends up cancelled (fold rule
 // R1: cancel beats everything).
 
+import * as core from "@fragua/core/handler";
 import {
   ConcurrencyError,
   type FactEvent,
@@ -30,6 +31,7 @@ import {
   type IEventWriter,
   type OrphanSideEffectRow,
 } from "@fragua/store";
+import { cancelToFacts } from "./result-to-facts.ts";
 
 export interface WakePendingResult {
   cancelled: string[];
@@ -218,10 +220,15 @@ function wakeAutoResume(store: IEventWriter & IEventReader, now: () => number): 
  *                        support this is the operator's only safe escape
  *                        hatch — they assert the call already succeeded.
  *
+ * Every intent pending in `(lastAppliedSeq, intent.seq]` is folded through the
+ * executor's `foldIntents` first, because the commit advances the applied
+ * watermark past them: cap raises land in routing, and a cancel folded there
+ * wins over the resolution.
+ *
  * Unknown / malformed resolutions are skipped (no fact emitted) so the
  * operator can re-issue with a valid one.
  */
-function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
+export function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({ statuses: ["quarantined"] });
   for (const row of candidates) {
@@ -234,9 +241,17 @@ function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
       continue;
     }
 
+    const pending = store.getUnappliedIntents(row.runId).filter((e) => e.seq <= intent.seq);
+    const decision = core.foldIntents(pending, "quarantined");
+
     const facts: FactEvent[] = [];
-    if (resolution === "cancel") {
-      facts.push({ type: "fact.run_terminated", payload: { status: "aborted", intentSeq: intent.seq } });
+    const appendOpts: { advanceAppliedTo: number; routingPatch?: Record<string, unknown> } = {
+      advanceAppliedTo: intent.seq,
+    };
+    if (decision.kind === "cancel") {
+      facts.push(...cancelToFacts(decision.intentSeq));
+    } else if (resolution === "cancel") {
+      facts.push(...cancelToFacts(intent.seq));
     } else {
       if (resolution === "treat_as_done") {
         facts.push(...synthesisedDoneFacts(store.findOrphanSideEffects(row.runId)));
@@ -246,12 +261,25 @@ function wakeUnquarantine(store: IEventWriter & IEventReader): string[] {
         payload: { fromStatus: "quarantined", inputIntentSeq: intent.seq },
       });
     }
+    if (decision.kind === "proceed" && Object.keys(decision.routingDelta).length > 0) {
+      appendOpts.routingPatch = decision.routingDelta;
+    }
 
     try {
-      store.appendFact(row.runId, facts, row.version, { advanceAppliedTo: intent.seq });
+      store.appendFact(row.runId, facts, row.version, appendOpts);
       out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
+      continue;
+    }
+    if (decision.dropped.length > 0) {
+      store.appendObservabilityEvents(
+        row.runId,
+        decision.dropped.map((d) => ({
+          type: "intent.dropped",
+          payload: { originalSeq: d.seq, originalType: d.type, reason: d.reason },
+        })),
+      );
     }
   }
   return out;

@@ -12,7 +12,7 @@
 // correct semantics (the bug shape is "supervisor wedged this turn", which
 // doesn't survive a process restart).
 
-import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
+import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
 
 /**
@@ -24,8 +24,30 @@ export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
 
 /** Outcome of a serialized commit. A tagged `false`: `occ` is a genuine OCC
  * conflict (feed the conflict controller), `status` is the run leaving `running`
- * under us (already parked — don't). */
-export type CommitResult = { ok: true } | { ok: false; reason: "occ" | "status" };
+ * under us (already parked — don't), `claim_lost` is the run having been
+ * requeued or re-claimed since this fiber claimed it (it is another fiber's —
+ * exit without writing). */
+export type CommitResult = { ok: true } | { ok: false; reason: "occ" | "status" | "claim_lost" };
+
+/** Classify a fact append: lands → ok, `ClaimLostError` → claim_lost, any other
+ * `ConcurrencyError` → occ. Non-OCC errors propagate. */
+export function appendCommit(
+  store: IEventWriter,
+  runId: string,
+  expectedVersion: number,
+  facts: FactEvent[],
+  opts?: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number },
+): CommitResult {
+  if (facts.length === 0) return { ok: true };
+  try {
+    store.appendFact(runId, facts, expectedVersion, opts);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof ClaimLostError) return { ok: false, reason: "claim_lost" };
+    if (err instanceof ConcurrencyError) return { ok: false, reason: "occ" };
+    throw err;
+  }
+}
 
 export async function tryAppendFact(
   store: IEventWriter & IEventReader,
@@ -56,20 +78,29 @@ const OCC_BACKOFF_CAP_MS = 16;
  * and the executor's mid-turn-crash recovery so both use the same ceiling. */
 export const HALT_APPEND_MAX_ATTEMPTS = OCC_CEILING + 2;
 
+/** `halted`: the run left `running` (the `occ_exhausted` halt landed, or a
+ * concurrent writer stopped it, or the claim moved to another fiber).
+ * `abandoned`: the ceiling was hit but every halt append lost too — the run is
+ * still `running` and this fiber must give its claim back (`releaseClaim`). */
+export type ConflictOutcome = { halted: true } | { halted: false; abandoned?: true };
+
 export interface OccController {
   /** Record an OCC conflict on an append. Backs off; warns once at
-   * OCC_WARN_AT; at OCC_CEILING halts the run (`occ_exhausted`) and returns
-   * `{ halted: true }`. Otherwise returns `{ halted: false }` — the caller
-   * should re-read state and retry the turn. */
+   * OCC_WARN_AT; at OCC_CEILING tries to halt the run (`occ_exhausted`) and
+   * returns `{ halted: true }` only once the run really left `running`, else
+   * `{ halted: false, abandoned: true }`. Below the ceiling returns
+   * `{ halted: false }` — the caller should re-read state and retry the turn. */
   onConflict(
     attemptedFactType: string,
     nodeId: string,
     iteration: number,
     lastVersion: number,
-  ): Promise<{ halted: boolean }>;
+  ): Promise<ConflictOutcome>;
   /** Record that an append landed. Emits `occ_conflict_resolved` if there
    * were prior conflicts this turn, then resets the counter. */
   onResolved(nodeId: string, iteration: number): void;
+  /** Sticky: some conflict ended `abandoned` during this `runOne` pass. */
+  wasAbandoned(): boolean;
 }
 
 export function makeOccController(deps: {
@@ -80,6 +111,7 @@ export function makeOccController(deps: {
   const { store, runId, shutdownSignal } = deps;
   let occCount = 0;
   let occWarned = false;
+  let abandoned = false;
 
   return {
     onConflict: async (attemptedFactType, nodeId, iteration, lastVersion) => {
@@ -87,16 +119,14 @@ export function makeOccController(deps: {
       if (occCount >= OCC_CEILING) {
         // The occ_exhausted halt is itself a fact append and can itself
         // conflict (the same wedged-supervisor that produced the upstream
-        // conflicts may still be committing). Retry it against fresh state
-        // a bounded number of times so the run actually terminates instead
-        // of returning `halted: true` while the halt fact never landed —
-        // which left the run stranded `running`.
+        // conflicts may still be committing). Retry it against fresh state a
+        // bounded number of times; if it never lands the run is still
+        // `running`, so report `abandoned` and let runOne give the claim back
+        // rather than exit with no fiber driving the run.
         for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
           const fresh = store.getState(runId);
-          // Already terminal (a concurrent writer halted/cancelled/completed
-          // it) — nothing left to do.
           if (fresh == null || fresh.status !== "running") return { halted: true };
-          const ok = await tryAppendFact(store, runId, fresh.version, [
+          const res = appendCommit(store, runId, fresh.version, [
             {
               type: "fact.run_terminated",
               payload: {
@@ -107,10 +137,13 @@ export function makeOccController(deps: {
               },
             },
           ]);
-          if (ok) break;
+          if (res.ok || res.reason === "claim_lost") return { halted: true };
           await sleep(Math.min(2 ** attempt, OCC_BACKOFF_CAP_MS), shutdownSignal);
         }
-        return { halted: true };
+        const fresh = store.getState(runId);
+        if (fresh == null || fresh.status !== "running") return { halted: true };
+        abandoned = true;
+        return { halted: false, abandoned: true };
       }
       if (occCount === OCC_WARN_AT && !occWarned) {
         store.appendObservabilityEvents(runId, [
@@ -140,6 +173,7 @@ export function makeOccController(deps: {
       occCount = 0;
       occWarned = false;
     },
+    wasAbandoned: () => abandoned,
   };
 }
 
@@ -221,14 +255,24 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
     return override ?? plan.successOutcome;
   }
   await plan.onFail?.();
+  if (res.reason === "claim_lost") {
+    await plan.onNonHalt?.();
+    plan.onPark?.(undefined);
+    return { kind: "terminal" };
+  }
   if (res.reason === "occ") {
-    const { halted } = await plan.occ.onConflict(
+    const conflict = await plan.occ.onConflict(
       plan.attemptedFactType ?? facts[0]?.type ?? "fact.unknown",
       plan.nodeId,
       plan.iteration,
       plan.expectedVersion,
     );
-    if (halted) {
+    if (conflict.halted) {
+      plan.onPark?.(undefined);
+      return { kind: "terminal" };
+    }
+    if (conflict.abandoned === true) {
+      await plan.onNonHalt?.();
       plan.onPark?.(undefined);
       return { kind: "terminal" };
     }
@@ -241,21 +285,18 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
   return plan.statusOutcome;
 }
 
-/** The linear path's commit primitive: any `ConcurrencyError` is an OCC conflict
+/** The linear path's commit primitive: a `ConcurrencyError` is an OCC conflict
  * — the linear arms never re-read to tell a status-stop apart, they always feed
- * the conflict controller (behaviour-preserving vs the pre-`commitWithOcc`
- * arms). The fan-out path passes its serialized `commitFanoutFact` instead,
- * which does make that distinction. */
+ * the conflict controller — except a `ClaimLostError`, which ends the fiber.
+ * The fan-out path passes its serialized `commitFanoutFact` instead, which also
+ * tells a status-stop apart. */
 export function occAppendOnce(
   store: IEventWriter & IEventReader,
   runId: string,
   expectedVersion: number,
   appendOpts?: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number },
 ): (facts: FactEvent[]) => Promise<CommitResult> {
-  return async (facts) =>
-    (await tryAppendFact(store, runId, expectedVersion, facts, appendOpts))
-      ? { ok: true }
-      : { ok: false, reason: "occ" };
+  return async (facts) => appendCommit(store, runId, expectedVersion, facts, appendOpts);
 }
 
 /** Commit a run-parking or terminal fact batch HONESTLY — the run never stays
@@ -268,8 +309,8 @@ export async function commitParkOrTerminal(deps: ParkOrTerminalDeps, facts: Fact
   const commit =
     deps.commit ??
     (async (f: FactEvent[]): Promise<CommitResult> => {
-      const ok = await tryAppendFact(store, runId, expectedVersion, f, deps.appendOpts);
-      if (ok) return { ok: true };
+      const res = appendCommit(store, runId, expectedVersion, f, deps.appendOpts);
+      if (res.ok || res.reason === "claim_lost") return res;
       const fresh = store.getState(runId);
       if (fresh == null || fresh.status !== "running") return { ok: false, reason: "status" };
       return { ok: false, reason: "occ" };

@@ -2,7 +2,7 @@
 // non-dispatching runs (paused_human + quarantined). Closes top.md #23.
 
 import { describe, expect, test } from "bun:test";
-import { wakePending } from "../src/wake-pending.ts";
+import { wakePending, wakeUnquarantine } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 import { dispositionType } from "./invariants.ts";
 
@@ -213,6 +213,70 @@ describe("wakePending — unquarantine resolutions", () => {
     const result = wakePending(r.store);
     expect(result.unquarantined).toEqual([]);
     expect(r.store.getState("ruq4")!.status).toBe("quarantined");
+    r.store.close();
+  });
+});
+
+describe("wakePending — unquarantine folds pending intents", () => {
+  test("unquarantine after a cap raise preserves the raise in routing", async () => {
+    const r = rig();
+    startRun(r, "ruf1");
+    quarantine(r, "ruf1", "ik-f1");
+    const raise = r.store.appendIntent("ruf1", {
+      type: "intent.budget_adjusted",
+      payload: { scope: "run", metric: "cost", newLimit: 5 },
+    });
+    const unq = r.store.appendIntent("ruf1", {
+      type: "intent.unquarantine",
+      payload: { resolution: "retry", note: "" },
+    });
+    expect(r.store.getState("ruf1")!.lastAppliedSeq).toBeLessThan(raise.seq);
+
+    const result = wakePending(r.store);
+    expect(result.unquarantined).toContain("ruf1");
+    const state = r.store.getState("ruf1")!;
+    expect(state.status).toBe("queued");
+    expect(state.routing["budget_override.run.cost"]).toBe(5);
+    expect(state.lastAppliedSeq).toBe(unq.seq);
+    r.store.close();
+  });
+
+  test("unquarantine folds only intents up to its own seq", async () => {
+    const r = rig();
+    startRun(r, "ruf2");
+    quarantine(r, "ruf2", "ik-f2");
+    r.store.appendIntent("ruf2", {
+      type: "intent.unquarantine",
+      payload: { resolution: "retry", note: "" },
+    });
+    const later = r.store.appendIntent("ruf2", {
+      type: "intent.max_loops_adjusted",
+      payload: { newLimit: 9 },
+    });
+
+    wakePending(r.store);
+    const state = r.store.getState("ruf2")!;
+    expect(state.status).toBe("queued");
+    expect(state.routing["max_loops_override"]).toBeUndefined();
+    expect(r.store.getUnappliedIntents("ruf2").map((e) => e.seq)).toEqual([later.seq]);
+    r.store.close();
+  });
+
+  test("a cancel folded before unquarantine terminates the run aborted", async () => {
+    const r = rig();
+    startRun(r, "ruf3");
+    quarantine(r, "ruf3", "ik-f3");
+    const cancel = r.store.appendIntent("ruf3", { type: "intent.cancel_requested", payload: {} });
+    r.store.appendIntent("ruf3", {
+      type: "intent.unquarantine",
+      payload: { resolution: "retry", note: "" },
+    });
+
+    expect(wakeUnquarantine(r.store)).toContain("ruf3");
+    expect(r.store.getState("ruf3")!.status).toBe("cancelled");
+    const terminal = r.store.getEvents("ruf3").find((e) => e.type === "fact.run_terminated");
+    expect(terminal?.payload).toEqual({ status: "aborted", intentSeq: cancel.seq });
+    expect(r.store.getEvents("ruf3").some((e) => e.type === "fact.run_resumed")).toBe(false);
     r.store.close();
   });
 });

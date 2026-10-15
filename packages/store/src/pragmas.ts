@@ -14,8 +14,10 @@ import type { Database } from "bun:sqlite";
  * v6 adds `run_state.base_head_sha` (the operator HEAD a `--dirty` run's
  * synthetic base was captured over).
  * v7 adds `run_state.in_checkout` / `checkout_path` / `checkout_released`
- * (`fragua run --checkout`) and the `idx_run_state_checkout` index. */
-export const CURRENT_SCHEMA_VERSION = 7;
+ * (`fragua run --checkout`) and the `idx_run_state_checkout` index.
+ * v8 adds `run_state.claim_epoch` (the dispatch-ownership fence; bookkeeping,
+ * never folded, so no `EVENT_CONTRACT_VERSION` bump). */
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */

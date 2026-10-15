@@ -73,6 +73,7 @@ export interface RunStateRow {
   in_checkout: number;
   checkout_path: string | null;
   checkout_released: number;
+  claim_epoch: number;
   /** 1 when the run carries the `imported_runs` inert marker, else 0. Computed
    * by the SELECT (not a `run_state` column). */
   imported: number;
@@ -113,7 +114,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          base_git_sha, base_git_ref, base_head_sha,
          final_git_sha, final_head_ref, diff_base_sha, change_stat,
          inbox_status, accepted_sha, schedule_id,
-         in_checkout, checkout_path, checkout_released,
+         in_checkout, checkout_path, checkout_released, claim_epoch,
          ${importedSql("run_state")} AS imported
     FROM run_state
    WHERE run_id = ?
@@ -605,14 +606,16 @@ const CLAIM_NEXT_RUN_SQL = `
      SET status = 'running',
          node_started_at = ?,
          version = version + 1,
+         claim_epoch = claim_epoch + 1,
          updated_at = ?
    WHERE run_id = ? AND version = ? AND status = 'queued'
-   RETURNING run_id
+   RETURNING run_id, claim_epoch
 `;
 
 /** OCC-protected claim: select highest-priority queued run, then update
- *  WHERE version matches. Returns the claimed run_id, or null if no
- *  candidate or the version moved between SELECT and UPDATE. */
+ *  WHERE version matches, bumping `claim_epoch`. Returns the claimed run_id +
+ *  its new epoch, or null if no candidate or the version moved between SELECT
+ *  and UPDATE. */
 export function selectNextQueuedRun(db: Database): { run_id: string; version: number } | null {
   return db.query<{ run_id: string; version: number }, []>(SELECT_NEXT_QUEUED_RUN_SQL).get() ?? null;
 }
@@ -620,11 +623,20 @@ export function selectNextQueuedRun(db: Database): { run_id: string; version: nu
 export function claimQueuedRun(
   db: Database,
   args: { runId: string; expectedVersion: number; now: number },
-): string | null {
+): { runId: string; claimEpoch: number } | null {
   const res = db
-    .query<{ run_id: string }, [number, number, string, number]>(CLAIM_NEXT_RUN_SQL)
+    .query<{ run_id: string; claim_epoch: number }, [number, number, string, number]>(CLAIM_NEXT_RUN_SQL)
     .get(args.now, args.now, args.runId, args.expectedVersion);
-  return res?.run_id ?? null;
+  return res != null ? { runId: res.run_id, claimEpoch: res.claim_epoch } : null;
+}
+
+const SELECT_CLAIM_EPOCH_SQL = `
+  SELECT claim_epoch FROM run_state WHERE run_id = ?
+`;
+
+/** The run's current dispatch-ownership epoch, or null for an unknown run. */
+export function selectClaimEpoch(db: Database, runId: string): number | null {
+  return db.query<{ claim_epoch: number }, [string]>(SELECT_CLAIM_EPOCH_SQL).get(runId)?.claim_epoch ?? null;
 }
 
 const BUMP_SEQ_SQL = `
@@ -670,6 +682,7 @@ const UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL = `
       node_started_at = NULL,
       dispatch_started_at = NULL,
       version = version + 1,
+      claim_epoch = claim_epoch + 1,
       updated_at = ?
     WHERE run_id = ?
 `;
@@ -688,6 +701,7 @@ const UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL = `
       dispatch_started_at = NULL,
       ready_at = ?,
       version = version + 1,
+      claim_epoch = claim_epoch + 1,
       updated_at = ?,
       metrics = json_set(metrics, '$.activeMs',
                          COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
@@ -703,6 +717,34 @@ export function updateRunStateRequeuedAfterCrash(
   args: { runId: string; readyAt: number; now: number; activeMsDelta: number },
 ): void {
   db.query(UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL).run(args.readyAt, args.now, args.activeMsDelta, args.runId);
+}
+
+const RELEASE_CLAIM_SQL = `
+  UPDATE run_state SET
+      status = 'queued',
+      node_started_at = NULL,
+      dispatch_started_at = NULL,
+      ready_at = ?,
+      version = version + 1,
+      claim_epoch = claim_epoch + 1,
+      updated_at = ?,
+      metrics = json_set(metrics, '$.activeMs',
+                         COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
+    WHERE run_id = ? AND status = 'running' AND claim_epoch = ?
+    RETURNING run_id
+`;
+
+/** The executor-side twin of {@link updateRunStateRequeuedAfterCrash}: the same
+ *  requeue, guarded on the run still being `running` under `claimEpoch`.
+ *  Returns whether the row changed. */
+export function updateRunStateReleasedClaim(
+  db: Database,
+  args: { runId: string; claimEpoch: number; readyAt: number; now: number; activeMsDelta: number },
+): boolean {
+  const row = db
+    .query<{ run_id: string }, [number, number, number, string, number]>(RELEASE_CLAIM_SQL)
+    .get(args.readyAt, args.now, args.activeMsDelta, args.runId, args.claimEpoch);
+  return row != null;
 }
 
 const SET_RUN_STATE_NEXT_SEQ_SQL = `
@@ -751,7 +793,8 @@ const WRITE_PROJECTION_SQL = `
     diff_base_sha       = ?,
     change_stat         = ?,
     inbox_status        = ?,
-    accepted_sha        = ?
+    accepted_sha        = ?,
+    claim_epoch         = claim_epoch + ?
   WHERE run_id = ? AND version = ?
   RETURNING run_id
 `;
@@ -799,6 +842,9 @@ export function writeRunStateProjection(
     changeStatJson: string | null;
     inboxStatus: string | null;
     acceptedSha: string | null;
+    /** Added to `claim_epoch` (1 when the batch requeues the run after a
+     *  crash, fencing out the fiber that held the old claim). */
+    epochBump?: number;
   },
 ): boolean {
   const row = db
@@ -825,6 +871,7 @@ export function writeRunStateProjection(
       args.changeStatJson,
       args.inboxStatus,
       args.acceptedSha,
+      args.epochBump ?? 0,
       args.runId,
       args.expectedVersion,
     );

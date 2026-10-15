@@ -112,13 +112,17 @@ CREATE TABLE IF NOT EXISTS run_state (
   accepted_sha TEXT,
   in_checkout INTEGER NOT NULL DEFAULT 0,
   checkout_path TEXT,
-  checkout_released INTEGER NOT NULL DEFAULT 0
+  checkout_released INTEGER NOT NULL DEFAULT 0,
+  claim_epoch INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 -- Checkout runs (`fragua run --checkout`): `in_checkout` is folded from the
 -- portable genesis marker; `checkout_path` is the checkout key, a LOCAL binding
 -- like `cwd` (null on import); `checkout_released` frees the checkout for the
--- next run (fold-written). No comment sits between these trailing columns:
--- SQLite's DROP COLUMN text rewrite (the v7 `down`) breaks on one.
+-- next run (fold-written). `claim_epoch` is dispatch-ownership bookkeeping like
+-- `version`, never folded: the claim and every crash requeue bump it, and a
+-- fact append carrying a stale epoch is rejected. No comment sits between these
+-- trailing columns: SQLite's DROP COLUMN text rewrite (the v7/v8 `down`) breaks
+-- on one.
 
 CREATE INDEX IF NOT EXISTS idx_run_state_queue
   ON run_state(priority DESC, ready_at ASC)
