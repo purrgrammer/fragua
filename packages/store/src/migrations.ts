@@ -128,6 +128,18 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
     },
     lossy: true,
   },
+  // v7 → v8: `run_state.claim_epoch`, the dispatch-ownership fence. Guarded
+  // ADD COLUMN like v6. `down` is not lossy: the epoch is liveness bookkeeping
+  // that only matters to fibers of a running daemon, never to replay.
+  8: {
+    up: (db) => {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(run_state)").all();
+      if (!cols.some((c) => c.name === "claim_epoch")) {
+        db.exec("ALTER TABLE run_state ADD COLUMN claim_epoch INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+    down: (db) => db.exec("ALTER TABLE run_state DROP COLUMN claim_epoch"),
+  },
 };
 
 /** The held-checkout lookup index. Kept out of `schema.sql` because that file

@@ -453,6 +453,13 @@ export interface AppendFactOpts {
    * unapplied and visible to getUnappliedIntents.
    */
   advanceAppliedTo?: number;
+  /**
+   * The dispatch-ownership epoch the writing fiber claimed the run under. When
+   * set, the append is rejected with {@link ClaimLostError} unless it still
+   * equals `run_state.claim_epoch` — a crash requeue or a re-claim bumped it,
+   * so the run belongs to another fiber.
+   */
+  claimEpoch?: number;
 }
 
 export interface IntentAppendResult {
@@ -481,6 +488,23 @@ export class ConcurrencyError extends Error {
   ) {
     super(`concurrency conflict: expected version ${expectedVersion}, got ${actualVersion}`);
     this.name = "ConcurrencyError";
+  }
+}
+
+/** A fact append carried a `claimEpoch` the run no longer holds: the run was
+ * requeued or re-claimed since the writer's fiber claimed it. Subclasses
+ * `ConcurrencyError` so OCC-swallowing callers still refuse to write, but the
+ * executor tells it apart to exit the fiber instead of retrying or halting. */
+export class ClaimLostError extends ConcurrencyError {
+  constructor(
+    public readonly expectedEpoch: number,
+    public readonly actualEpoch: number,
+    expectedVersion: number,
+    actualVersion: number,
+  ) {
+    super(expectedVersion, actualVersion);
+    this.message = `claim lost: expected claim epoch ${expectedEpoch}, got ${actualEpoch}`;
+    this.name = "ClaimLostError";
   }
 }
 
@@ -807,9 +831,17 @@ export interface IEventWriter {
   /**
    * Atomically claim the next eligible queued run (highest priority, lowest
    * ready_at), or `null` when the daemon is at capacity or no run is
-   * eligible.
+   * eligible. Bumps the run's `claim_epoch` and returns the new value; the
+   * claiming fiber passes it as `AppendFactOpts.claimEpoch` on every append.
    */
-  claimNextRun(maxInFlight: number): { runId: string } | null;
+  claimNextRun(maxInFlight: number): { runId: string; claimEpoch: number } | null;
+  /**
+   * Give a claimed run back to the queue when its fiber can no longer commit
+   * (every halt append lost its OCC race): appends `fact.run_requeued_after_crash`
+   * and flips `running → queued`, bumping `claim_epoch`. Applies only while the
+   * run is still `running` under `claimEpoch`; returns whether it did.
+   */
+  releaseClaim(runId: string, claimEpoch: number, opts?: { prevNode?: string; lastAliveAt?: number }): boolean;
   /**
    * Heal crash damage on daemon startup (requeue 'running' runs,
    * quarantine orphan side-effect intents). When the caller is the
@@ -954,6 +986,9 @@ export interface IEventReader {
    */
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
+  /** The run's dispatch-ownership epoch (`run_state.claim_epoch`), or null for
+   * an unknown run. */
+  getClaimEpoch(runId: string): number | null;
   /**
    * Run rows in the requested statuses, optionally narrowed to those
    * whose `routing.internal.auto_resume_at` is at or before the given

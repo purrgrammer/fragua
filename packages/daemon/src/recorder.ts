@@ -13,7 +13,7 @@
 // handler returns.
 
 import type * as handler from "@fragua/core/handler";
-import { ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
+import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type IEventWriter } from "@fragua/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;
 
@@ -92,6 +92,10 @@ export class CommittingRecorder implements SideEffectRecorder {
         this.currentVersion = result.newVersion;
         return;
       } catch (err) {
+        // The run was requeued or re-claimed since this fiber claimed it (the
+        // store sees the fiber's claim epoch through its claim-bound store): a
+        // zombie handler under a newer dispatch must not land side-effect facts.
+        if (err instanceof ClaimLostError) throw err;
         if (!(err instanceof ConcurrencyError) || attempt >= RECORDER_COMMIT_ATTEMPTS) throw err;
         const live = this.opts.store.getState(this.opts.runId);
         if (live == null) throw err;
@@ -102,14 +106,9 @@ export class CommittingRecorder implements SideEffectRecorder {
         // outlived a terminal — from landing side-effect facts AFTER
         // fact.run_terminated. Same status-vs-OCC split as commitFanoutFact.
         //
-        // ACCEPTED TRADE: status is the ONLY fence — there is no dispatch-
-        // identity token, so an ORPHANED handler whose run is still `running`
-        // under a NEWER dispatch (a bailed branch outliving the bounded
-        // drain grace, or a re-claimed run after daemon-lock expiry) retries
-        // through and can interleave side-effect facts with the new
-        // dispatch's stream under the same (nodeId, iteration). The window
-        // is abort-signaled + leakGrace-bounded on the bail path; closing it
-        // fully needs a per-dispatch claim token threaded into the recorder.
+        // Remaining window: a bailed fan-out branch outliving the drain grace
+        // shares its fiber's claim epoch with the re-driven branch, so within
+        // one claim only status fences it (abort-signaled + leakGrace-bounded).
         if (live.status !== "running") throw err;
         this.currentVersion = live.version;
       }

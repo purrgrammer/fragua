@@ -325,8 +325,8 @@ export async function ciCommand(opts: CiCommandOptions): Promise<number> {
       wake: () => wakePending(store),
       claimAndDispatch: async () => {
         const claimed = store.claimNextRun(1);
-        if (claimed?.runId !== rid) return false;
-        await runOne(rid, execOpts);
+        if (claimed == null || claimed.runId !== rid) return false;
+        await runOne(rid, execOpts, undefined, { epoch: claimed.claimEpoch });
         return true;
       },
       status: () => store.getState(rid)?.status,

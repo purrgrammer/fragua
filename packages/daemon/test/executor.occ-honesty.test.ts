@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { type AppendFaultSchedule, faultStore } from "./fault-store.ts";
-import { enqueue, rig } from "./helpers.ts";
+import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 function rawDb(store: unknown): Database {
   return (store as { db: Database }).db;
@@ -110,6 +110,43 @@ describe("OCC honesty — pre-dispatch pause/halt never strands the run running"
       .getEvents("eng-x")
       .find((e) => e.type === "fact.run_terminated" && (e.payload as { reason?: string }).reason === "occ_exhausted");
     expect(halt).toBeDefined();
+    r.store.close();
+  });
+
+  test("persistent OCC conflicts end with the run queued or halted, never running with no fiber", async () => {
+    const r = rig();
+    enqueue(r, "wedged", "start");
+    r.store.claimNextRun(1);
+
+    // Every append conflicts, the occ_exhausted halt included.
+    await drive("wedged", r, () => "occ");
+
+    const state = r.store.getState("wedged")!;
+    expect(state.status).not.toBe("running");
+    expect(["queued", "halted"]).toContain(state.status);
+    r.store.close();
+  });
+
+  test("an abandoned run is released with fact.run_requeued_after_crash and a bumped claim epoch", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    enqueue(r, "released", "start");
+    const { claimEpoch } = r.store.claimNextRun(1)!;
+
+    await drive("released", r, () => "occ");
+
+    const state = r.store.getState("released")!;
+    expect(state.status).toBe("queued");
+    expect(r.store.getClaimEpoch("released")).toBe(claimEpoch + 1);
+    const events = r.store.getEvents("released");
+    expect(events.filter((e) => e.type === "fact.run_requeued_after_crash")).toHaveLength(1);
+    expect(events.some((e) => e.type === "fact.run_terminated")).toBe(false);
+
+    // The released run is claimable and completes once the store stops conflicting.
+    const reclaimed = r.store.claimNextRun(1)!;
+    expect(reclaimed.claimEpoch).toBe(claimEpoch + 2);
+    await drive("released", r, () => "ok");
+    expect(r.store.getState("released")!.status).toBe("completed");
     r.store.close();
   });
 });

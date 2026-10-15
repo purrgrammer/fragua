@@ -38,6 +38,7 @@ import {
   type RunSummaryRow,
   type StepAggregateRow,
   selectCheckoutHolder,
+  selectClaimEpoch,
   selectCwds,
   selectFleetSummary,
   selectGcEligibleSnapshotRuns,
@@ -149,6 +150,10 @@ export function getUnappliedIntents(ctx: StoreCtx, runId: string): StoredEvent[]
   const state = selectRunStateRow(ctx.db, runId);
   if (state == null) return [];
   return selectUnappliedIntents(ctx.db, runId, state.last_applied_seq).map(rowToStoredEvent);
+}
+
+export function getClaimEpoch(ctx: StoreCtx, runId: string): number | null {
+  return selectClaimEpoch(ctx.db, runId);
 }
 
 export function getWakeCandidates(

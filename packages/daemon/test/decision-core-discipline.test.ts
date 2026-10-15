@@ -40,6 +40,7 @@ const IO_ALLOWED = new Set<string>([
   "auto-dispatcher.ts",
   "auto-titler.ts",
   "blob-gc.ts",
+  "claim-bound-store.ts",
   "dispatch-turn.ts",
   "dispatch-wiring.ts",
   "entrypoint.ts",

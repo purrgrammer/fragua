@@ -24,7 +24,7 @@ import {
   utf8Truncate,
 } from "@fragua/core";
 import * as core from "@fragua/core/handler";
-import { ConcurrencyError, type FactEvent, type IEventReader, type RunState } from "@fragua/store";
+import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventReader, type RunState } from "@fragua/store";
 import {
   buildDispatchContext,
   type FanoutAppendOpts,
@@ -136,7 +136,8 @@ function abortedActiveBranches(store: IEventReader, runId: string, active: reado
 /** Serialized fan-out commit lane. Re-reads the live version each attempt; a
  * sibling's commit having moved `version` is benign — retry the APPEND (never
  * re-execute). The `false` arm is TAGGED: `status` ⇒ the run left `running`,
- * `occ` ⇒ genuine OCC exhaustion. */
+ * `claim_lost` ⇒ the run was requeued / re-claimed (never retried), `occ` ⇒
+ * genuine OCC exhaustion. */
 async function commitFanoutFact(
   deps: RunDeps,
   ts: RunTurnState,
@@ -166,6 +167,7 @@ async function commitFanoutFact(
       invalidateOutputsCacheIf(ts, facts);
       return { ok: true };
     } catch (err) {
+      if (err instanceof ClaimLostError) return { ok: false, reason: "claim_lost" };
       if (!(err instanceof ConcurrencyError)) throw err;
     }
     await sleep(Math.min(2 ** attempt, 16), deps.opts.shutdownSignal);

@@ -190,8 +190,12 @@ export class SqliteStore implements IEventStore {
     writer.enqueueRun(this.ctx, params);
   }
 
-  claimNextRun(maxInFlight: number): { runId: string } | null {
+  claimNextRun(maxInFlight: number): { runId: string; claimEpoch: number } | null {
     return writer.claimNextRun(this.ctx, maxInFlight);
+  }
+
+  releaseClaim(runId: string, claimEpoch: number, opts?: { prevNode?: string; lastAliveAt?: number }): boolean {
+    return writer.releaseClaim(this.ctx, runId, claimEpoch, opts);
   }
 
   startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult {
@@ -299,6 +303,10 @@ export class SqliteStore implements IEventStore {
 
   getUnappliedIntents(runId: string): StoredEvent[] {
     return reader.getUnappliedIntents(this.ctx, runId);
+  }
+
+  getClaimEpoch(runId: string): number | null {
+    return reader.getClaimEpoch(this.ctx, runId);
   }
 
   getWakeCandidates(opts: { statuses: readonly RunState["status"][]; autoResumeBefore?: number }): WakeCandidateRow[] {

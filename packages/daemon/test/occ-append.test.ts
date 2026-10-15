@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
+import { ClaimLostError, ConcurrencyError, type FactEvent, type IEventStore } from "@fragua/store";
 import {
   commitWithOcc,
+  HALT_APPEND_MAX_ATTEMPTS,
   makeOccController,
   type OccCommitPlan,
   type OccController,
@@ -76,6 +77,43 @@ describe("makeOccController", () => {
     expect(appends).toBe(1); // occ_exhausted run_halted committed once
   });
 
+  test("onConflict returns {halted:false, abandoned:true} when every halt append loses", async () => {
+    let appends = 0;
+    const store = stubStore({
+      getState: (() => ({ status: "running", version: 1 })) as unknown as IEventStore["getState"],
+      appendFact: (() => {
+        appends++;
+        throw new ConcurrencyError(1, 2);
+      }) as unknown as IEventStore["appendFact"],
+      appendObservabilityEvents: (() => {}) as unknown as IEventStore["appendObservabilityEvents"],
+    });
+    const occ = makeOccController({ store, runId: "r", shutdownSignal: noSignal });
+    await occ.onConflict("fact.node_completed", "n", 0, 1);
+    await occ.onConflict("fact.node_completed", "n", 0, 1);
+    expect(occ.wasAbandoned()).toBe(false);
+
+    expect(await occ.onConflict("fact.node_completed", "n", 0, 1)).toEqual({ halted: false, abandoned: true });
+    expect(appends).toBe(HALT_APPEND_MAX_ATTEMPTS);
+    expect(occ.wasAbandoned()).toBe(true);
+  });
+
+  test("onConflict returns {halted:true} when the run left running mid-retry", async () => {
+    let status = "running";
+    const store = stubStore({
+      getState: (() => ({ status, version: 1 })) as unknown as IEventStore["getState"],
+      appendFact: (() => {
+        status = "paused";
+        throw new ConcurrencyError(1, 2);
+      }) as unknown as IEventStore["appendFact"],
+      appendObservabilityEvents: (() => {}) as unknown as IEventStore["appendObservabilityEvents"],
+    });
+    const occ = makeOccController({ store, runId: "r", shutdownSignal: noSignal });
+    await occ.onConflict("fact.node_completed", "n", 0, 1);
+    await occ.onConflict("fact.node_completed", "n", 0, 1);
+    expect(await occ.onConflict("fact.node_completed", "n", 0, 1)).toEqual({ halted: true });
+    expect(occ.wasAbandoned()).toBe(false);
+  });
+
   test("onResolved emits occ_conflict_resolved only after prior conflicts, then resets", async () => {
     const obs: { type: string }[] = [];
     const store = stubStore({
@@ -104,7 +142,7 @@ describe("makeOccController", () => {
 const pausedFact: FactEvent = { type: "fact.run_paused", payload: { reason: "operator", nodeId: "n" } };
 
 function fakeOcc(over: Partial<OccController> = {}): OccController {
-  return { onConflict: async () => ({ halted: false }), onResolved: () => {}, ...over };
+  return { onConflict: async () => ({ halted: false }), onResolved: () => {}, wasAbandoned: () => false, ...over };
 }
 
 type ConcretePlan = OccCommitPlan & { successOutcome: { kind: "terminal" | "continue" } };
@@ -268,6 +306,59 @@ describe("commitWithOcc", () => {
     );
     expect(out).toEqual({ kind: "terminal" });
     expect(haltOrder).toEqual(["abort"]);
+  });
+});
+
+describe("commitWithOcc — claim lost", () => {
+  test("commitWithOcc treats claim_lost as terminal without feeding the controller", async () => {
+    let conflicts = 0;
+    let parked: FactEvent[] | undefined | "unset" = "unset";
+    const plan: ConcretePlan = {
+      occ: fakeOcc({
+        onConflict: async () => {
+          conflicts++;
+          return { halted: false };
+        },
+      }),
+      nodeId: "n",
+      iteration: 0,
+      expectedVersion: 1,
+      commit: occAppendOnce(
+        stubStore({
+          appendFact: (() => {
+            throw new ClaimLostError(1, 2, 1, 1);
+          }) as unknown as IEventStore["appendFact"],
+        }),
+        "r",
+        1,
+      ),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onPark: (f) => {
+        parked = f;
+      },
+    };
+    expect(await commitWithOcc(plan, [pausedFact])).toEqual({ kind: "terminal" });
+    expect(conflicts).toBe(0);
+    expect(parked).toBeUndefined();
+  });
+
+  test("an abandoned conflict is terminal and clears the park", async () => {
+    let parked: FactEvent[] | undefined | "unset" = "unset";
+    const plan: ConcretePlan = {
+      occ: fakeOcc({ onConflict: async () => ({ halted: false, abandoned: true }) }),
+      nodeId: "n",
+      iteration: 0,
+      expectedVersion: 1,
+      commit: async () => ({ ok: false, reason: "occ" }),
+      successOutcome: { kind: "continue" },
+      statusOutcome: { kind: "continue" },
+      onPark: (f) => {
+        parked = f;
+      },
+    };
+    expect(await commitWithOcc(plan, [pausedFact])).toEqual({ kind: "terminal" });
+    expect(parked).toBeUndefined();
   });
 });
 

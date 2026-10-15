@@ -92,6 +92,27 @@ describe("migrate — schema version handling", () => {
   });
 });
 
+describe("v7 ↔ v8 — run_state.claim_epoch", () => {
+  const cols = (db: Database) =>
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(run_state)")
+      .all()
+      .map((c) => c.name);
+
+  test("v7→v8 adds run_state.claim_epoch and down drops it", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(CURRENT_SCHEMA_VERSION).toBe(8);
+    expect(cols(db)).toContain("claim_epoch");
+    expect(planMigration(8, 7).steps).toEqual([{ version: 8, class: "full" }]);
+    migrateTo(db, 7);
+    expect(cols(db)).not.toContain("claim_epoch");
+    migrate(db);
+    expect(cols(db)).toContain("claim_epoch");
+    db.close();
+  });
+});
+
 describe("v6 ↔ v7 — checkout columns", () => {
   const cols = (db: Database) =>
     db
@@ -104,9 +125,9 @@ describe("v6 ↔ v7 — checkout columns", () => {
   test("v6 → v7 adds in_checkout, checkout_path, checkout_released and idx_run_state_checkout; down drops them (lossy)", () => {
     const db = freshDb();
     migrate(db);
-    expect(CURRENT_SCHEMA_VERSION).toBe(7);
     for (const c of ["in_checkout", "checkout_path", "checkout_released"]) expect(cols(db)).toContain(c);
     expect(hasIndex(db)).toBe(true);
+    migrateTo(db, 7);
     expect(planMigration(7, 6).steps).toEqual([{ version: 7, class: "lossy" }]);
     expect(() => migrateTo(db, 6)).toThrow();
     migrateTo(db, 6, { allowDataLoss: true });

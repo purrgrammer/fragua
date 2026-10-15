@@ -12,7 +12,7 @@ import { insertEventDaemon, insertEventRunEnqueued, insertEventWeb } from "./eve
 import { insertMessage, selectMaxMessageOrdinal, selectMessageByDedup } from "./message-queries.ts";
 import { insertOutput } from "./outputs-queries.ts";
 import { EVENT_CONTRACT_VERSION } from "./pragmas.ts";
-import { applyFact, emptyMetrics } from "./reducers.ts";
+import { applyFact, crashRequeueActiveMsDelta, emptyMetrics } from "./reducers.ts";
 import { maybeSpillStruct, spillRoutingInputs } from "./routing-blobs.ts";
 import {
   bumpRunSeq,
@@ -28,7 +28,7 @@ import {
 import { sha256Hex } from "./sha256.ts";
 import type { StoreCtx } from "./store-ctx.ts";
 import { rowToRunState } from "./store-rows.ts";
-import { startupSweep as runStartupSweep } from "./sweep.ts";
+import { appendCrashRequeue, startupSweep as runStartupSweep } from "./sweep.ts";
 import {
   type AppendFactOpts,
   ArtifactCollisionError,
@@ -36,6 +36,7 @@ import {
   type ArtifactScope,
   ArtifactTooLargeError,
   CheckoutBusyError,
+  ClaimLostError,
   ConcurrencyError,
   type EnqueueRunParams,
   type FactAppendResult,
@@ -68,6 +69,7 @@ export function writeProjection(
   state: RunState,
   expectedVersion: number,
   serialized: { routingJson: string; metricsJson: string; changeStatJson: string | null },
+  epochBump = 0,
 ): void {
   const applied = writeRunStateProjection(ctx.db, {
     runId: state.runId,
@@ -93,6 +95,7 @@ export function writeProjection(
     changeStatJson: serialized.changeStatJson,
     inboxStatus: state.inboxStatus,
     acceptedSha: state.acceptedSha,
+    epochBump,
   });
   if (!applied) {
     const row = selectRunStateRow(ctx.db, state.runId);
@@ -203,6 +206,9 @@ export function appendFact(
     // a stale write, so the speculative fold stays OCC-correct.
     const row = selectRunStateRow(ctx.db, runId);
     if (row == null) throw new Error(`unknown run ${runId}`);
+    if (opts.claimEpoch !== undefined && row.claim_epoch !== opts.claimEpoch) {
+      throw new ClaimLostError(opts.claimEpoch, row.claim_epoch, expectedVersion, row.version);
+    }
     if (row.version !== expectedVersion) {
       throw new ConcurrencyError(expectedVersion, row.version);
     }
@@ -233,6 +239,7 @@ export function appendFact(
       changeStatJson: state.changeStat != null ? JSON.stringify(state.changeStat) : null,
     };
     const eventPayloads = events.map((event) => ctx.validatePayload(event.payload));
+    const epochBump = events.some((event) => event.type === "fact.run_requeued_after_crash") ? 1 : 0;
     committedState = state;
     newVersion = state.version;
 
@@ -241,6 +248,9 @@ export function appendFact(
       // read taken before the txn, so another writer may have advanced the row.
       const current = selectRunStateRow(ctx.db, runId);
       if (current == null) throw new Error(`unknown run ${runId}`);
+      if (opts.claimEpoch !== undefined && current.claim_epoch !== opts.claimEpoch) {
+        throw new ClaimLostError(opts.claimEpoch, current.claim_epoch, expectedVersion, current.version);
+      }
       if (current.version !== expectedVersion) {
         throw new ConcurrencyError(expectedVersion, current.version);
       }
@@ -262,7 +272,7 @@ export function appendFact(
         insertOutput(ctx.db, runId, o.nodeId, o.iteration, o.structJson);
       }
 
-      writeProjection(ctx, state, expectedVersion, projection);
+      writeProjection(ctx, state, expectedVersion, projection, epochBump);
     });
     ctx.metrics.recordWrite(performance.now() - startAt, "fact");
   } catch (err) {
@@ -506,9 +516,9 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
   reputBlobs(ctx, spilledData);
 }
 
-export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: string } | null {
+export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: string; claimEpoch: number } | null {
   const now = ctx.now();
-  let claimed: string | null = null;
+  let claimed: { runId: string; claimEpoch: number } | null = null;
 
   ctx.writeTxn(() => {
     // Capacity counts only runs the daemon could be executing here — imported
@@ -521,7 +531,29 @@ export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: strin
     claimed = claimQueuedRun(ctx.db, { runId: row.run_id, expectedVersion: row.version, now });
   });
 
-  return claimed != null ? { runId: claimed } : null;
+  return claimed;
+}
+
+export function releaseClaim(
+  ctx: StoreCtx,
+  runId: string,
+  claimEpoch: number,
+  opts: { prevNode?: string; lastAliveAt?: number } = {},
+): boolean {
+  const row = selectRunStateRow(ctx.db, runId);
+  if (row == null || row.status !== "running" || row.claim_epoch !== claimEpoch) return false;
+  const payload: { prevNode?: string; lastAliveAt?: number } = {};
+  const prevNode = opts.prevNode ?? row.current_node ?? undefined;
+  if (prevNode !== undefined) payload.prevNode = prevNode;
+  if (opts.lastAliveAt !== undefined) payload.lastAliveAt = opts.lastAliveAt;
+  const payloadJson = ctx.validatePayload(payload);
+  const activeMsDelta = crashRequeueActiveMsDelta(row.dispatch_started_at, opts.lastAliveAt);
+  const ts = ctx.now();
+  let released = false;
+  ctx.writeTxn(() => {
+    released = appendCrashRequeue(ctx.db, { runId, payloadJson, ts, activeMsDelta, claimEpoch });
+  });
+  return released;
 }
 
 export function startupSweep(ctx: StoreCtx, opts?: { priorHeartbeatAt?: number }): SweepResult {
