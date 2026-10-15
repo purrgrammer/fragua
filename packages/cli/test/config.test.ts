@@ -177,6 +177,25 @@ max-leaked-handlers: 2
     expect(cfg["max-leaked-handlers"]).toBe(2);
   });
 
+  test("parses provider-retry-after-max-ms", async () => {
+    await write("provider-retry-after-max-ms: 3600000\n");
+    const cfg = await load();
+    expect(cfg["provider-retry-after-max-ms"]).toBe(3_600_000);
+  });
+
+  test("rejects a negative provider-retry-after-max-ms with a validation warning", async () => {
+    await write("provider-retry-after-max-ms: -1\n");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = await load();
+      expect(cfg["provider-retry-after-max-ms"]).toBeUndefined();
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(calls.some((m) => m.includes("validation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("parses the timeouts section with leak-grace + shutdown-drain", async () => {
     await write(`
 timeouts:

@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 function registerPauseProviderNode(
@@ -145,5 +146,68 @@ describe("provider auto-retry — pause classification", () => {
     const resumeAt = (pause.payload as { resumeAt: number }).resumeAt;
     expect(resumeAt - beforeMs).toBeGreaterThanOrEqual(60_000);
     expect(resumeAt - beforeMs).toBeLessThan(60_500); // tight upper bound — provider's exact value
+  });
+});
+
+describe("provider auto-retry — long provider Retry-After", () => {
+  // The outcome the agent backend produces for pi-ai's
+  // `Server requested 12311s retry delay (max: 60s). 429 {…rate_limit_error…}`
+  // (pinned in packages/agent/test/sdk-retry-delay.test.ts).
+  async function drive(r: ReturnType<typeof rig>, runId: string): Promise<void> {
+    enqueue(r, runId, "start");
+    r.store.claimNextRun(1);
+    await runOne(runId, {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+  }
+
+  test("fidelity rate-limit shape (429 + retryAfterMs 12311000) → paused_auto at resumeAt; wake-pending requeues only once resumeAt passes", async () => {
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
+    startToImplement(r, "impl");
+    registerPauseProviderNode(r, "impl", 429, 12_311_000);
+    const before = Date.now();
+    await drive(r, "long-429");
+
+    const pause = r.store.getEvents("long-429").find((e) => e.type === "fact.run_paused")!;
+    const pp = pause.payload as { reason: string; resumeAt: number; retryAfterMs?: number; attempt: number };
+    expect(pp.reason).toBe("provider_retry");
+    expect(pp.retryAfterMs).toBe(12_311_000);
+    expect(pp.attempt).toBe(1);
+    expect(pp.resumeAt - before).toBeGreaterThanOrEqual(12_311_000);
+    expect(pp.resumeAt - before).toBeLessThan(12_311_000 + 5_000);
+    expect(r.store.getState("long-429")?.status).toBe("paused_auto");
+    expect(r.store.getState("long-429")?.routing["internal.auto_resume_at"]).toBe(pp.resumeAt);
+
+    const early = wakePending(r.store, () => pp.resumeAt - 1);
+    expect(early.retryResumed).not.toContain("long-429");
+    expect(r.store.getState("long-429")?.status).toBe("paused_auto");
+
+    const due = wakePending(r.store, () => pp.resumeAt);
+    expect(due.retryResumed).toContain("long-429");
+    expect(r.store.getState("long-429")?.status).toBe("queued");
+  });
+
+  test("7h Retry-After → paused (provider_error) with cap detail, no retry-attempted fact", async () => {
+    const r = rig({ yaml: `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n` });
+    startToImplement(r, "impl");
+    registerPauseProviderNode(r, "impl", 429, 7 * 60 * 60 * 1000);
+    await drive(r, "long-7h");
+
+    const events = r.store.getEvents("long-7h");
+    const pause = events.find((e) => e.type === "fact.run_paused")!;
+    const pp = pause.payload as { reason: string; detail?: string; retryAfterMs?: number };
+    expect(pp.reason).toBe("provider_error");
+    expect(pp.detail).toContain("7h");
+    expect(pp.detail).toContain("6h");
+    expect(pp.retryAfterMs).toBe(7 * 60 * 60 * 1000);
+    expect(events.filter((e) => e.type === "fact.provider_retry_attempted")).toHaveLength(0);
+    expect(r.store.getState("long-7h")?.status).toBe("paused");
   });
 });

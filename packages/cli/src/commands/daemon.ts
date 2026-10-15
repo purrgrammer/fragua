@@ -312,6 +312,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;
       if (config["max-loops"] !== undefined) daemonOpts.maxLoops = config["max-loops"];
       if (config["abort-loop-ceiling"] !== undefined) daemonOpts.abortLoopCeiling = config["abort-loop-ceiling"];
+      if (config["provider-retry-after-max-ms"] !== undefined) {
+        daemonOpts.providerRetryAfterMaxMs = config["provider-retry-after-max-ms"];
+      }
       if (config["max-leaked-handlers"] !== undefined) daemonOpts.maxLeakedHandlers = config["max-leaked-handlers"];
       if (config["blob-gc"]?.interval !== undefined) {
         try {

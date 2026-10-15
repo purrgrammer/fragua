@@ -27,6 +27,7 @@ import {
   resumeRun,
 } from "@/lib/api";
 import { queries } from "@/lib/queries";
+import { formatDuration } from "@/lib/time";
 import { toast, toastError } from "@/lib/toast";
 
 export interface RunPausedNoticeProps {
@@ -68,6 +69,8 @@ type PausePayload =
       httpStatus: number | null;
       provider: string;
       errorMessage: string;
+      detail?: string;
+      retryAfterMs?: number;
     }
   | {
       reason: "payment_required";
@@ -91,6 +94,7 @@ type PausePayload =
       errorMessage: string;
       attempt: number;
       resumeAt: number;
+      retryAfterMs?: number;
     }
   | {
       reason: "handler_retry";
@@ -392,15 +396,21 @@ function useCountdownToResume(resumeAt: number): string {
   const seconds = Math.ceil(remainingMs / 1_000);
   if (seconds < 60) return `in ${seconds}s`;
   const minutes = Math.ceil(seconds / 60);
-  return `in ${minutes}m`;
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `in ${hours}h` : `in ${hours}h ${rest}m`;
 }
 
 function ProviderRetryBody({ payload }: { payload: Extract<PausePayload, { reason: "provider_retry" }> }): JSX.Element {
   const eta = useCountdownToResume(payload.resumeAt);
   const errLabel = formatProviderError(payload);
+  const asked =
+    payload.retryAfterMs !== undefined ? ` (provider asked for ${formatDuration(payload.retryAfterMs)})` : "";
   return (
     <span data-testid="run-paused-message">
-      {errLabel}; retrying {eta} (attempt {payload.attempt}). Resume to short-circuit the wait.
+      {errLabel}; retrying {eta}
+      {asked} (attempt {payload.attempt}). Resume to short-circuit the wait.
     </span>
   );
 }
@@ -439,7 +449,12 @@ const RENDERERS: Renderers = {
   }),
   provider_error: ({ payload, ctx }) => ({
     title: "Provider error — paused",
-    body: <span data-testid="run-paused-message">{formatProviderError(payload)}</span>,
+    body: (
+      <span data-testid="run-paused-message">
+        {formatProviderError(payload)}
+        {payload.detail !== undefined ? <span className="block text-sw-muted">{payload.detail}</span> : null}
+      </span>
+    ),
     actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
   }),
   payment_required: ({ payload, ctx }) => ({

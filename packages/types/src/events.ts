@@ -819,6 +819,11 @@ export type FactEvent =
             httpStatus: number | null;
             provider: string;
             errorMessage: string;
+            /** Why an auto-retryable failure went manual — set when the
+             * provider's Retry-After exceeded the daemon's auto-retry cap. */
+            detail?: string;
+            /** The provider-requested delay (ms), when one was present. */
+            retryAfterMs?: number;
           }
         | {
             reason: "payment_required";
@@ -846,6 +851,9 @@ export type FactEvent =
             errorMessage: string;
             attempt: number;
             resumeAt: number;
+            /** The provider's own Retry-After (ms), present only when the
+             * provider set the delay (otherwise the daemon's backoff chose it). */
+            retryAfterMs?: number;
           }
         | {
             /** Handler returned `outcomeStatus="retry"`. Concurrency slot released for the backoff window.

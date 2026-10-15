@@ -107,6 +107,9 @@ export interface TransitionInput {
   now: number;
   /** Injectable RNG for retry / provider backoff jitter. */
   random: () => number;
+  /** Longest provider Retry-After the daemon waits out on its own; longer
+   * requests pause manually. Defaults to `PROVIDER_RETRY_AFTER_MAX_MS`. */
+  providerRetryAfterMaxMs?: number;
 }
 
 export interface TransitionPlan {
@@ -662,8 +665,9 @@ export function applyProviderRetry(args: {
   state: RunState;
   now: number;
   random: () => number;
+  retryAfterMaxMs?: number;
 }): ProviderRetryOutcome {
-  const { result, state, now, random } = args;
+  const { result, state, now, random, retryAfterMaxMs } = args;
   let providerRetryDecision: ProviderRetryDecision | undefined;
   let providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined;
   if (result.kind === "pause_provider") {
@@ -674,6 +678,7 @@ export function applyProviderRetry(args: {
       now,
       cumulativeDelayMs: getRetry(state.routing).providerCumulativeMs,
       random,
+      ...(retryAfterMaxMs !== undefined ? { retryAfterMaxMs } : {}),
     });
     if (providerDecision.kind === "exhausted") {
       providerExhausted = { attempt: providerDecision.attempt, reason: providerDecision.reason };
@@ -728,6 +733,7 @@ export function rewriteTerminalFacts(args: {
   facts = swapRetriesExhausted(facts, retriesExhaustedPause);
   facts = rewriteProviderExhausted(facts, providerExhausted, state);
   facts = rewriteProviderAutoRetry(facts, providerRetryDecision, result, state);
+  facts = annotateProviderManual(facts, providerRetryDecision, result);
   facts = swapBudgetPause(facts, budgetPause, state);
   facts = swapBudgetHalt(facts, budgetHaltDetail);
   return facts;
@@ -881,6 +887,9 @@ function rewriteProviderAutoRetry(
           errorMessage: f.payload.errorMessage,
           attempt: providerRetryDecision.attempt,
           resumeAt: providerRetryDecision.resumeAt,
+          ...(providerRetryDecision.retryAfterMs !== undefined
+            ? { retryAfterMs: providerRetryDecision.retryAfterMs }
+            : {}),
         },
       };
       break;
@@ -896,6 +905,27 @@ function rewriteProviderAutoRetry(
     },
   });
   return next;
+}
+
+// Provider manual-over-cap: an auto-retryable failure whose Retry-After exceeds
+// the daemon's cap stays reason="provider_error" (status `paused`), but the
+// pause names the requested delay and the cap so the operator sees why.
+function annotateProviderManual(
+  facts: FactEvent[],
+  providerRetryDecision: ProviderRetryDecision | undefined,
+  result: HandlerResult,
+): FactEvent[] {
+  if (providerRetryDecision?.kind !== "manual" || providerRetryDecision.detail === undefined) return facts;
+  const detail = providerRetryDecision.detail;
+  const retryAfterMs = result.kind === "pause_provider" ? result.retryAfterMs : undefined;
+  return facts.map((f) =>
+    f.type === "fact.run_paused" && f.payload.reason === "provider_error"
+      ? {
+          ...f,
+          payload: { ...f.payload, detail, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) },
+        }
+      : f,
+  );
 }
 
 // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"} so
@@ -1021,12 +1051,19 @@ export function buildRoutingPatch(args: {
   // Provider auto-retry: same shape, plus persist the attempt counter
   // so the next pause_provider in the chain reads it and the cap
   // bounds the run even across manual `intent.resume` interruptions.
+  // A provider-requested delay is exempt from the cumulative-ms cap, so it
+  // must not accrue into the running total either — otherwise one long
+  // Retry-After exhausts the next backoff-only failure in the chain.
   if (providerRetryDecision?.kind === "auto-retry") {
+    const priorCumulativeMs = getRetry(state.routing).providerCumulativeMs;
     routingPatch = {
       ...(routingPatch ?? {}),
       [AUTO_RESUME_AT_KEY]: providerRetryDecision.resumeAt,
       [PROVIDER_RETRY_ATTEMPT_KEY]: providerRetryDecision.attempt,
-      [PROVIDER_RETRY_CUMULATIVE_MS_KEY]: getRetry(state.routing).providerCumulativeMs + providerRetryDecision.delayMs,
+      [PROVIDER_RETRY_CUMULATIVE_MS_KEY]:
+        providerRetryDecision.retryAfterMs === undefined
+          ? priorCumulativeMs + providerRetryDecision.delayMs
+          : priorCumulativeMs,
     };
   }
   // Clear the provider-retry chain counter + cumulative on any successful
@@ -1207,7 +1244,13 @@ export function planTransition(input: TransitionInput): TransitionPlan {
     budget.budgetPause === undefined;
 
   // Stage 5 — provider auto-retry.
-  const provider = applyProviderRetry({ result, state, now, random });
+  const provider = applyProviderRetry({
+    result,
+    state,
+    now,
+    random,
+    ...(input.providerRetryAfterMaxMs !== undefined ? { retryAfterMaxMs: input.providerRetryAfterMaxMs } : {}),
+  });
 
   // Side-effect facts are already durable via the pre-commit recorder;
   // resultToFacts only emits the terminal node_* / run_* facts.

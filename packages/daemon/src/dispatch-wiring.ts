@@ -41,6 +41,8 @@ export interface RunDeps {
   maxLoops: number;
   /** Max consecutive handler aborts on the same node before `abort_loop`. */
   abortLoopCeiling: number;
+  /** Longest provider Retry-After the daemon auto-retries; longer pauses manually. */
+  providerRetryAfterMaxMs: number;
   /** Per-fan-out-branch wall-clock backstop when neither the branch nor its
    * `parallel` node sets a tighter bound. */
   fanoutBranchTimeoutMs: number;

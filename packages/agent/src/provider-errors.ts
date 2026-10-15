@@ -34,12 +34,18 @@ export function classifyTerminalMessage(args: {
   }
 
   if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+    // The SDK refuses a server-requested delay above its own cap and throws
+    // before any response, so `lastHttpStatus` / `lastRetryAfterMs` are stale
+    // values from an earlier turn — the parsed message wins over both.
+    const sdkDelay = last.stopReason === "error" ? parseSdkRetryDelay(last.errorMessage) : null;
+    const capturedStatus = sdkDelay !== null ? sdkDelay.httpStatus : lastHttpStatus;
+    const retryAfterMs = sdkDelay !== null ? sdkDelay.retryAfterMs : lastRetryAfterMs;
     if (last.stopReason === "error") {
       // pi-ai's `onResponse` only fires once a stream begins; a pre-stream reject
       // (e.g. Anthropic 400 on a malformed history) never invokes it, so recover
       // the status from the leading token of `errorMessage`.
       const extracted = effectiveProviderHttpStatus(
-        lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+        capturedStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
         last.errorMessage,
       );
       const httpIs4xx5xx = extracted !== null && extracted >= 400 && extracted < 600;
@@ -48,7 +54,7 @@ export function classifyTerminalMessage(args: {
         return failProvider(last.errorMessage ?? `provider stream error (HTTP ${extracted ?? "n/a"})`, {
           httpStatus: extracted,
           provider,
-          ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
         });
       }
     }
@@ -72,13 +78,13 @@ export function classifyTerminalMessage(args: {
     // Unclassified failure envelope: FAIL OPEN to a resumable pause rather than
     // route a transient transport failure into the no-fail-edge terminal halt.
     const unclassifiedStatus = effectiveProviderHttpStatus(
-      lastHttpStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
+      capturedStatus ?? (last.errorMessage ? extractHttpStatusFromErrorMessage(last.errorMessage) : null),
       last.errorMessage,
     );
     return failProvider(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
       httpStatus: unclassifiedStatus,
       provider,
-      ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     });
   }
 
@@ -181,6 +187,50 @@ export function isOverloadedErrorMessage(message: string | undefined | null): bo
   } catch {
     return false;
   }
+}
+
+/** Detect an Anthropic `rate_limit_error` envelope. Anchored on the envelope
+ * structure exactly like {@link isOverloadedErrorMessage}. */
+export function isRateLimitErrorMessage(message: string | undefined | null): boolean {
+  if (typeof message !== "string" || message.length === 0) return false;
+  const brace = message.indexOf("{");
+  if (brace === -1) return false;
+  try {
+    const parsed = JSON.parse(message.slice(brace)) as { type?: unknown; error?: { type?: unknown } };
+    return parsed?.type === "error" && parsed?.error?.type === "rate_limit_error";
+  } catch {
+    return false;
+  }
+}
+
+const RATE_LIMIT_STATUS = 429;
+
+const SDK_RETRY_DELAY_PATTERN = /^Server requested (\d+(?:\.\d+)?)s retry delay \(max: \d+s\)\.?\s*([\s\S]*)$/;
+
+/** Parse pi-ai's "delay above my cap" rejection:
+ *
+ *   `Server requested 12311s retry delay (max: 60s). 429 {"type":"error",...}`
+ *
+ * pi-ai only reads a server delay off a retryable error (408/409/429/5xx), so
+ * the status defaults to 429 when the trailing provider message carries none;
+ * a leading status token or a recognised envelope type wins. Returns `null`
+ * when the message is not this shape. */
+export function parseSdkRetryDelay(
+  message: string | undefined | null,
+): { retryAfterMs: number; httpStatus: number } | null {
+  if (typeof message !== "string") return null;
+  const match = SDK_RETRY_DELAY_PATTERN.exec(message);
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const rest = match[2] ?? "";
+  const fromEnvelope = isOverloadedErrorMessage(rest)
+    ? ANTHROPIC_OVERLOADED_STATUS
+    : isRateLimitErrorMessage(rest)
+      ? RATE_LIMIT_STATUS
+      : null;
+  const httpStatus = extractHttpStatusFromErrorMessage(rest) ?? fromEnvelope ?? RATE_LIMIT_STATUS;
+  return { retryAfterMs: Math.round(seconds * 1000), httpStatus };
 }
 
 /** Canonical auto-retryable status for a recognised transient transport

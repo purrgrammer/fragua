@@ -11,6 +11,7 @@ export type { ExecutorOpts } from "./executor.ts";
 export { runExecutor, runOne } from "./executor.ts";
 export type { GraphLoader, GraphLoadResult } from "./graph-loader.ts";
 export { makeGraphLoader } from "./graph-loader.ts";
+export { formatDelayMs, PROVIDER_RETRY_AFTER_MAX_MS } from "./provider-retry-policy.ts";
 export { CommittingRecorder } from "./recorder.ts";
 export type { ResultContext } from "./result-to-facts.ts";
 export {

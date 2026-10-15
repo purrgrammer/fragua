@@ -238,6 +238,7 @@ async function executeBranchNode(
     iteration,
     now: deps.clock(),
     random: deps.random,
+    providerRetryAfterMaxMs: deps.providerRetryAfterMaxMs,
   });
   if (plan.observability.length > 0) {
     deps.opts.store.appendObservabilityEvents(

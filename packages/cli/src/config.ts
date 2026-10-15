@@ -184,6 +184,10 @@ export const FraguaConfigSchema = Type.Object(
     // Max consecutive handler aborts on the same node before halt with
     // `reason: "abort_loop"`. Default 5.
     "abort-loop-ceiling": Type.Optional(Type.Integer({ minimum: 1 })),
+    // Longest provider-requested Retry-After (ms) the daemon waits out as an
+    // automatic retry; a longer request pauses the run for the operator.
+    // Default 21600000 (6h).
+    "provider-retry-after-max-ms": Type.Optional(Type.Integer({ minimum: 0 })),
     // Cap on per-process leaked handlers (handler ignored AbortSignal
     // past `maxMs + leak-grace`). Daemon shuts down when crossed.
     // Default 3.

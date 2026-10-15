@@ -146,7 +146,7 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
   | Reason | Trigger | Operator action |
   |---|---|---|
   | `operator` | Operator hit Pause (`intent.pause_requested`) | `intent.resume` |
-  | `provider_error` | LLM provider returned 400/401/403/404/413/422 | Fix creds/request → `intent.resume` |
+  | `provider_error` | LLM provider returned 400/401/403/404/413/422, or an auto-retryable error whose requested `Retry-After` exceeds the daemon's auto-retry cap (payload `detail` names the requested delay and the cap, `retryAfterMs` carries the request) | Fix creds/request, or wait out the provider's window → `intent.resume` |
   | `payment_required` | LLM provider returned 402 | Top up off-ledger → `intent.resume` |
   | `budget` | `budget_usd` / `max_cost_usd` / `budget_tokens` / `max_tokens` ceiling crossed under `budget_policy="pause"` | `intent.budget_adjusted { scope, metric, newLimit }` → `intent.resume` |
   | `max_retries` | Node exhausted `max_retries` on `outcome=retry` | `intent.max_retries_adjusted { nodeId, newLimit }` → `intent.resume` |
@@ -160,11 +160,13 @@ queued → running → {completed, paused, paused_human, paused_auto, halted, ca
 
   | Reason | Trigger | Payload | Wake |
   |---|---|---|---|
-  | `provider_retry` | Auto-retryable transport error (408/429/5xx/529/network) | `nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt` | wake-pending sweeper at `resumeAt`; operator may short-circuit via `intent.resume` |
+  | `provider_retry` | Auto-retryable transport error (408/429/5xx/529/network) | `nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt`, `retryAfterMs?` (set when the provider chose the delay) | wake-pending sweeper at `resumeAt`; operator may short-circuit via `intent.resume` |
   | `handler_retry` | Node returned `outcomeStatus="retry"`; backoff scheduled | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | same |
   | `timeout_retry` | Handler watchdog tripped (`max_ms` / `timeout`); retry budget remains | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs` | same |
 
   The concurrency slot is released during the wait so other queued runs can claim. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_auto" }` once `now >= resumeAt`; the run goes back to `queued` and re-dispatches.
+
+  **Provider retry policy.** A `provider_retry` chain is bounded to 5 attempts; delays the daemon chooses itself (equal-jitter exponential) are also bounded to 5 cumulative minutes, past either cap the run pauses with `provider_exhausted`. A provider-requested `Retry-After` is honoured exactly, up to the daemon's cap (default 6h, config `provider-retry-after-max-ms`): it costs one attempt and does not count toward the cumulative-minutes cap. A request above the cap pauses as `provider_error` with a `detail` naming both durations. The SDK waits out short delays in-process (up to 60s); a longer request surfaces as `Server requested <N>s retry delay`, which the agent parses into `httpStatus` + `retryAfterMs` so the daemon owns the long wait.
 
 - **`completed`** / **`halted`** / **`cancelled`** — terminal. A single `fact.run_terminated { status }` ends the run (fact-taxonomy.md §3.1); the reducer projects its `status` to the lifecycle value: `completed` → `completed` (payload `finalNode`), `errored` → `halted` (payload `reason` + `detail?`), `aborted` → `cancelled` (payload `intentSeq`).
   - `fact.run_terminated{status:"errored"}.payload.reason` is one of: `budget` (when `budget_policy="stop"`), `error`, `aborted_exit`, `occ_exhausted`, `timeout_exhausted`, `worktree_error`, `route_not_picked`, `route_call_not_isolated`, `edge_no_match`. (A version mismatch is recoverable — `fact.run_paused{reason:"engine_incompatible"}` — not a halt; see §5.)

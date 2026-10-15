@@ -376,6 +376,68 @@ describe("RunPausedNotice", () => {
     }
   });
 
+  it("provider_retry with retryAfterMs renders the provider-requested delay and an hour-scale countdown", async () => {
+    const resumeAt = Date.now() + 12_311_000;
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "provider_retry",
+              nodeId: "synthesize",
+              httpStatus: 429,
+              provider: "anthropic",
+              errorMessage: "429 rate limited",
+              attempt: 1,
+              resumeAt,
+              retryAfterMs: 12_311_000,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("provider asked for 3h 25m");
+      expect(message.textContent).toMatch(/in 3h/);
+      expect(message.textContent).toContain("attempt 1");
+    } finally {
+      restore();
+    }
+  });
+
+  it("provider_error with detail renders the cap explanation", async () => {
+    const detail = "provider requested a 7h retry delay, above the 6h auto-retry cap";
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "provider_error",
+              nodeId: "synthesize",
+              httpStatus: 429,
+              provider: "anthropic",
+              errorMessage: "rate limited",
+              detail,
+              retryAfterMs: 25_200_000,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("anthropic returned 429");
+      expect(message.textContent).toContain(detail);
+    } finally {
+      restore();
+    }
+  });
+
   it("handler_retry reason renders countdown + attempt-of-max + Resume now / Cancel actions", async () => {
     const resumeAt = Date.now() + 5_000;
     const { restore } = installFetchMock({
