@@ -7,6 +7,7 @@ export {
 } from "./source-hash-gate.ts";
 export {
   allowMarked,
+  type CallbackScope,
   type CallInfo,
   callbackBodiesOf,
   classMethodBodies,
@@ -17,6 +18,7 @@ export {
   collectImports,
   collectMemberAccess,
   type DestructuringInfo,
+  DYNAMIC_SPECIFIER,
   type ElementAccessInfo,
   type ImportBinding,
   type ImportInfo,

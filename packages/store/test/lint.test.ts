@@ -9,6 +9,12 @@
 // reach the network (`fetch`), or run a TypeBox `Value.Check`/`Value.Compile` —
 // the caller pre-serializes and validates before the transaction opens.
 //
+// A callback passed by name (`const body = () => {…}; writeTxn(body)`) is
+// resolved through its enclosing `const` / function declaration and scanned the
+// same as an inline one; a callback that can't be resolved statically fails the
+// lint as an unresolved txn callback (the one exemption is a function itself
+// named `writeTxn` forwarding its own parameter — its callers are scanned).
+//
 // This is an AST scan (not a regex over source text): it walks the callback body
 // AND, to full transitive depth, the bodies of any function the callback calls —
 // both same-file helpers AND functions imported over a RELATIVE import (the
@@ -30,6 +36,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  type CallbackScope,
   type CallInfo,
   callbackBodiesOf,
   classMethodBodies,
@@ -132,8 +139,12 @@ function savepointCallbackBodies(sf: ts.SourceFile, names: Set<string>): ts.Node
 
 /** Every transaction scope in the file: `writeTxn`/`transaction` callbacks plus
  * `SAVEPOINT`-wrapper callbacks. */
-function collectTxnScopeBodies(sf: ts.SourceFile): ts.Node[] {
-  return [...callbackBodiesOf(sf, TXN_CALLEES), ...savepointCallbackBodies(sf, savepointWrapperNames(sf))];
+function collectTxnScopeBodies(sf: ts.SourceFile): CallbackScope[] {
+  const savepoints = savepointCallbackBodies(sf, savepointWrapperNames(sf)).map((body) => ({
+    body,
+    unresolved: false,
+  }));
+  return [...callbackBodiesOf(sf, TXN_CALLEES), ...savepoints];
 }
 
 /** A call on a `StoreCtx` binding: `ctx.m()` → `{ member: "", method: "m" }`,
@@ -244,11 +255,21 @@ function scanScope(rootBody: ts.Node, rootSf: ts.SourceFile, rootFile: string): 
   return offenders;
 }
 
-function scanFile(file: string): Offender[] {
-  const sf = parseSource(file);
+const UNRESOLVED_CALLBACK = "unresolved txn callback";
+
+/** Every offender in the file's transaction scopes. A txn call whose callback
+ * can't be resolved statically is reported, not scanned. */
+function scanSf(sf: ts.SourceFile, file: string): Offender[] {
   const offenders: Offender[] = [];
-  for (const body of collectTxnScopeBodies(sf)) offenders.push(...scanScope(body, sf, file));
+  for (const { body, unresolved } of collectTxnScopeBodies(sf)) {
+    if (unresolved) offenders.push({ file, kind: UNRESOLVED_CALLBACK, line: lineOf(sf, body) });
+    else offenders.push(...scanScope(body, sf, file));
+  }
   return offenders;
+}
+
+function scanFile(file: string): Offender[] {
+  return scanSf(parseSource(file), file);
 }
 
 // invariant: I1 — every store write is one txn; no await / JSON serialization /
@@ -269,9 +290,7 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
 
   const scanSynthetic = (src: string): Offender[] => {
     const sf = ts.createSourceFile("synthetic.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    const out: Offender[] = [];
-    for (const body of collectTxnScopeBodies(sf)) out.push(...scanScope(body, sf, "synthetic.ts"));
-    return out;
+    return scanSf(sf, "synthetic.ts");
   };
 
   test("catches await / fetch / JSON.parse directly in a txn callback", () => {
@@ -342,6 +361,49 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
       }
     `;
     expect(scanSynthetic(src)).toHaveLength(0);
+  });
+
+  test("catches JSON.stringify in a txn callback passed by const name", () => {
+    const caller = join(__dirname, "fixtures", "txn-named-callback", "caller.ts");
+    expect(scanFile(caller).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches JSON.parse in a txn callback passed by function-declaration name", () => {
+    const src = `
+      function body() { JSON.parse(s); }
+      db.transaction(body);
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toContain("JSON.parse");
+  });
+
+  test("flags a txn callback that cannot be resolved", () => {
+    const caller = join(__dirname, "fixtures", "txn-named-callback", "unresolved.ts");
+    expect(scanFile(caller).map((o) => o.kind)).toContain(UNRESOLVED_CALLBACK);
+  });
+
+  test("does not flag a txn-named forwarder passing its own parameter", () => {
+    const src = `const ctx = { writeTxn: (fn) => this.writeTxn(fn) };`;
+    expect(scanSynthetic(src)).toHaveLength(0);
+  });
+
+  test("flags a parameter forwarded by a non-txn wrapper", () => {
+    const src = `function run(cb) { db.transaction(cb); }`;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual([UNRESOLVED_CALLBACK]);
+  });
+
+  test("flags an unresolved txn call that is an arrow's expression body", () => {
+    expect(scanSynthetic(`const run = (p) => db.transaction(makeBody(p));`).map((o) => o.kind)).toEqual([
+      UNRESOLVED_CALLBACK,
+    ]);
+    expect(scanSynthetic(`const run = (cb) => ctx.writeTxn(cb);`).map((o) => o.kind)).toEqual([UNRESOLVED_CALLBACK]);
+  });
+
+  test("does not resolve a named callback past an inner same-named binding", () => {
+    const src = `
+      function body() { JSON.parse(s); }
+      function f() { const body = make(); db.transaction(body); }
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual([UNRESOLVED_CALLBACK]);
   });
 
   test("does not flag a JSON.stringify in the sweepRun wrapper's own catch (outside the savepoint)", () => {

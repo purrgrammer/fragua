@@ -2,7 +2,8 @@
 //
 // Handlers receive their I/O through HandlerContext (ctx.llm, ctx.http,
 // ctx.tools, ctx.messages, ctx.artifacts, ctx.externalCall). A handler that
-// reaches directly for `fetch`, `undici`, a `node:*` module, `Bun.*`, or
+// reaches directly for `fetch`, `undici`, a `node:*` or bare Node builtin module
+// (`fs`, `child_process`, …), a computed `import()`/`require()`, `Bun.*`, or
 // `process.env` breaks the invariant — the executor can't enforce AbortSignal,
 // idempotency keys, or accounting on those paths. A justified seam (the tool
 // handler's injected default spawner) is marked `// handler-discipline-allow:`.
@@ -20,6 +21,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { join, relative } from "node:path";
 import {
   allowMarked,
@@ -27,6 +29,7 @@ import {
   collectCalls,
   collectImports,
   collectMemberAccess,
+  DYNAMIC_SPECIFIER,
   lineOf,
   parseSource,
   transitiveRelativeImports,
@@ -51,10 +54,13 @@ function* collect(root: string): Iterable<string> {
   }
 }
 
-/** A `node:*` or `undici` module reference (any import kind). */
+/** A `node:*`, bare-builtin (`fs`), `undici`, or computed-specifier module
+ * reference (any import kind). */
 function bannedModule(mod: string): string | undefined {
+  if (mod === DYNAMIC_SPECIFIER) return mod;
   if (mod === "undici") return "undici";
   if (mod.startsWith("node:")) return mod;
+  if (!mod.startsWith(".") && !mod.startsWith("/") && isBuiltin(mod)) return mod;
   return undefined;
 }
 
@@ -200,6 +206,20 @@ describe("handler discipline", () => {
     expect(scanString(`import { readFileSync } from "node:fs";\n`).some((o) => o.rule === "node:fs")).toBe(true);
     expect(scanString(`import { request } from "undici";\n`).some((o) => o.rule === "undici")).toBe(true);
     expect(scanString(`const fs = require("node:fs");\n`).some((o) => o.rule === "node:fs")).toBe(true);
+    expect(scanString(`import { spawn } from "child_process";\n`).some((o) => o.rule === "child_process")).toBe(true);
+    expect(scanString(`import { readFile } from "fs/promises";\n`).some((o) => o.rule === "fs/promises")).toBe(true);
+    expect(scanString(`import * as YAML from "yaml";\nimport { x } from "./x.ts";\n`)).toHaveLength(0);
+    expect(scanString(`// ${ALLOW_MARKER} injected default\nimport { readFileSync } from "fs";\n`)).toHaveLength(0);
+  });
+
+  test("a bare Node builtin import (fs) delegated from a handler is flagged", () => {
+    const offenses = handlerIoOffenses(join(IO_FIXTURES, "bare-builtin.ts"));
+    expect(offenses.map((o) => o.offense.rule)).toEqual(["fs"]);
+  });
+
+  test("template-literal and computed dynamic imports are flagged", () => {
+    const offenses = handlerIoOffenses(join(IO_FIXTURES, "dynamic-specifier.ts"));
+    expect(offenses.map((o) => o.offense.rule)).toEqual(["node:fs", DYNAMIC_SPECIFIER]);
   });
 
   test('every sideEffect:"external" handler in handlers/ uses ctx.externalCall', () => {

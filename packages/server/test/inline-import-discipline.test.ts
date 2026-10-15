@@ -6,7 +6,8 @@
 // on the offending line or the line above it.
 //
 // This is an AST scan: it catches dynamic `import(...)`, `import(...).then(...)`,
-// and `require(...)` (the old regex only matched `await import(`), scans
+// and `require(...)` — whether the specifier is a string literal, a template
+// literal, or a computed expression — scans
 // `packages/*/src` AND `packages/cli/bin`, and does NOT flag a type-position
 // `import("x").Y` (an ImportTypeNode carries no runtime import).
 
@@ -19,6 +20,7 @@ import ts from "typescript";
 const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages/server/test
 const PACKAGES_DIR = join(ROOT, "packages");
 const ALLOW_MARKER = "inline-import-allow:";
+const DYNAMIC_FIXTURE = join(import.meta.dir, "fixtures", "inline-import", "dynamic-specifiers.ts");
 
 function walkTs(dir: string): string[] {
   const out: string[] = [];
@@ -91,6 +93,14 @@ describe("inline-import discipline — no dynamic import()/require() in producti
     expect(scanString(`function f() { const m = require("./x.ts"); }\n`)).toEqual([{ line: 1, kind: "require" }]);
   });
 
+  test("catches template-literal and computed import()/require() specifiers", () => {
+    expect(scan(parseSource(DYNAMIC_FIXTURE))).toEqual([
+      { line: 4, kind: "dynamic" },
+      { line: 8, kind: "dynamic" },
+      { line: 12, kind: "require" },
+    ]);
+  });
+
   test("does not flag a type-position import(...)", () => {
     expect(scanString(`type T = import("@fragua/types").AnyEventType;\n`)).toEqual([]);
     expect(scanString(`import type { X } from "./x.ts";\n`)).toEqual([]);
@@ -99,5 +109,6 @@ describe("inline-import discipline — no dynamic import()/require() in producti
   test("honors the inline-import-allow marker", () => {
     expect(scanString(`const m = await import("./x.ts"); // inline-import-allow: cycle with y.ts\n`)).toEqual([]);
     expect(scanString(`// inline-import-allow: cycle with y.ts\nconst m = await import("./x.ts");\n`)).toEqual([]);
+    expect(scanString(`// inline-import-allow: plugin path\nconst m = await import(spec);\n`)).toEqual([]);
   });
 });

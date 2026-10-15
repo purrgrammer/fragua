@@ -1,9 +1,10 @@
 // Syntax-only TypeScript-AST scanning for the discipline lints. Parses a file
 // with the compiler API (no type-checker Program) and exposes the walks the
-// lints need: call expressions inside a callback body (with one level of
-// same-file helper inlining), element access / destructuring on a named binding,
-// import / dynamic-import / require declarations, and a transitive relative
-// import walk from an entry file. A regex source scan can be defeated by
+// lints need: call expressions inside a callback body (inline, or passed by
+// name and resolved to its local declaration), element access / destructuring
+// on a named binding, import / dynamic-import / require declarations (literal
+// or computed specifiers), and a transitive relative import walk from an entry
+// file. A regex source scan can be defeated by
 // renaming or by routing the forbidden call through a helper; these walks can't.
 
 import { existsSync, readFileSync } from "node:fs";
@@ -119,17 +120,120 @@ export function collectAwaits(root: ts.Node): ts.AwaitExpression[] {
   return out;
 }
 
-/** Body node of every call to one of `calleeNames` whose first argument is an
- * arrow / function expression — e.g. `writeTxn(() => { ... })`. */
-export function callbackBodiesOf(sf: ts.SourceFile, calleeNames: readonly string[]): ts.Node[] {
+function hasParameterNamed(fn: ts.SignatureDeclaration, name: string): boolean {
+  return fn.parameters.some((p) => ts.isIdentifier(p.name) && p.name.text === name);
+}
+
+/** How the first same-named declaration in one block binds `name`: the body it
+ * resolves to, `null` when it binds something unresolvable (a `let`/`var`, a
+ * non-function `const`, a class, an import), or `undefined` when the block
+ * declares no such name. */
+function blockBinding(statements: ts.NodeArray<ts.Statement>, name: string): ts.Node | null | undefined {
+  for (const stmt of statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) {
+      if (stmt.body !== undefined) return stmt.body;
+      continue;
+    }
+    if (ts.isClassDeclaration(stmt) && stmt.name?.text === name) return null;
+    if (ts.isImportDeclaration(stmt) && importBindsName(stmt, name)) return null;
+    if (!ts.isVariableStatement(stmt)) continue;
+    const isConst = (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0;
+    for (const decl of stmt.declarationList.declarations) {
+      if (!ts.isIdentifier(decl.name) || decl.name.text !== name) continue;
+      const init = decl.initializer;
+      if (isConst && init !== undefined && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)))
+        return init.body;
+      return null;
+    }
+  }
+  return undefined;
+}
+
+function importBindsName(stmt: ts.ImportDeclaration, name: string): boolean {
+  const clause = stmt.importClause;
+  if (clause === undefined) return false;
+  if (clause.name?.text === name) return true;
+  const bindings = clause.namedBindings;
+  if (bindings === undefined) return false;
+  if (ts.isNamespaceImport(bindings)) return bindings.name.text === name;
+  return bindings.elements.some((e) => e.name.text === name);
+}
+
+/** Body of a `const name = () => …` / `function name() {…}` declared in a block
+ * enclosing `id` (or at file top), searched innermost-first. The innermost
+ * binding of the name wins: a same-named parameter or any other declaration
+ * (`let`, a non-function `const`, an import) shadows outer ones, so the
+ * identifier stays unresolved rather than resolving to an outer function. */
+function resolveLocalFunctionBody(id: ts.Identifier): ts.Node | undefined {
+  const name = id.text;
+  for (let scope: ts.Node | undefined = id.parent; scope !== undefined; scope = scope.parent) {
+    if (ts.isFunctionLike(scope) && hasParameterNamed(scope, name)) return undefined;
+    if (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseOrDefaultClause(scope)))
+      continue;
+    const bound = blockBinding(scope.statements, name);
+    if (bound !== undefined) return bound ?? undefined;
+  }
+  return undefined;
+}
+
+/** Name a function-like node is declared or assigned under: `f` for
+ * `function f`, `m() {}`, `{ m: () => … }`, `const f = () => …`. */
+function declaredName(fn: ts.SignatureDeclaration): string | undefined {
+  if ((ts.isFunctionDeclaration(fn) || ts.isMethodDeclaration(fn)) && fn.name !== undefined && ts.isIdentifier(fn.name))
+    return fn.name.text;
+  const p = fn.parent;
+  if (
+    (ts.isPropertyAssignment(p) || ts.isVariableDeclaration(p) || ts.isPropertyDeclaration(p)) &&
+    ts.isIdentifier(p.name)
+  )
+    return p.name.text;
+  return undefined;
+}
+
+/** True for `writeTxn: (fn) => this.writeTxn(fn)` — a function itself named as
+ * one of `names` forwarding its own parameter. Its callers are scanned at their
+ * own call sites, so the forwarded identifier needs no resolution. */
+function forwardsOwnParameter(id: ts.Identifier, names: Set<string>): boolean {
+  let fn: ts.Node | undefined = id.parent;
+  while (fn !== undefined && !ts.isFunctionLike(fn)) fn = fn.parent;
+  if (fn === undefined || !ts.isFunctionLike(fn) || !hasParameterNamed(fn, id.text)) return false;
+  const name = declaredName(fn);
+  return name !== undefined && names.has(name);
+}
+
+export interface CallbackScope {
+  /** The callback body, or the call itself when `unresolved`. */
+  body: ts.Node;
+  /** The callback could not be resolved statically; `body` is the call node. */
+  unresolved: boolean;
+}
+
+/** Callback scope of every call to one of `calleeNames` — e.g. `writeTxn(() => {
+ * ... })`. A first argument passed by name is resolved through the enclosing
+ * `const` / function declarations to its body; when it can't be resolved, the
+ * call node itself is returned with `unresolved` set so the caller can flag it. */
+export function callbackBodiesOf(sf: ts.SourceFile, calleeNames: readonly string[]): CallbackScope[] {
   const names = new Set(calleeNames);
-  const out: ts.Node[] = [];
+  const out: CallbackScope[] = [];
   walk(sf, (n) => {
     if (!ts.isCallExpression(n)) return;
     const name = calleeName(n.expression);
     if (name === undefined || !names.has(name)) return;
     const arg = n.arguments[0];
-    if (arg !== undefined && (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))) out.push(arg.body);
+    if (arg === undefined) return;
+    if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) {
+      out.push({ body: arg.body, unresolved: false });
+      return;
+    }
+    if (ts.isIdentifier(arg)) {
+      const body = resolveLocalFunctionBody(arg);
+      if (body !== undefined) {
+        out.push({ body, unresolved: false });
+        return;
+      }
+      if (forwardsOwnParameter(arg, names)) return;
+    }
+    out.push({ body: n, unresolved: true });
   });
   return out;
 }
@@ -225,6 +329,10 @@ export function typedBindings(sf: ts.SourceFile, typeName: string): Set<string> 
   return out;
 }
 
+/** Module recorded for a dynamic `import()` / `require()` whose specifier is not
+ * a literal — the lints cannot know what it loads, so they report it. */
+export const DYNAMIC_SPECIFIER = "<dynamic>";
+
 export interface ImportInfo {
   module: string;
   kind: "static" | "dynamic" | "require";
@@ -232,9 +340,16 @@ export interface ImportInfo {
   node: ts.Node;
 }
 
+/** Specifier of a dynamic `import()` / `require()` argument: the literal text
+ * (string or no-substitution template), else {@link DYNAMIC_SPECIFIER}. */
+function dynamicSpecifier(arg: ts.Expression): string {
+  return ts.isStringLiteralLike(arg) ? arg.text : DYNAMIC_SPECIFIER;
+}
+
 /** All module references: static `import`/`export … from`, dynamic `import()`
- * calls, and `require()` calls. Type-position `import("x").Y` (an ImportTypeNode,
- * not a call) is naturally excluded — it carries no runtime import. */
+ * calls, and `require()` calls. A non-literal `import()`/`require()` specifier is
+ * recorded as {@link DYNAMIC_SPECIFIER}. Type-position `import("x").Y` (an
+ * ImportTypeNode, not a call) is naturally excluded — it carries no runtime import. */
 export function collectImports(sf: ts.SourceFile): ImportInfo[] {
   const out: ImportInfo[] = [];
   walk(sf, (n) => {
@@ -249,12 +364,10 @@ export function collectImports(sf: ts.SourceFile): ImportInfo[] {
       out.push({ module: n.moduleSpecifier.text, kind: "static", typeOnly: n.isTypeOnly, node: n });
     } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const arg = n.arguments[0];
-      if (arg !== undefined && ts.isStringLiteral(arg))
-        out.push({ module: arg.text, kind: "dynamic", typeOnly: false, node: n });
+      if (arg !== undefined) out.push({ module: dynamicSpecifier(arg), kind: "dynamic", typeOnly: false, node: n });
     } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "require") {
       const arg = n.arguments[0];
-      if (arg !== undefined && ts.isStringLiteral(arg))
-        out.push({ module: arg.text, kind: "require", typeOnly: false, node: n });
+      if (arg !== undefined) out.push({ module: dynamicSpecifier(arg), kind: "require", typeOnly: false, node: n });
     }
   });
   return out;
