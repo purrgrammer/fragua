@@ -761,12 +761,52 @@ describe("SqliteStore — daemon lock", () => {
     store.close();
   });
 
+  test("heartbeat with harnessPid stamps attribution only on the owner's row", () => {
+    const store = freshStore();
+    store.acquireDaemonLock(1, "h");
+    expect(store.currentDaemonLock()!.harnessPid).toBeNull();
+
+    expect(store.heartbeatDaemonLock(1, { harnessPid: 77 })).toBe(true);
+    expect(store.currentDaemonLock()!.harnessPid).toBe(77);
+
+    // The child's own beat (no harnessPid) keeps the supervisor's stamp.
+    expect(store.heartbeatDaemonLock(1)).toBe(true);
+    expect(store.currentDaemonLock()!.harnessPid).toBe(77);
+
+    expect(store.heartbeatDaemonLock(9999, { harnessPid: 88 })).toBe(false);
+    expect(store.currentDaemonLock()!.harnessPid).toBe(77);
+
+    // A lost lock is never recreated by a harness re-assert.
+    store.releaseDaemonLock(1);
+    expect(store.heartbeatDaemonLock(1, { harnessPid: 77 })).toBe(false);
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("forceAcquireDaemonLock clears a predecessor's harness_pid", () => {
+    const store = freshStore();
+    store.acquireDaemonLock(1, "h");
+    store.heartbeatDaemonLock(1, { harnessPid: 77 });
+    const taken = store.forceAcquireDaemonLock(2, "h");
+    expect(taken.current.harnessPid).toBeNull();
+    expect(store.currentDaemonLock()!.pid).toBe(2);
+    expect(store.currentDaemonLock()!.harnessPid).toBeNull();
+    store.close();
+  });
+
+  test("setServerEndpoint round-trips hostname", () => {
+    const store = freshStore();
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 5, version: null, hostname: "box" });
+    expect(store.currentServerEndpoint()!.hostname).toBe("box");
+    store.close();
+  });
+
   test("setServerEndpoint publishes discovery, independent of the daemon lock", () => {
     const store = freshStore();
 
     // No daemon lock needed: the endpoint is its own row (the CI primitive's
     // `serve` can publish before — or without — a daemon ever acquiring).
-    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 1, version: "0.0.0" });
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 1, version: "0.0.0", hostname: null });
     const published = store.currentServerEndpoint()!;
     expect(published.url).toBe("http://localhost:6767/api");
     expect(published.port).toBe(6767);
@@ -778,7 +818,13 @@ describe("SqliteStore — daemon lock", () => {
 
   test("daemon-lock churn never clobbers the endpoint (separate rows)", () => {
     const store = freshStore();
-    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 99, version: "0.0.0" });
+    store.setServerEndpoint({
+      url: "http://localhost:6767/api",
+      port: 6767,
+      pid: 99,
+      version: "0.0.0",
+      hostname: null,
+    });
 
     // A daemon restart (release + fresh acquire) churns daemon_lock, but the
     // endpoint row is untouched — no re-assert loop needed.
@@ -791,7 +837,7 @@ describe("SqliteStore — daemon lock", () => {
 
   test("clearServerEndpoint is pid-scoped", () => {
     const store = freshStore();
-    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 42, version: null });
+    store.setServerEndpoint({ url: "http://localhost:6767/api", port: 6767, pid: 42, version: null, hostname: null });
 
     // A late closer with a stale pid (a server that already rebound) must not
     // erase the live endpoint.

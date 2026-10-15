@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
-import { hostnameSafe, SqliteStore } from "@fragua/store";
+import { DAEMON_LOCK_TTL_MS, type DaemonLockRow, hostnameSafe, SqliteStore } from "@fragua/store";
 import {
   type DaemonProcess,
   evictStaleLock,
@@ -69,9 +69,24 @@ function acquireLock(dbPath: string, pid: number): boolean {
 }
 
 function currentLockPid(dbPath: string): number | null {
+  return currentLock(dbPath)?.pid ?? null;
+}
+
+function currentLock(dbPath: string): DaemonLockRow | null {
   const store = new SqliteStore({ path: dbPath, migrate: false });
   try {
-    return store.currentDaemonLock()?.pid ?? null;
+    return store.currentDaemonLock();
+  } finally {
+    store.close();
+  }
+}
+
+function backdateHeartbeat(dbPath: string, byMs: number): void {
+  const store = new SqliteStore({ path: dbPath, migrate: false });
+  try {
+    // biome-ignore lint/suspicious/noExplicitAny: test-only db access to backdate the heartbeat
+    const db = (store as any).db as { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+    db.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1").run(Date.now() - byMs);
   } finally {
     store.close();
   }
@@ -666,6 +681,71 @@ describe("superviseDaemon", () => {
     await emitSigintWhenReady(sigintBefore);
     expect(await done).toBe(0);
   });
+
+  test("the reaper tick re-asserts its live child's heartbeat, lock pid unchanged", async () => {
+    const dbPath = await freshDbPath();
+    const spawns: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, spawns);
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { reaperTickMs: 10, lockTtlMs: 0 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => spawns.length === 1 && currentLockPid(dbPath) === spawns[0]!.pid)).toBe(true);
+    backdateHeartbeat(dbPath, 3_600_000);
+    // The fake child never heartbeats itself: only the harness can freshen it.
+    expect(
+      await waitFor(() => {
+        const lock = currentLock(dbPath);
+        return lock !== null && Date.now() - lock.heartbeatAt < DAEMON_LOCK_TTL_MS;
+      }),
+    ).toBe(true);
+    const lock = currentLock(dbPath)!;
+    expect(lock.pid).toBe(spawns[0]!.pid);
+    expect(lock.harnessPid).toBe(process.pid);
+    expect(spawns.length).toBe(1);
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("the reaper tick never recreates a lock its child lost", async () => {
+    const dbPath = await freshDbPath();
+    const spawns: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, spawns);
+    const sigintBefore = process.listenerCount("SIGINT");
+    const cfg = await makeConfig(dbPath, { reaperTickMs: 10, lockTtlMs: 0 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => spawns.length === 1 && currentLockPid(dbPath) === spawns[0]!.pid)).toBe(true);
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      store.forceDeleteDaemonLock();
+    } finally {
+      store.close();
+    }
+    await new Promise((r) => setTimeout(r, 60));
+    expect(spawns[0]!.exitCode).toBeNull();
+    expect(currentLockPid(dbPath)).toBeNull();
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
+
+  test("readiness stamps harness_pid on the child's lock", async () => {
+    const dbPath = await freshDbPath();
+    const spawns: FakeProc[] = [];
+    const spawn = lockAwareSpawn(dbPath, spawns);
+    const sigintBefore = process.listenerCount("SIGINT");
+    // Reaper off: the stamp must come from the readiness gate alone.
+    const cfg = await makeConfig(dbPath, { reaperTickMs: 0 });
+    const done = superviseDaemon(spawn, ["dummy"], cfg);
+
+    expect(await waitFor(() => currentLock(dbPath)?.harnessPid === process.pid)).toBe(true);
+    expect(currentLockPid(dbPath)).toBe(spawns[0]!.pid);
+
+    await emitSigintWhenReady(sigintBefore);
+    expect(await done).toBe(0);
+  });
 });
 
 describe("liveDaemonHolder", () => {
@@ -697,7 +777,7 @@ describe("liveDaemonHolder", () => {
   test("a fresh lock held by a live pid on this host is reported", async () => {
     const dbPath = await db();
     seed(dbPath, 4_242, hostnameSafe(), Date.now() - 1_000);
-    expect(liveDaemonHolder(dbPath, { isPidAlive: () => true })).toEqual({ pid: 4_242, ageS: 1 });
+    expect(liveDaemonHolder(dbPath, { isPidAlive: () => true })).toEqual({ pid: 4_242, ageS: 1, harnessPid: null });
   });
 
   test("no store, no lock, a stale lock, a dead pid, or a foreign host all read as none", async () => {
@@ -744,11 +824,32 @@ describe("evictStaleLock", () => {
 
   test("protectPid leaves that holder's lock alone past the TTL, and still evicts any other", async () => {
     const { dbPath, heartbeatAt } = await seedLock(4_242, hostnameSafe());
-    const past = () => heartbeatAt + 30_001;
-    evictStaleLock(dbPath, { now: past, isPidAlive: () => true, protectPid: 4_242 });
+    evictStaleLock(dbPath, { now: () => heartbeatAt + 30_001, isPidAlive: () => true, protectPid: 4_242 });
     expect(lockPid(dbPath)).toBe(4_242);
-    evictStaleLock(dbPath, { now: past, isPidAlive: () => true, protectPid: 1 });
+    // The protect branch re-asserted the heartbeat at wall-clock now, so judge
+    // the second call from well past that.
+    const later = () => Date.now() + 60_000;
+    evictStaleLock(dbPath, { now: later, isPidAlive: () => true, protectPid: 1 });
     expect(lockPid(dbPath)).toBeNull();
+  });
+
+  test("protectPid re-asserts the holder's heartbeat and stamps harness_pid", async () => {
+    const { dbPath } = await seedLock(4_242, hostnameSafe());
+    const store = new SqliteStore({ path: dbPath, migrate: false });
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: test-only db access to backdate the heartbeat
+      const d = (store as any).db as { query: (sql: string) => { run: (...args: unknown[]) => unknown } };
+      d.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1").run(Date.now() - 3_600_000);
+    } finally {
+      store.close();
+    }
+    evictStaleLock(dbPath, { isPidAlive: () => true, protectPid: 4_242, harnessPid: 777 });
+    const check = new SqliteStore({ path: dbPath, migrate: false });
+    const lock = check.currentDaemonLock();
+    check.close();
+    expect(lock?.pid).toBe(4_242);
+    expect(lock?.harnessPid).toBe(777);
+    expect(Date.now() - lock!.heartbeatAt).toBeLessThan(DAEMON_LOCK_TTL_MS);
   });
 
   test("evicts a lock whose heartbeat is past the TTL", async () => {

@@ -43,8 +43,8 @@ fragua doctor --db <path>     # CI primitive / a non-default instance
 `doctor` prints:
 
 - **store path** — which DB you're actually on. Always note it; parallel fraguas (different `--db`) coexist.
-- **daemon** — pid + heartbeat age. Fresh (~30s window, `DEFAULT_LOCK_TTL_MS = 30_000` in `packages/daemon/src/entrypoint.ts`) reads "alive"; older reads "stale" — `running` runs may be orphaned until the next daemon start sweeps them. No daemon at all reads "no daemon (runs sit queued)".
-- **server endpoint** — the HTTP/SSE bind, if a server is up. Operator forensics don't use it; it's informational.
+- **daemon** — the lock row checked against the process it names (`kill(pid, 0)`, same host only; a foreign-host row is shown unprobed). `alive (Ns)` = live pid, fresh heartbeat (`DAEMON_LOCK_TTL_MS = 30_000`). `alive, heartbeat stale Ns (host slept? …)` = live pid whose heartbeat lapsed; the harness re-asserts it on its next tick. `dead (pid N gone; stale lock, …)` = crashed holder; `running` runs are orphaned until a harness evicts the lock and sweeps them. `running without a lock: pid N` = no row, but the newest `daemon.started` pid is still alive. `no daemon (runs sit queued)` = nothing running. `harness pid M` names the supervising harness.
+- **server endpoint** — the HTTP/SSE bind checked against its pid: `<url> alive`, `dead (pid N gone; stale endpoint)`, `running without an endpoint row: harness pid M`, or `none`. Operator forensics don't use it; it's informational.
 - **provider summary** — credentialed providers at a glance.
 
 A stale or absent daemon is the usual root cause of "stuck" runs: `queued` runs never dispatch, and `running` runs sit orphaned until a daemon reclaims the lock.

@@ -102,13 +102,56 @@ describe("v7 ↔ v8 — run_state.claim_epoch", () => {
   test("v7→v8 adds run_state.claim_epoch and down drops it", () => {
     const db = freshDb();
     migrate(db);
-    expect(CURRENT_SCHEMA_VERSION).toBe(8);
+    expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(8);
     expect(cols(db)).toContain("claim_epoch");
     expect(planMigration(8, 7).steps).toEqual([{ version: 8, class: "full" }]);
     migrateTo(db, 7);
     expect(cols(db)).not.toContain("claim_epoch");
     migrate(db);
     expect(cols(db)).toContain("claim_epoch");
+    db.close();
+  });
+});
+
+describe("v8 ↔ v9 — daemon_lock.harness_pid + server_endpoint.hostname", () => {
+  const cols = (db: Database, table: string) =>
+    db
+      .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+      .all()
+      .map((c) => c.name);
+
+  test("v8→v9 adds harness_pid and server hostname; down drops them without data loss", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(CURRENT_SCHEMA_VERSION).toBe(9);
+    expect(cols(db, "daemon_lock")).toContain("harness_pid");
+    expect(cols(db, "server_endpoint")).toContain("hostname");
+    expect(planMigration(9, 8).steps).toEqual([{ version: 9, class: "full" }]);
+
+    db.query(
+      "INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at, harness_pid) VALUES (1, 41, 'h', 10, 20, 7)",
+    ).run();
+    db.query(
+      "INSERT INTO server_endpoint (id, url, port, pid, started_at, harness_version, hostname) VALUES (1, 'u', 1, 7, 10, 'v', 'h')",
+    ).run();
+
+    migrateTo(db, 8);
+    expect(cols(db, "daemon_lock")).not.toContain("harness_pid");
+    expect(cols(db, "server_endpoint")).not.toContain("hostname");
+
+    migrate(db);
+    expect(cols(db, "daemon_lock")).toContain("harness_pid");
+    expect(cols(db, "server_endpoint")).toContain("hostname");
+    const lock = db
+      .query<{ pid: number; hostname: string; heartbeat_at: number; harness_pid: number | null }, []>(
+        "SELECT pid, hostname, heartbeat_at, harness_pid FROM daemon_lock WHERE id = 1",
+      )
+      .get();
+    expect(lock).toEqual({ pid: 41, hostname: "h", heartbeat_at: 20, harness_pid: null });
+    const endpoint = db
+      .query<{ url: string; pid: number }, []>("SELECT url, pid FROM server_endpoint WHERE id = 1")
+      .get();
+    expect(endpoint).toEqual({ url: "u", pid: 7 });
     db.close();
   });
 });

@@ -22,6 +22,7 @@ import chalk from "chalk";
 import { loadConfig, resolveEnvPassthrough, resolveProjectBootstrap, resolveTimeouts } from "../config.ts";
 import { buildProviderCredentialContext, daemonEnvAllow } from "../env-creds.ts";
 import { buildExecutorDeps, type SummariserInfo } from "../executor-deps.ts";
+import { probePidState } from "../pid-probe.ts";
 
 /**
  * Poll interval for `fragua daemon stop` — how often we check whether
@@ -56,6 +57,14 @@ export async function daemonStopCommand(opts: { cwd?: string; dbPath?: string } 
     if (lock.hostname !== hostnameSafe()) {
       console.error(
         chalk.yellow(`daemon lock held by pid=${pid} on host=${lock.hostname} — can't SIGTERM across hosts`),
+      );
+      return 1;
+    }
+    if (lock.harnessPid !== null && probePidState(lock.harnessPid) === "alive") {
+      console.error(
+        chalk.yellow(
+          `daemon pid=${pid} is supervised by harness pid=${lock.harnessPid} — stopping the child only restarts it; stop the harness (kill ${lock.harnessPid} / Ctrl-C)`,
+        ),
       );
       return 1;
     }

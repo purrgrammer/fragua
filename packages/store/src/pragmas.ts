@@ -16,8 +16,10 @@ import type { Database } from "bun:sqlite";
  * v7 adds `run_state.in_checkout` / `checkout_path` / `checkout_released`
  * (`fragua run --checkout`) and the `idx_run_state_checkout` index.
  * v8 adds `run_state.claim_epoch` (the dispatch-ownership fence; bookkeeping,
- * never folded, so no `EVENT_CONTRACT_VERSION` bump). */
-export const CURRENT_SCHEMA_VERSION = 8;
+ * never folded, so no `EVENT_CONTRACT_VERSION` bump).
+ * v9 adds `daemon_lock.harness_pid` and `server_endpoint.hostname` (liveness
+ * attribution for `doctor` / `daemon stop`; bookkeeping, never folded). */
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */
