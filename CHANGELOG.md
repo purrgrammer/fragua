@@ -18,6 +18,7 @@ guarantee.
 
 ### Changed
 
+- **New validator error E058: a `${{ … }}` token in a `tool` `run:` inside single quotes**, after a backslash, in backticks, a `#` comment, a heredoc body, `$'…'` or `$((…))`. Workflows that pre-quoted `'${{ inputs.x }}'` must drop the quotes or switch to double quotes; a token in an unsafe position that reaches runtime fails the step.
 - **MCP connections are reused across dispatches of the same step.** A retried, resumed or self-looping `llm` step with `mcp-servers:` keeps its server connection instead of respawning and re-handshaking on every dispatch; it closes when the run moves to another step, terminates, idles 10 minutes, or the daemon stops. A dead server is re-spawned on the next dispatch.
 - **Event contract v7, schema v7.** The genesis `intent.run_enqueued` gains an optional `baseHeadSha`, seeded onto the new `run_state.base_head_sha` column, and an optional `inCheckout`. `intent.accept_run` / `fact.run_accepted` gain an optional `landedUnstaged`; `fact.run_started` gains an optional `baseHeadSha`; the new `intent.checkout_release` / `fact.checkout_released` pair records a release. Schema v7 adds `run_state.in_checkout`, `checkout_path` and `checkout_released`. Runs pinned at v1–v6 fold unchanged.
 - **Schema v8.** Adds `run_state.claim_epoch`, the run's dispatch-ownership counter; the event contract is unchanged.
@@ -25,10 +26,12 @@ guarantee.
 
 ### Fixed
 
+- **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.
 - **A daemon that loses its `daemon_lock` shuts down instead of running unlocked.** The heartbeat now reports whether the row is still its own; when it is not (evicted as stale after the host slept, stopped by an operator, taken over), the daemon stops with `reason: lock_lost` and the harness respawns it. `fragua doctor` no longer reports "no daemon" while a daemon is executing runs.
 - **The harness reaper never evicts its own live child**, however stale its heartbeat reads; a stale heartbeat on a live child is reported instead.
 - **A second harness refuses to start beside a live daemon on the same host**, and `fragua serve` no longer overwrites a `server_endpoint` row published by a live process, so the first instance stays discoverable.
 - **`fragua import` validates every artifact row.** A bundle's `artifacts.jsonl` is shape-checked before the write, its `blobSha` must be a sha256, and it must name a blob the bundle itself carries. A crafted sha can no longer land a path in the artifact index, and an imported run can no longer point at another run's blob already in the store.
+- **`fragua import` verifies before it writes.** Each workflow source must hash to its sha, and its IR is re-derived from that source rather than taken from the bundle, so a bundle can no longer plant a workflow under another workflow's sha. A run that already exists locally without the import marker is refused instead of having the bundle's events appended into it. A later bundle of an imported run extends its log and refreshes its status and `next_seq`; a bundle that disagrees with the stored log is refused.
 - **Negative numeric query params fall back to their defaults.** `GET /runs/:id/events?limit=-1` now returns the default 1000-event page instead of an unbounded scan, `?since=-1` reads from the start, and `/metrics/global?windowHours=-1` uses the 30-day default window instead of an empty future one.
 - **A stale executor can no longer re-run a step after crash recovery.** Once a run is requeued (startup sweep or reaper) and claimed again, the fiber that held it can't commit any further fact, so it exits without dispatching the node a second time or halting the run.
 - **A run whose halt keeps losing write races is requeued instead of left `running`.** When even the `occ_exhausted` halt can't land, the executor gives the run back to the queue with `fact.run_requeued_after_crash`.

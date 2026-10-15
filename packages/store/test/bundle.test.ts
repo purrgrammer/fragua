@@ -25,7 +25,7 @@ import {
   scrubEventPayload,
   writeTar,
 } from "../src/index.ts";
-import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
+import { freshStore, seedHashedWorkflow, seedRun } from "./helpers.ts";
 
 function untar(bytes: Uint8Array, dir: string): void {
   const tarPath = join(dir, "bundle.tar");
@@ -38,7 +38,7 @@ function untar(bytes: Uint8Array, dir: string): void {
  *  drive a terminal run: started → snapshot → completed + a message + artifact. */
 async function seedTerminalRun(store: ReturnType<typeof freshStore>): Promise<string> {
   // A realistic content-hash workflow sha - import shape-gates it as a sha256.
-  const sha = await seedWorkflow(store, "a".repeat(64));
+  const sha = await seedHashedWorkflow(store, "a");
   const runId = newRunId();
   store.enqueueRun({
     runId,
@@ -180,7 +180,7 @@ describe("exportRunBundle", () => {
     const TOKEN = "mcp-oauth-access-DO-NOT-LEAK-0123456789abcdef";
     store.upsertMcpOAuth("https://mcp.example.com/mcp", JSON.stringify({ tokens: { access_token: TOKEN } }));
     // A run whose routing input embeds the token (a scrubbed export surface).
-    const sha = await seedWorkflow(store, "b".repeat(64));
+    const sha = await seedHashedWorkflow(store, "b");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -256,7 +256,7 @@ describe("importRunBundle", () => {
 
   test("round-trips baseHeadSha through export/import", async () => {
     const src = freshStore();
-    const sha = await seedWorkflow(src, "a".repeat(64));
+    const sha = await seedHashedWorkflow(src, "a");
     const runId = newRunId();
     const s = "5".repeat(40);
     const head = "4".repeat(40);
@@ -285,7 +285,7 @@ describe("importRunBundle", () => {
 
   test("round-trips inCheckout and leaves checkout_path null", async () => {
     const src = freshStore();
-    const sha = await seedWorkflow(src, "b".repeat(64));
+    const sha = await seedHashedWorkflow(src, "b");
     const runId = newRunId();
     const key = "/home/dev/feature-wt";
     src.enqueueRun({
@@ -330,7 +330,7 @@ describe("importRunBundle", () => {
     // A bundle of a NOT-yet-started source run derives to status `queued` with a
     // null cwd. The marker - not the null cwd - is what holds it out of dispatch.
     const src = freshStore();
-    const sha = await seedWorkflow(src, "a".repeat(64));
+    const sha = await seedHashedWorkflow(src, "a");
     const runId = newRunId();
     src.enqueueRun({ runId, workflowSha: sha, cwd: "/somewhere", initialRouting: { input: "x" } });
     const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "x" });
@@ -800,7 +800,7 @@ describe("exportRunBundle - retained read-plane anchors", () => {
   }
 
   async function seedLlmRun(store: ReturnType<typeof freshStore>): Promise<string> {
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -965,7 +965,7 @@ describe("exportRunBundle - retained read-plane anchors", () => {
       kind: "api_key",
       payload: JSON.stringify({ type: "api_key", key: SECRET }),
     });
-    const sha = await seedWorkflow(src, "a".repeat(64));
+    const sha = await seedHashedWorkflow(src, "a");
     const runId = newRunId();
     src.enqueueRun({
       runId,
@@ -1076,7 +1076,7 @@ describe("exportRunBundle - message transcript scrubbing", () => {
 
   /** Seed a run whose single message contains all three secret varieties. */
   async function seedRunWithSecrets(store: ReturnType<typeof freshStore>): Promise<string> {
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -1172,14 +1172,14 @@ describe("exportRunBundle - message transcript scrubbing", () => {
   });
 
   test("(d) scrubJsonStrings recurses into nested content arrays", async () => {
-    const sha = await seedWorkflow(freshStore(), "a".repeat(64));
+    const sha = await seedHashedWorkflow(freshStore(), "a");
     const store = freshStore();
-    const sha2 = await seedWorkflow(store, "a".repeat(64));
+    const sha2 = await seedHashedWorkflow(store, "a");
     void sha;
     void sha2;
     // Build a store with a deeply-nested tool_result message.
     const store2 = freshStore();
-    const sha3 = await seedWorkflow(store2, "a".repeat(64));
+    const sha3 = await seedHashedWorkflow(store2, "a");
     const runId = newRunId();
     store2.enqueueRun({
       runId,
@@ -1280,7 +1280,7 @@ describe("exportRunBundle - event payload scrubbing (surfaces 5-6)", () => {
 
   /** Seed a run with events carrying secrets in every targeted surface. */
   async function seedRunWithEventSecrets(store: ReturnType<typeof freshStore>): Promise<string> {
-    const sha = await seedWorkflow(store, "b".repeat(64));
+    const sha = await seedHashedWorkflow(store, "b");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -1570,7 +1570,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
   async function seedRunWithArtifactSecrets(
     store: ReturnType<typeof freshStore>,
   ): Promise<{ runId: string; origTextSha: string; origBinSha: string }> {
-    const sha = await seedWorkflow(store, "c".repeat(64));
+    const sha = await seedHashedWorkflow(store, "c");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -1742,7 +1742,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
 
   test("(f) application/json artifact is treated as text-ish and scrubbed", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "d".repeat(64));
+    const sha = await seedHashedWorkflow(store, "d");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, initialRouting: { input: "x" } });
     store.upsertProviderCredential({
@@ -1779,7 +1779,7 @@ describe("exportRunBundle - artifact blob scrubbing with re-CAS", () => {
 
   test("(g) two text artifacts scrubbing to the same bytes dedupe to one blob", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "e".repeat(64));
+    const sha = await seedHashedWorkflow(store, "e");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, initialRouting: { input: "x" } });
     store.upsertProviderCredential({
@@ -1847,7 +1847,7 @@ describe("exportRunBundle — spilled routing.inputs blob scrub + travel", () =>
   async function seedRunWithSpilledInput(
     store: ReturnType<typeof freshStore>,
   ): Promise<{ runId: string; origRefSha: string }> {
-    const sha = await seedWorkflow(store, "f".repeat(64));
+    const sha = await seedHashedWorkflow(store, "f");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -1990,7 +1990,7 @@ describe("exportRunBundle — spilled routing.inputs blob scrub + travel", () =>
 
   test("(g) routing blob and same-content artifact blob deduplicate to one tar entry", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "g".repeat(64));
+    const sha = await seedHashedWorkflow(store, "g");
     const runId = newRunId();
     // Use LARGE_VALUE as both the spilled routing input AND the artifact content
     // so they hash to the same orig sha before scrubbing.
@@ -2055,7 +2055,7 @@ describe("exportRunBundle - ci profile", () => {
   const ENV_TOKEN = "ci-token-value-ABCDEFGHIJ12345678";
 
   async function seedRunWithMessage(store: ReturnType<typeof freshStore>, text: string): Promise<string> {
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -2117,7 +2117,7 @@ describe("exportRunBundle - ci profile", () => {
 
   test("(b2) liveLiteralHit=true when a CI env secret is verbatim in a BINARY artifact", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
     // Seed the env secret as an extraLiteral needle.
@@ -2162,7 +2162,7 @@ describe("exportRunBundle - ci profile", () => {
   test("(d) liveLiteralHit=true when a provider-cred value is verbatim in a BINARY artifact blob", async () => {
     const store = freshStore();
     // Seed the provider cred as the literal needle (same as CRED_SECRET in seedRunWithMessage).
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
     store.upsertProviderCredential({
@@ -2218,7 +2218,7 @@ describe("exportRunBundle - ci profile", () => {
 
   test("(g) liveLiteralHit=false when the binary blob is clean", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, cwd: CWD, initialRouting: { input: "seed" } });
     store.upsertProviderCredential({
@@ -2254,7 +2254,7 @@ describe("exportRunBundle - export profile (default)", () => {
   const CRED_SECRET = "sk-ant-test-secretABCDEFGHIJ0123456789";
 
   async function seedRunWithCred(store: ReturnType<typeof freshStore>): Promise<string> {
-    const sha = await seedWorkflow(store, "a".repeat(64));
+    const sha = await seedHashedWorkflow(store, "a");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -2324,7 +2324,7 @@ describe("exportRunBundle — reason and route fields are scrubbed", () => {
   }
 
   async function seedRunWithReasonRoute(store: ReturnType<typeof freshStore>): Promise<string> {
-    const sha = await seedWorkflow(store, "f".repeat(64));
+    const sha = await seedHashedWorkflow(store, "f");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -2480,7 +2480,7 @@ describe("(bug-7) application/json artifact scrubs values, keeps keys and valid 
 
   test("JSON artifact: secret in value is scrubbed; key is preserved; result is valid JSON", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "g".repeat(64));
+    const sha = await seedHashedWorkflow(store, "g");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -2558,7 +2558,7 @@ describe("(bug-7) application/json artifact scrubs values, keeps keys and valid 
 
   test("JSON artifact: secret that is also the JSON KEY is scrubbed from value; key form is NOT altered", async () => {
     const store = freshStore();
-    const sha = await seedWorkflow(store, "h".repeat(64));
+    const sha = await seedHashedWorkflow(store, "h");
     const runId = newRunId();
     store.enqueueRun({
       runId,
@@ -2638,7 +2638,7 @@ describe("structured outputs ↔ bundle", () => {
     store: ReturnType<typeof freshStore>,
     outputs: Record<string, unknown>,
   ): Promise<string> {
-    const sha = await seedWorkflow(store, "c".repeat(64));
+    const sha = await seedHashedWorkflow(store, "c");
     const runId = newRunId();
     store.enqueueRun({ runId, workflowSha: sha, cwd: "/home/dev/p", initialRouting: { input: "x" } });
     let v = store.getState(runId)!.version;

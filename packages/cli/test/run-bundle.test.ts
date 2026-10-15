@@ -8,11 +8,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, newRunId, SqliteStore, writeTar } from "@fragua/store";
+import { CURRENT_IR_VERSION, parseWorkflow, serializeGraph } from "@fragua/core";
+import { canonicalJson, newRunId, SqliteStore, sha256Hex, writeTar } from "@fragua/store";
 import { exportCommand, importCommand } from "../src/commands/run-bundle.ts";
 import { showCommand } from "../src/commands/show.ts";
 
-const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
+const WF_SOURCE = "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n";
 const dirs: string[] = [];
 
 function freshDir(): string {
@@ -26,8 +27,8 @@ function freshDir(): string {
 function seedStore(dir: string): { dbPath: string; runId: string } {
   const dbPath = join(dir, "store.db");
   const store = new SqliteStore({ path: dbPath });
-  const sha = "a".repeat(64); // realistic content-hash sha — import shape-gates it
-  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x, next: exit}\n", STUB_IR, 1);
+  const sha = sha256Hex(WF_SOURCE); // import verifies the sha against the source
+  store.saveWorkflow(sha, "test", WF_SOURCE, serializeGraph(parseWorkflow(WF_SOURCE)), CURRENT_IR_VERSION);
   const runId = newRunId();
   store.enqueueRun({ runId, workflowSha: sha, priority: 0 });
   store.putArtifact({ runId, nodeId: "work", iteration: 0, key: "out" }, new TextEncoder().encode("hello-bytes"));
