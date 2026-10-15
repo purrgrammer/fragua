@@ -383,8 +383,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // both stay safe and mean what it reads as. Inside `'…'` the author asked
   // for no expansion, so substituting there misleads the reader (the runtime
   // still escapes it as a backstop for graphs that skip validation). After a
-  // backslash, in backticks, a comment, a heredoc body, `$'…'` or `$((…))` no
-  // escape keeps the value inert, and the tool handler fails the node.
+  // backslash, directly after a literal `$`, in backticks, a comment, a
+  // heredoc body, `$'…'` or `$((…))` no escape keeps the value inert, and the
+  // tool handler fails the node.
   for (const n of nodes) {
     if (n.type !== "tool") continue;
     const cmd = n.attrs.tool_command;

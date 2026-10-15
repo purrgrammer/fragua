@@ -36,6 +36,7 @@ guarantee.
 
 ### Fixed
 
+- **A `tool` `run:` line with a literal `$` before a token (`$${{ … }}`) is now rejected** (E058 at save, a failed step at runtime), since the `$` would turn the escaped value into `$(…)`, `$'…'` or a variable expansion.
 - **A long provider `Retry-After` now auto-retries instead of pausing for an operator.** A rate-limit or overload error asking for a delay longer than the SDK's 60s in-process limit is retried at the requested time, up to 6h (config `provider-retry-after-max-ms`), without counting toward the 5-minute retry budget. `runs status` and the run page show `retrying at <time> (provider asked for 3h25m)`; a request above the cap pauses with a reason naming both durations.
 - **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.
 - **A provider pause keeps the turn's spend.** Cost recorded before a `payment_required` / `provider_error` / `provider_retry` pause now lands on a `fact.node_aborted` and counts toward run totals and budgets.
