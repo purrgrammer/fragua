@@ -7,6 +7,13 @@
 // cap the run halts with `reason="provider_exhausted"` instead of
 // burning more retries.
 //
+// A provider-requested `Retry-After` is honoured exactly up to
+// `PROVIDER_RETRY_AFTER_MAX_MS` (default 6h, daemon config
+// `provider-retry-after-max-ms`): it costs one attempt and never counts
+// toward the cumulative-ms cap. A longer request is a manual pause whose
+// `detail` names the requested delay and the cap. The SDK owns waits up to
+// its own 60s ceiling; the daemon owns everything longer.
+//
 // The chain count survives manual `intent.resume` (the "continue chain"
 // decision from the brainstorm): if an operator manually resumes after
 // attempt 3 and the next call 429s, that's attempt 4. The chain resets
@@ -44,16 +51,21 @@ export const PROVIDER_RETRY_MAX_ATTEMPTS = 5;
 export const PROVIDER_RETRY_MAX_CUMULATIVE_MS = 5 * 60 * 1000;
 export const PROVIDER_RETRY_BASE_BACKOFF_MS = 1_000;
 export const PROVIDER_RETRY_MAX_EXPONENTIAL_MS = 32 * 1000;
+export const PROVIDER_RETRY_AFTER_MAX_MS = 6 * 60 * 60 * 1000;
 
 export interface RetryDecision {
   kind: "auto-retry";
   attempt: number;
   delayMs: number;
   resumeAt: number;
+  /** Set when `delayMs` is the provider's own Retry-After. */
+  retryAfterMs?: number;
 }
 
 export interface ManualDecision {
   kind: "manual";
+  /** Why an otherwise auto-retryable failure went manual (Retry-After over the cap). */
+  detail?: string;
 }
 
 export interface ExhaustedDecision {
@@ -83,6 +95,9 @@ export interface DecideProviderRetryOpts {
   cumulativeDelayMs: number;
   /** PRNG for equal jitter — injectable for deterministic tests. */
   random?: () => number;
+  /** Longest provider Retry-After the daemon waits out on its own.
+   * Defaults to `PROVIDER_RETRY_AFTER_MAX_MS`. */
+  retryAfterMaxMs?: number;
 }
 
 /**
@@ -96,6 +111,13 @@ export interface DecideProviderRetryOpts {
 export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetryDecision {
   if (!isAutoRetryableStatus(opts.httpStatus)) {
     return { kind: "manual" };
+  }
+  const retryAfterMaxMs = opts.retryAfterMaxMs ?? PROVIDER_RETRY_AFTER_MAX_MS;
+  if (opts.retryAfterMs !== undefined && opts.retryAfterMs > retryAfterMaxMs) {
+    return {
+      kind: "manual",
+      detail: `provider requested a ${formatDelayMs(opts.retryAfterMs)} retry delay, above the ${formatDelayMs(retryAfterMaxMs)} auto-retry cap`,
+    };
   }
   const nextAttempt = opts.priorAttempt + 1;
   if (nextAttempt > PROVIDER_RETRY_MAX_ATTEMPTS) {
@@ -117,7 +139,19 @@ export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetr
     attempt: nextAttempt,
     delayMs,
     resumeAt: opts.now + delayMs,
+    ...(opts.retryAfterMs !== undefined ? { retryAfterMs: opts.retryAfterMs } : {}),
   };
+}
+
+/** Compact duration for operator-facing text: `3h25m`, `12m`, `45s`. */
+export function formatDelayMs(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.round(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h${minutes}m`;
 }
 
 /**

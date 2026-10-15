@@ -30,7 +30,9 @@ export {
   effectiveProviderHttpStatus,
   extractHttpStatusFromErrorMessage,
   isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isTransientTransportErrorMessage,
+  parseSdkRetryDelay,
   TRANSIENT_TRANSPORT_STATUS,
 } from "./provider-errors.ts";
 export { deriveRunEnv } from "./transcript.ts";

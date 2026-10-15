@@ -30,6 +30,7 @@ guarantee.
 
 ### Fixed
 
+- **A long provider `Retry-After` now auto-retries instead of pausing for an operator.** A rate-limit or overload error asking for a delay longer than the SDK's 60s in-process limit is retried at the requested time, up to 6h (config `provider-retry-after-max-ms`), without counting toward the 5-minute retry budget. `runs status` and the run page show `retrying at <time> (provider asked for 3h25m)`; a request above the cap pauses with a reason naming both durations.
 - **A substituted value can no longer run commands from inside a quoted `tool` `run:` string.** Each `${{ inputs.* }}` / `${{ outputs.* }}` value is now escaped for the quoting it sits in (bare, `"…"`, `'…'`) instead of always being single-quoted, so `$(…)` or backticks in a value inside `"…"` or `'…'` stay literal text.
 - **A daemon that loses its `daemon_lock` shuts down instead of running unlocked.** The heartbeat now reports whether the row is still its own; when it is not (evicted as stale after the host slept, stopped by an operator, taken over), the daemon stops with `reason: lock_lost` and the harness respawns it. `fragua doctor` no longer reports "no daemon" while a daemon is executing runs.
 - **The harness reaper never evicts its own live child**, however stale its heartbeat reads; a stale heartbeat on a live child is reported instead.

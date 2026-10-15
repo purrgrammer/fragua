@@ -181,6 +181,28 @@ describe("schedule-dispatcher", () => {
     expect(sched.lastRunId).not.toBe(priorRun); // a fresh run was minted
   });
 
+  test("overlap=skip skips the fire while the prior run is paused_auto (provider_retry)", () => {
+    f.writeWorkflow("wf", TRIVIAL_YAML);
+    const sha = "wf_sha_auto";
+    f.store.saveWorkflow(sha, "wf", TRIVIAL_YAML, serializeGraph(parseWorkflow(TRIVIAL_YAML)), CURRENT_IR_VERSION);
+    const priorRun = "run_prior_auto";
+    f.store.enqueueRun({ runId: priorRun, workflowSha: sha, scheduleId: "sch_auto" });
+    appendProviderRetryPause(f.store, priorRun, f.now + 3 * HOUR_MS);
+    expect(f.store.getState(priorRun)!.status).toBe("paused_auto");
+
+    f.store.createSchedule(
+      { id: "sch_auto", workflowRef: "wf", cwd: f.cwd, intervalMs: HOUR_MS, intervalText: "1h" },
+      f.now,
+    );
+    f.store.recordScheduleFire("sch_auto", priorRun, f.now);
+    f.setNow(f.now + HOUR_MS);
+
+    const out = f.tick();
+    expect(out.fired).toBe(0);
+    expect(out.skipped).toBe(1);
+    expect(f.store.getSchedule("sch_auto")!.lastRunId).toBe(priorRun);
+  });
+
   test("queue overlap policy fires regardless of in-flight last run", () => {
     f.writeWorkflow("wf", TRIVIAL_YAML);
     const sha = "wf_sha_q";
@@ -450,5 +472,42 @@ function appendQuarantine(store: IEventStore, runId: string): void {
     runId,
     [{ type: "fact.run_quarantined", payload: { reason: "orphan_side_effect" } } as FactEvent],
     v,
+  );
+}
+
+/** Walk a run to `paused_auto` via a provider auto-retry pause (the daemon owes
+ *  it a wake at `resumeAt`), so overlap=skip must treat it as in flight. */
+function appendProviderRetryPause(store: IEventStore, runId: string, resumeAt: number): void {
+  const state = store.getState(runId);
+  if (state == null) throw new Error(`unknown run ${runId}`);
+  const started = store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: { workflowSha: state.workflowSha, contractVersion: state.contractVersion, startNode: "a" },
+      } as FactEvent,
+    ],
+    state.version,
+  );
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_paused",
+        payload: {
+          reason: "provider_retry",
+          nodeId: "a",
+          httpStatus: 429,
+          provider: "anthropic",
+          errorMessage: "rate limited",
+          attempt: 1,
+          resumeAt,
+          retryAfterMs: 3 * 60 * 60 * 1000,
+        },
+      },
+    ],
+    started.newVersion,
+    { routingPatch: { "internal.auto_resume_at": resumeAt } },
   );
 }

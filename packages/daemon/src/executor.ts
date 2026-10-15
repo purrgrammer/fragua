@@ -32,6 +32,7 @@ import { type GraphLoader, makeGraphLoader } from "./graph-loader.ts";
 import { planCrashHalt } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, HALT_APPEND_MAX_ATTEMPTS, makeOccController, type OccController } from "./occ-append.ts";
 import { processOperatorActions } from "./operator-actions.ts";
+import { PROVIDER_RETRY_AFTER_MAX_MS } from "./provider-retry-policy.ts";
 import { create as createTurnState } from "./run-turn-state.ts";
 import { disposeTerminalWorktree } from "./snapshot-service.ts";
 import { wakePending } from "./wake-pending.ts";
@@ -121,6 +122,10 @@ export interface ExecutorOpts {
    * event fires one abort before the limit so the trend is visible
    * before the halt lands. */
   abortLoopCeiling?: number;
+  /** Longest provider Retry-After (ms) the daemon waits out as an
+   * auto-retry; a longer request pauses for the operator. Defaults to
+   * `PROVIDER_RETRY_AFTER_MAX_MS` (6h). */
+  providerRetryAfterMaxMs?: number;
   /** Wall-clock provider for timestamps that land in persistent state
    * (e.g. `fact.handler_timeout_leaked.payload.leakedAt`). Defaults to
    * `Date.now`. Tests pin a fake clock here when they want hermetic
@@ -332,6 +337,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, epoch: number, lea
     leakGrace: opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS,
     maxLoops: opts.maxLoops ?? DEFAULT_MAX_LOOPS,
     abortLoopCeiling: opts.abortLoopCeiling ?? DEFAULT_ABORT_LOOP_CEILING,
+    providerRetryAfterMaxMs: opts.providerRetryAfterMaxMs ?? PROVIDER_RETRY_AFTER_MAX_MS,
     fanoutBranchTimeoutMs: opts.fanoutBranchTimeoutMs ?? DEFAULT_FANOUT_BRANCH_TIMEOUT_MS,
     clock: opts.clock ?? Date.now,
     random: opts.random ?? Math.random,

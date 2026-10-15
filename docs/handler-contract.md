@@ -161,7 +161,7 @@ return {
 };
 ```
 
-`retryAfterMs` carries the provider's `Retry-After` header (or its in-body equivalent) normalised to milliseconds. When set, the daemon's auto-retry policy honours it exactly — no jitter, no exponential cap. Absent → the daemon falls back to its own equal-jitter exponential schedule (`exp/2 + random()*exp/2`, so each attempt waits at least half its exponential). Source: `packages/core/src/handler/types.ts` (the `kind: "pause_provider"` arm).
+`retryAfterMs` carries the provider's `Retry-After` header (or its in-body equivalent) normalised to milliseconds. The llm backend also recovers it from the SDK's `Server requested <N>s retry delay (max: 60s). <provider message>` rejection (the SDK refuses to wait longer than 60s in-process), together with the status from the trailing provider message (default 429). When set, the daemon's auto-retry policy honours it exactly — no jitter, no exponential cap — up to the daemon's Retry-After cap (default 6h, config `provider-retry-after-max-ms`); above the cap the run pauses as `provider_error` with a `detail` naming the requested delay and the cap. Absent → the daemon falls back to its own equal-jitter exponential schedule (`exp/2 + random()*exp/2`, so each attempt waits at least half its exponential). Source: `packages/core/src/handler/types.ts` (the `kind: "pause_provider"` arm).
 
 ---
 

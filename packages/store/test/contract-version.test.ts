@@ -51,6 +51,8 @@ const SURFACE_DECLS = [
   // a READ-surface restoration, not an emission change: v4 still emits only
   // run_terminated / run_paused, so EVENT_CONTRACT_VERSION stays 4 and
   // MIN_COMPATIBLE stays 1 (write-new, read-all).
+  // contract: no-bump — optional `detail` / `retryAfterMs` diagnostics added to
+  // run_paused / node_retry_scheduled payloads; nothing in the fold reads them.
   "FactEvent",
 ] as const;
 

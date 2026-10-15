@@ -26,6 +26,7 @@ import {
   BLOCKED_STATUSES,
   budgetCommand,
   cancelCommand,
+  describePause,
   discardCommand,
   eventsCommand,
   goalGateCommand,
@@ -574,6 +575,72 @@ describe("fragua operator verbs", () => {
     const out = logs.join("\n");
     expect(out).toContain(`requeued after daemon crash at ${new Date(requeueTs).toISOString()}`);
     expect(out).toContain("was at node n1");
+  });
+
+  test('status renders a provider_retry pause as "retrying at <time> (provider asked for 3h25m)"', async () => {
+    seedQueued(r.store, "rpr");
+    const s0 = r.store.getState("rpr")!;
+    r.store.appendFact(
+      "rpr",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", contractVersion: s0.contractVersion, startNode: "n1" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rpr")!;
+    const resumeAt = Date.now() + 12_311_000;
+    r.store.appendFact(
+      "rpr",
+      [
+        {
+          type: "fact.run_paused",
+          payload: {
+            reason: "provider_retry",
+            nodeId: "n1",
+            httpStatus: 429,
+            provider: "anthropic",
+            errorMessage: "rate limited",
+            attempt: 1,
+            resumeAt,
+            retryAfterMs: 12_311_000,
+          },
+        },
+      ],
+      s1.version,
+      { routingPatch: { "internal.auto_resume_at": resumeAt } },
+    );
+    const logs: string[] = [];
+    (console.log as unknown as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const code = await statusCommand({ runId: "rpr", dbPath: r.dbPath });
+    expect(code).toBe(0);
+    const out = logs.join("\n");
+    expect(out).toContain("paused_auto");
+    expect(out).toContain("retrying at");
+    expect(out).toContain("provider asked for 3h25m");
+    expect(out).toContain("attempt 1");
+  });
+
+  test("describePause names the cap on an over-cap provider_error and falls back to null elsewhere", () => {
+    expect(
+      describePause(
+        { reason: "provider_error", detail: "provider requested a 7h retry delay, above the 6h auto-retry cap" },
+        0,
+      ),
+    ).toBe("provider requested a 7h retry delay, above the 6h auto-retry cap");
+    const manual401 = { reason: "provider_error", httpStatus: 401 };
+    const operatorPause = { reason: "operator", nodeId: "n1" };
+    expect(describePause(manual401, 0)).toBeNull();
+    expect(describePause(operatorPause, 0)).toBeNull();
+    const now = Date.now();
+    expect(describePause({ reason: "provider_retry", resumeAt: now + 60_000, attempt: 2 }, now)).toMatch(
+      /^retrying at .+ · attempt 2$/,
+    );
   });
 
   test("status: no crash-requeue fact → no requeue line", async () => {

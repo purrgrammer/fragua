@@ -67,6 +67,9 @@ export interface DaemonMainOpts {
    * run halts with `reason: "abort_loop"`. Defaults to the executor's
    * built-in (5). */
   abortLoopCeiling?: number;
+  /** Longest provider Retry-After (ms) auto-retried before the run pauses
+   * for the operator. Defaults to the executor's built-in (6h). */
+  providerRetryAfterMaxMs?: number;
   /** Interval (ms) between background `gcBlobs` sweeps. Defaults to 6h.
    * Set to 0 to disable the background sweep entirely (operator runs
    * `fragua db gc` manually). */
@@ -234,6 +237,9 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.maxLoops !== undefined) executorOpts.maxLoops = opts.maxLoops;
       if (opts.maxLeakedHandlers !== undefined) executorOpts.maxLeakedHandlers = opts.maxLeakedHandlers;
       if (opts.abortLoopCeiling !== undefined) executorOpts.abortLoopCeiling = opts.abortLoopCeiling;
+      if (opts.providerRetryAfterMaxMs !== undefined) {
+        executorOpts.providerRetryAfterMaxMs = opts.providerRetryAfterMaxMs;
+      }
       // When too many handlers leak, trip the shutdown controller so the
       // outer drain takes over. The daemon singleton + startup sweep
       // recovers stuck runs when a fresh daemon takes over.
