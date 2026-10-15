@@ -13,7 +13,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import type { SnapshotResult } from "../src/snapshotter.ts";
 import { wakePending } from "../src/wake-pending.ts";
-import type { Provisioner } from "../src/worktree-provisioner.ts";
+import type { Provisioner, ProvisionOpts } from "../src/worktree-provisioner.ts";
 import { enqueue, registerTerminalEcho, rig, type TestRig } from "./helpers.ts";
 
 function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEnvironment {
@@ -32,6 +32,7 @@ function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEn
 
 class RecordingProvisioner implements Provisioner {
   ensureCalls: string[] = [];
+  ensureOpts: Array<ProvisionOpts | undefined> = [];
   disposeCalls: Array<{ runId: string }> = [];
   private readonly envs = new Map<string, ExecutionEnvironment>();
   constructor(
@@ -42,8 +43,9 @@ class RecordingProvisioner implements Provisioner {
       snapshotResult?: SnapshotResult | null;
     } = {},
   ) {}
-  async ensure(runId: string): Promise<ExecutionEnvironment> {
+  async ensure(runId: string, opts?: ProvisionOpts): Promise<ExecutionEnvironment> {
     this.ensureCalls.push(runId);
+    this.ensureOpts.push(opts);
     const cached = this.envs.get(runId);
     if (cached) return cached;
     const env = this.make(runId);
@@ -130,6 +132,45 @@ describe("executor + worktree provisioner", () => {
 
     const state = r.store.getState("run-sha");
     expect(state?.baseGitSha).toBe("deadbeef0123456789abcdef0123456789abcdef");
+    expect(state?.baseGitRef).toBe("main");
+
+    r.store.close();
+  });
+
+  test("an enqueue-recorded base pins provisioning and wins over the provisioner's re-read on fact.run_started", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    const recorded = "a".repeat(40);
+    r.store.enqueueRun({
+      runId: "run-pinned",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start" },
+      baseGitSha: recorded,
+      baseGitRef: "main",
+    });
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
+      baseGitSha: "b".repeat(40),
+      baseGitRef: "feat",
+    });
+    await runOne("run-pinned", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: new AbortController().signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    expect(provisioner.ensureOpts[0]?.baseRef).toBe(recorded);
+    const started = r.store.getEvents("run-pinned").find((e) => e.type === "fact.run_started");
+    expect(started?.payload).toMatchObject({ baseGitSha: recorded, baseGitRef: "main" });
+    const state = r.store.getState("run-pinned");
+    expect(state?.baseGitSha).toBe(recorded);
     expect(state?.baseGitRef).toBe("main");
 
     r.store.close();
@@ -463,13 +504,8 @@ describe("executor + checkout runs", () => {
   const HEAD = "h".repeat(40);
 
   class CheckoutProvisioner extends RecordingProvisioner {
-    ensureOpts: unknown[] = [];
     constructor(snapshotResult: SnapshotResult | null) {
       super((id) => stubEnv(`/co/${id}`), { baseGitSha: BASE, baseGitRef: "feature", snapshotResult });
-    }
-    override async ensure(runId: string, opts?: unknown): Promise<ExecutionEnvironment> {
-      this.ensureOpts.push(opts);
-      return super.ensure(runId);
     }
     baseHeadSha(_runId: string): string | null {
       return HEAD;

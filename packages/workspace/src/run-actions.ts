@@ -15,6 +15,7 @@ import { lstat, readlink, rm, rmdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { type InboxStatus, isTerminal, type RunStatus } from "@fragua/types";
+import { currentBranch } from "./base-resolve.ts";
 import { type DiffStat, dirtyBaseRef, isFraguaStatePath, parseShortstat } from "./capture.ts";
 import { checkoutBusyDetail, checkoutNotInInboxDetail } from "./checkout.ts";
 
@@ -185,7 +186,14 @@ export type AcceptResult =
     }
   | {
       ok: false;
-      reason: RunActionRefusal | "no_work" | "dirty_tree" | "conflict" | "checkout_busy" | DirtyAcceptRefusal;
+      reason:
+        | RunActionRefusal
+        | "no_work"
+        | "dirty_tree"
+        | "conflict"
+        | "checkout_busy"
+        | "wrong_branch"
+        | DirtyAcceptRefusal;
       detail: string;
     };
 
@@ -195,6 +203,59 @@ export type AcceptResult =
  * longer refuses with `dirty_tree`. Off by default (behavior unchanged). */
 export interface AcceptActionOptions {
   autostash?: boolean;
+  /** Branch guard: refuse `wrong_branch` unless the checkout is on
+   * `onto ?? expected`. `expected` is the run's recorded `base_git_ref`; one
+   * that names no branch (a sha, tag, `HEAD`) is not checked. `force` skips it. */
+  branch?: { expected: string | null; onto?: string; force?: boolean };
+}
+
+const NON_BRANCH_SYNTAX = /[~^:@{\s]/;
+const SHA_LIKE = /^[0-9a-f]{4,64}$/i;
+
+/** The local branch a recorded base ref names, or `null` when it names none.
+ * A branch deleted since enqueue still counts as that branch. */
+async function branchOfRef(git: GitExec, cwd: string, ref: string): Promise<string | null> {
+  if (ref.startsWith("refs/heads/")) return ref.slice("refs/heads/".length) || null;
+  if (ref.startsWith("refs/remotes/")) return stripRemote(ref.slice("refs/remotes/".length));
+  if ((await revParse(git, cwd, `refs/heads/${ref}`)) != null) return ref;
+  if ((await revParse(git, cwd, `refs/remotes/${ref}`)) != null) return stripRemote(ref);
+  if (ref === "HEAD" || NON_BRANCH_SYNTAX.test(ref) || SHA_LIKE.test(ref)) return null;
+  if ((await revParse(git, cwd, `refs/tags/${ref}`)) != null) return null;
+  return ref;
+}
+
+function stripRemote(remoteRef: string): string | null {
+  const i = remoteRef.indexOf("/");
+  const name = i > 0 ? remoteRef.slice(i + 1) : "";
+  return name === "" || name === "HEAD" ? null : name;
+}
+
+async function checkBranch(
+  git: GitExec,
+  cwd: string,
+  guard: NonNullable<AcceptActionOptions["branch"]>,
+): Promise<AcceptResult | null> {
+  if (guard.force === true) return null;
+  const required = guard.onto ?? (guard.expected != null ? await branchOfRef(git, cwd, guard.expected) : null);
+  if (required == null) return null;
+  const current = await currentBranch(git, cwd);
+  if (current === required) return null;
+  const where = current ?? "detached HEAD";
+  const why =
+    guard.onto != null
+      ? `--onto ${guard.onto} but the current branch is ${where}`
+      : `run was based on ${required}; current branch is ${where}`;
+  const fix =
+    current != null ? `pass --onto ${current} or --force-branch` : "check out a branch, or pass --force-branch";
+  return { ok: false, reason: "wrong_branch", detail: `${why} — ${fix}` };
+}
+
+/** The branch (`null` when detached) and HEAD sha an accept would land on. */
+export async function describeAcceptTarget(
+  git: GitExec,
+  cwd: string,
+): Promise<{ branch: string | null; head: string | null }> {
+  return { branch: await currentBranch(git, cwd), head: await revParse(git, cwd, "HEAD") };
 }
 
 /**
@@ -232,6 +293,10 @@ export async function applyAccept(
   const busy = gate.checkoutBusy;
   if (busy != null) {
     return { ok: false, reason: "checkout_busy", detail: checkoutBusyDetail(busy.path, busy.runId, busy.status) };
+  }
+  if (options?.branch !== undefined) {
+    const wrong = await checkBranch(git, cwd, options.branch);
+    if (wrong != null) return wrong;
   }
   // A dirty-base run's dirt is its base: it lands per path and never needs the
   // tree clean, so autostash does not apply.

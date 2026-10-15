@@ -558,7 +558,7 @@ cli
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option(
     "--base <ref>",
-    "Pin the worktree base to this branch/tag/sha, resolved to a sha at enqueue (default: cwd HEAD at provision)",
+    "Pin the worktree base to this branch/tag/sha, resolved to a sha at enqueue (default: cwd HEAD, resolved at enqueue)",
   )
   .option(
     "--dirty",
@@ -691,8 +691,11 @@ function runsHelp(): void {
   console.log(`fragua runs <verb> <runId> — operate on an existing run
 
   Disposition (terminal runs with recoverable work):
-    accept  <id> [--autostash]        replay the run's commits onto your branch + stage the tail to commit
+    accept  <id> [--autostash] [--onto <branch> | --force-branch]
+                                      replay the run's commits onto your branch + stage the tail to commit
                                       (a --dirty run lands as unstaged changes instead; --autostash ignored)
+                                      refuses wrong_branch when you are not on the run's base branch:
+                                      --onto <branch> lands on that branch (must be checked out); --force-branch skips the check
     discard <id>                      drop the run's fragua refs
     release <id>                      free a terminal --checkout run's hold on its checkout
                                       (checkout runs never enter the inbox; their changes are already in the checkout)
@@ -745,6 +748,8 @@ cli
   .command("runs [action] [runId] [arg]", "Operate on an existing run (run without args for help)")
   .option("--against <ref>", "diff: base | previous | <eventIdx> (default base)")
   .option("--autostash", "accept: stash unrelated working-tree changes around the apply, then restore them")
+  .option("--onto <branch>", "accept: land on this checked-out branch instead of the run's base branch")
+  .option("--force-branch", "accept: skip the base-branch check")
   .option("--snap <eventIdx>", "diff: snapshot to show (default: latest)")
   .option("--path <path>", "diff: restrict to a repo-relative path")
   .option("--route <route>", "respond: HITL route (omit for interactive)")
@@ -836,6 +841,8 @@ cli
             await acceptCommand({
               runId: needId(),
               ...(options["autostash"] === true ? { autostash: true } : {}),
+              ...(pickStr(options, "onto") !== undefined ? { onto: pickStr(options, "onto")! } : {}),
+              ...(options["forceBranch"] === true ? { forceBranch: true } : {}),
               ...discovery(options),
             }),
           );

@@ -12,9 +12,23 @@ When fragua starts a run against a git repository it provisions a **git linked w
 <run.cwd>/.fragua/worktrees/<run_id>/
 ```
 
-`<run.cwd>` is the project root the run was enqueued from. The worktree is a detached-HEAD checkout of the branch HEAD at provision time — a full git checkout in its own directory, sharing the object database with the main repo but with its own index and working tree.
+`<run.cwd>` is the project root the run was enqueued from. The worktree is a detached-HEAD checkout of the run's base commit — for a `fragua run`, the commit resolved at enqueue (below) — a full git checkout in its own directory, sharing the object database with the main repo but with its own index and working tree.
 
-**Pinning the base with `--base`.** By default the worktree checks out whatever HEAD the run cwd is on *at provision time* — so an operator enqueuing a fix for branch X must keep X checked out until the daemon provisions, or the run silently builds on the wrong HEAD. `fragua run <workflow> --base <ref>` removes that race: the CLI resolves `<ref>` (a branch, tag, or sha) to a commit sha **at enqueue** via `git -C <cwd> rev-parse --verify <ref>^{commit}`, records it on the run (`run_state.base_git_sha` / `base_git_ref`, carried on the genesis `intent.run_enqueued` event), and the provisioner honours it with `git worktree add --detach <worktreePath> <sha>`. An unresolvable `<ref>` is rejected at enqueue — no run is minted. The pinned sha is independent of the cwd's live HEAD, so the operator's checkout is free to move on immediately after enqueue.
+**The base is resolved at enqueue.** `fragua run` resolves the base before it records the run and prints it on one line ahead of `run queued`:
+
+```
+base: <branch> @ <short sha> (clean | dirty: N files | detached)
+```
+
+Without a base flag that is the run cwd's HEAD: its sha and branch are recorded on the run (`run_state.base_git_sha` / `base_git_ref`, carried on the genesis `intent.run_enqueued`), so `fragua runs status` and the web show the base while the run is still queued, and the provisioner checks out exactly that sha — moving the checkout after enqueue does not change what the run builds on. The executor re-stamps the recorded base onto `fact.run_started` unchanged. When the resolved base is neither the project's default branch (`origin/HEAD`'s target, else a local `main`, else `master`) nor an explicit `--base`, the CLI adds a yellow notice and enqueues anyway:
+
+```
+note: basing on <branch>, not <default>; pass --base <default> to pin
+```
+
+Runs enqueued by `fragua ci`, schedules or the web record no base at enqueue; their worktree checks out the run cwd's HEAD at provision time, and `fragua ci` prints neither line.
+
+**Pinning the base with `--base`.** `fragua run <workflow> --base <ref>` bases the run on a ref other than the current HEAD: the CLI resolves `<ref>` (a branch, tag, or sha) to a commit sha **at enqueue** via `git -C <cwd> rev-parse --verify <ref>^{commit}`, records it on the run (`run_state.base_git_sha` / `base_git_ref`, carried on the genesis `intent.run_enqueued` event), and the provisioner honours it with `git worktree add --detach <worktreePath> <sha>`. An unresolvable `<ref>` is rejected at enqueue — no run is minted. The pinned sha is independent of the cwd's live HEAD, so the operator's checkout is free to move on immediately after enqueue.
 
 **Basing the run on your uncommitted tree with `--dirty`.** `fragua run <workflow> --dirty` captures the operator's working tree at enqueue — the index plus every untracked, non-ignored file; ignored files and run.cwd's own `.fragua/` state are left out — into a tree T, using a throwaway index so the real index and HEAD are never touched. If T equals `tree(HEAD)` the tree is clean and the run is simply pinned to HEAD (`--dirty: working tree is clean, using HEAD`). Otherwise the CLI creates a synthetic commit **S** = `commit-tree T -p HEAD` (authored `fragua <fragua@localhost>`), pins it as the base (`run_state.base_git_sha = S`, `base_head_sha = HEAD`), and anchors it at **`refs/fragua/bases/<run_id>`** in the repo; the provisioner re-writes that ref before `worktree add` and halts the run with `worktree_error` if S is missing. S is an ordinary commit, so inside the worktree the agent sees the operator's WIP as **committed content at HEAD**: `git status` is clean, `HEAD^` is the operator's HEAD, and files that were untracked are tracked. Snapshots, `runs diff --against base` and the inbox stats all measure from S, so they show only the run's work, never the captured WIP. A branch the run creates descends from S — pushing it publishes the captured WIP, untracked files included. `--dirty` cannot combine with `--base`, and is refused on a non-git cwd, an unborn HEAD, or a checkout whose `.gitignore` lacks the fragua state block (`fragua init` writes it).
 
@@ -204,7 +218,7 @@ reconnecting.
 
 | Phase | What happens |
 |---|---|
-| **Provision** | `git worktree add --detach <worktreePath> [<pinned-base-sha>]` from the repo root — the pinned base sha when the run was enqueued with `--base` (or the synthetic commit S for `--dirty`, after re-pointing `refs/fragua/bases/<run_id>` at it), else the cwd's live HEAD. Bootstrap command runs inside the fresh worktree if configured. |
+| **Provision** | `git worktree add --detach <worktreePath> [<pinned-base-sha>]` from the repo root — the base sha recorded at enqueue (cwd HEAD at enqueue, the `--base` sha, or the synthetic commit S for `--dirty`, after re-pointing `refs/fragua/bases/<run_id>` at it), else — for ci / schedule / web runs — the cwd's live HEAD. Bootstrap command runs inside the fresh worktree if configured. |
 | **Run** | All nodes execute. The worktree persists across HITL pauses and daemon restarts — a resumed run reuses the same worktree. |
 | **Terminal snapshot** | When the run reaches a terminal status, fragua captures the worktree's full state (committed + uncommitted) into `refs/fragua/snapshots/<run_id>` before removing the worktree directory. |
 | **Dispose** | `git worktree remove --force <worktreePath>`. Dispose only runs after the terminal snapshot fact lands successfully — work is never discarded silently. |
@@ -273,7 +287,7 @@ Once a run reaches a terminal status, its work sits in `refs/fragua/snapshots/<r
 
 ### `fragua runs accept <id>`
 
-Lands the run's work on the operator's current branch in `<run.cwd>`:
+Lands the run's work on the operator's current branch in `<run.cwd>`. It first prints the target — `target: <branch | detached> @ <short HEAD>` — and refuses `wrong_branch`, writing nothing, when the current branch is not the run's recorded base branch (`base_git_ref`). `--onto <branch>` lands on that branch instead (it must be the one checked out); `--force-branch` skips the check. A recorded base that names no branch (a sha, tag or `HEAD`) is not checked. The web accept does not apply this check.
 
 1. **Pre-probe:** `git merge-tree` the whole run (commits + uncommitted tail) onto HEAD in memory. Returns a conflict error immediately if the merge would fail — no mutation.
 2. **Replay:** `git cherry-pick <baseGitSha>..<heads/<run_id>>` — replays the workflow's commits onto HEAD, preserving their message and author.
@@ -300,7 +314,7 @@ Deletes `refs/fragua/snapshots/<run_id>` and `refs/fragua/heads/<run_id>`. The r
 
 Implementation: `packages/workspace/src/run-actions.ts` (`applyDiscard`).
 
-Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required to `accept` a commit-base run (one not started with `--dirty`). Every accept also refuses `checkout_busy` while a checkout run holds `run.cwd`'s checkout.
+Both actions require the run to be in a terminal status with an in-inbox state. A clean operator working tree is required to `accept` a commit-base run (one not started with `--dirty`). Every accept also refuses `checkout_busy` while a checkout run holds `run.cwd`'s checkout, and a CLI accept refuses `wrong_branch` when the checkout is not on the run's base branch (override with `--onto <branch>` or `--force-branch`).
 
 ### Checkout runs are not landed
 
@@ -337,6 +351,7 @@ branch or open a PR from it instead.
 | Writing to the main repo root bypasses snapshots and accept/discard | Snapshots only capture the worktree; accept/discard only operate on its git refs | Use relative paths or `pwd` captured inside the same shell call |
 | A read-only step shows no diff | Delta suppression: identical tree → no snapshot event | Expected behavior; only file-mutating steps produce selectable diffs |
 | Bootstrap commands (`bun install`, etc.) do not re-run on resume | Idempotent provision: an existing worktree is reused, bootstrap is skipped | Re-bootstrap only on fresh provision; do not depend on it running on every resume |
+| A run builds on (or an accept lands on) the branch you happened to be on | Without `--base`, the base is the cwd HEAD at enqueue; accept targets the current branch | Read the `base:` line and the `note:` at enqueue; pass `--base <branch>` to pin. Accept refuses `wrong_branch` off the base branch — switch, or pass `--onto` / `--force-branch` |
 | Files written to `/tmp` or other system paths are not tracked | Outside the worktree | Write to a path inside the worktree cwd; use `/tmp` only for genuinely ephemeral scratch |
 
 ---

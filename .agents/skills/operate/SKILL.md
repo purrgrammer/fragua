@@ -48,6 +48,7 @@ Common failures:
 - **Runs stuck `queued`** — no harness running (or its daemon died / heartbeat stale): nothing is executing the queue. Start/restart `fragua harness` — but the user should run it themselves (don't start it on their behalf without asking; it attaches to the current shell).
 - **Provider not credentialed** — enqueue fails `provider_unavailable`. Fix: `fragua providers add <provider>` or `fragua providers login <provider>`. A workflow with `type: judge` steps additionally needs a judge provider — `fragua providers add typesafe` (CI: `TYPESAFE_API_KEY`); missing, the run halts at its first judge with "provider typesafe is not credentialed". A judge step can name another backend with `provider:`, and one whose record marks auth optional (a local runtime) needs no credential at all.
 - **`checkout_busy`** — `fragua run --checkout <path>` (or `--dirty`, or `runs accept`) refuses because another run still holds that checkout. The message names the holder and its status: wait for it to finish, or — once it is terminal — `fragua runs release <id>`. A halted or cancelled checkout run keeps holding until released.
+- **`wrong_branch`** — `fragua runs accept` refuses because the checkout is not on the branch the run was based on (`runs status`'s `base:`). Switch to that branch, or confirm the current one with `--onto <branch>` (it must be checked out), or skip the check with `--force-branch`.
 - **Model not registered** — enqueue fails `model_unresolved`. Register it (`fragua providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`, or the full `fragua providers add --custom` wizard for a new provider) or switch the workflow's `model:`.
 
 ---
@@ -59,13 +60,14 @@ fragua run <workflow>  \
   [--input name=value]   # typed input; repeat for several (gh-style)
   [--title "…"]          # set the run title now (suppresses the auto-titler)
   [--priority 10]        # higher runs first (queue tie-breaker)
+  [--base <ref>]         # pin the base to a branch/tag/sha (resolved now); default: cwd HEAD, resolved now
   [--dirty]              # base the run on your uncommitted tree (captured now; untracked included, ignored excluded; not with --base)
   [--checkout <path>]    # run inside this existing checkout (no worktree; changes land in it directly); `.` = current one; not with --base/--dirty
   [--no-follow]          # enqueue and exit; print only the run id
   [--db path/to/db]      # target a specific store (default ~/.fragua/fragua.db)
 ```
 
-`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. `--input name=value` binds typed inputs (`${{ inputs.name }}`; a value `@path`/`@-` reads a file/stdin); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised (follow by default; `--no-follow` to opt out).
+`<workflow>` resolves: bare name → `~/.fragua/workflows/<name>.yaml` first, then `<cwd>/.fragua/workflows/<name>.yaml`; anything with `/` or ending `.yaml` is a literal path. `--input name=value` binds typed inputs (`${{ inputs.name }}`; a value `@path`/`@-` reads a file/stdin); a missing required input or out-of-range `choice` is rejected at enqueue. The run id prints immediately; terminal facts stream colorised (follow by default; `--no-follow` to opt out). Before `run queued` it prints the base the run will execute against — `base: <branch> @ <short sha> (clean | dirty: N files | detached)` — and the base is recorded on the run (`runs status` shows it while queued). If that is not the project's default branch and you didn't pass `--base`, a yellow `note: basing on <branch>, not <default>; pass --base <default> to pin` follows: the run is still enqueued, so if you meant the default branch, cancel it and re-run with `--base <default>`.
 
 > **A multi-line or punctuation-heavy value → `@file`/`@-`, never an inline `--input x="…"`.** Your *shell* expands the quoted string before `fragua` sees it: backticks run as command substitution (silently deleting the wrapped words), `$(…)` / `$VAR` get evaluated, and embedded quotes truncate it — so a long task prompt arrives mangled, and the run executes against corrupted text. Write the prompt to a file and pass `--input task=@prompt.txt` (or pipe it via `--input task=@-`). This is purely about getting the bytes past the shell intact; the workflow's `${{ inputs.x }}` substitution is a separate, safe step.
 
@@ -189,10 +191,12 @@ A terminal run that left recoverable agent work sits in `fragua runs inbox` unde
 ```sh
 fragua runs accept <id>    # replay the run's commits onto your current branch (HEAD in the run's cwd)
                            # + stage the uncommitted tail → `git commit` when ready
+  [--onto <branch>]        # land on this checked-out branch even though the run was based on another
+  [--force-branch]         # skip the base-branch check (not with --onto)
 fragua runs discard <id>   # drop the run's refs/fragua/{snapshots,heads}/<id> (final)
 ```
 
-`accept` runs synchronously and prints `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
+`accept` runs synchronously: it first prints `target: <branch> @ <short HEAD>`, then `accepted (run <id>, replayed N; tail staged …)`. It refuses with a non-zero exit + reason on `wrong_branch` (the checkout is not on the run's recorded base branch — switch, or pass `--onto <branch>` / `--force-branch`; a base recorded as a sha, tag or `HEAD` is not checked), `conflict` (doesn't merge cleanly), `dirty_tree` (uncommitted local changes — stash/commit first), or `no_work`. The web accept does not check the branch. Review with `fragua runs diff <id>` before accepting. `discard` is terminal — a later `accept`/`discard` on a discarded run exits non-zero with `discarded`.
 
 A run that commits on its own branch (`agent/$FRAGUA_RUN_ID`) lands through that branch, not the inbox: it never shows under READY TO LAND and `accept` refuses it, so merge or PR the branch, and prune it yourself (`docs/execution-model.md` § Per-run branches).
 

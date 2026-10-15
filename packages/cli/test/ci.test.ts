@@ -124,6 +124,40 @@ describe("ciCommand", () => {
     expect(readArtifact().status).toBe("completed");
   });
 
+  test("ci on a non-default branch prints no base notice", async () => {
+    const git = (...args: string[]) => {
+      const r = Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        cwd: dir,
+        stderr: "pipe",
+      });
+      if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
+    };
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(dir, ".gitignore"), "*.db*\n.fragua/\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "base");
+    git("switch", "-q", "-c", "feat");
+    writeFileSync(wfPath, "name: ci-smoke\nsteps:\n  done: {type: exit}\n");
+    const said: string[] = [];
+    const ol = console.log;
+    const oe = console.error;
+    const ow = console.warn;
+    console.log = (...a: unknown[]) => said.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => said.push(a.map(String).join(" "));
+    console.warn = (...a: unknown[]) => said.push(a.map(String).join(" "));
+    let out: { code: number; lines: string[] };
+    try {
+      out = await captureCi({ workflow: wfPath, cwd: dir, dbPath, json: true });
+    } finally {
+      console.log = ol;
+      console.error = oe;
+      console.warn = ow;
+    }
+    expect(out.code).toBe(0);
+    expect([...said, ...out.lines].join("\n")).not.toContain("note: basing on");
+  });
+
   test("--input-json end-to-end: enqueued routing.inputs carries the parsed shape", async () => {
     writeFileSync(wfPath, "name: ci-inputs\ninputs:\n  ticket: {type: string}\nsteps:\n  done: {type: exit}\n");
     const code = await runCi({ workflow: wfPath, cwd: dir, dbPath, json: true, inputJson: '{"ticket":"BUG-1"}' });

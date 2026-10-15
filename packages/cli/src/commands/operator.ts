@@ -35,6 +35,7 @@ import {
   applyDiscard,
   type DirtyLand,
   defaultGitExec,
+  describeAcceptTarget,
   gitDiff,
   type RunActionGate,
   resolveCheckoutKey,
@@ -144,22 +145,42 @@ export function discardCommand(opts: DiscardOptions): Promise<number> {
 export interface AcceptOptions extends DiscoveryOpts {
   runId: string;
   autostash?: boolean;
+  /** Land on this branch even though the run was based on another; the
+   * checkout must be on it. */
+  onto?: string;
+  /** Skip the branch check entirely. */
+  forceBranch?: boolean;
 }
 
 export function acceptCommand(opts: AcceptOptions): Promise<number> {
+  if (opts.onto !== undefined && opts.forceBranch === true) {
+    console.error(chalk.red("accept: --onto cannot combine with --force-branch"));
+    return Promise.resolve(1);
+  }
   return withStoreClient(opts, async ({ store, plane, readPlane }) => {
     const gate = await readGate(store, readPlane, opts.runId, { forAccept: true });
     if (gate == null) {
       console.error(chalk.red("accept: run not found") + chalk.dim(` (${opts.runId})`));
       return 1;
     }
+    if (gate.cwd != null) {
+      const target = await describeAcceptTarget(defaultGitExec, gate.cwd);
+      console.log(
+        chalk.dim(`target: ${target.branch ?? "detached"} @ ${target.head != null ? target.head.slice(0, 7) : "?"}`),
+      );
+    }
+    const branch = {
+      expected: store.getState(opts.runId)?.baseGitRef ?? null,
+      ...(opts.onto !== undefined ? { onto: opts.onto } : {}),
+      ...(opts.forceBranch === true ? { force: true } : {}),
+    };
     if (gate.baseHeadSha != null && opts.autostash === true) {
       console.warn(
         chalk.yellow("accept: --autostash is ignored for a dirty-base run") +
           chalk.dim(" — it lands per path and never touches the paths it did not change"),
       );
     }
-    const res = await applyAccept(defaultGitExec, gate, { autostash: opts.autostash === true });
+    const res = await applyAccept(defaultGitExec, gate, { autostash: opts.autostash === true, branch });
     if (!res.ok) {
       console.error(chalk.red(`accept: ${res.detail}`) + chalk.dim(` [${res.reason}]`));
       return 1;

@@ -48,9 +48,29 @@ run's worktree base to a branch, tag, or sha: the ref is resolved to a commit sh
 **at enqueue** (`git -C <cwd> rev-parse --verify <ref>^{commit}`) and stored on the
 run, so the worktree is provisioned from that sha (`git worktree add --detach`)
 regardless of where the cwd's HEAD moves afterward; an unresolvable ref is rejected
-before the run is minted, and the resolved sha is printed in the enqueue output.
-Without `--base`, the worktree defaults to the cwd's HEAD at provision time. The
-pinned base surfaces on `fragua runs status`.
+before the run is minted. Without `--base`, the run is based on the cwd's HEAD
+**at enqueue**: its sha and branch are recorded on the run the same way, so moving
+the checkout afterward does not change the base.
+
+Every enqueue prints the base it resolved, before `run queued`:
+
+```
+base: <branch> @ <short sha> (clean | dirty: N files | detached)
+```
+
+(`HEAD` stands in for the branch when detached; a `--checkout` run shows the
+checkout's HEAD with `captured at first start`, and records nothing until then.)
+When the base is neither the project's default branch (`origin/HEAD`'s target,
+else `main`, else `master`) nor an explicit `--base`, a yellow notice follows; the
+run is still enqueued:
+
+```
+note: basing on <branch>, not <default>; pass --base <default> to pin
+```
+
+The recorded base surfaces on `fragua runs status` (and `--json`'s
+`baseGitRef` / `baseGitSha`) while the run is still queued. `fragua ci` prints
+neither line and records no base.
 
 `--dirty` bases the run on your uncommitted working tree: at enqueue the CLI
 captures the checkout's index plus untracked, non-ignored files (ignored files and
@@ -145,7 +165,10 @@ fragua runs wait <id...> | --workflow <name> | --all-running         # block unt
 
 # disposition — nothing touches your git until you ask
 fragua runs diff    <id> [--against base|previous|<idx>] [--snap <idx>] [--path <p>]
-fragua runs accept  <id> [--autostash]            # replay the run's commits onto your branch + stage the tail
+fragua runs accept  <id> [--autostash] [--onto <branch> | --force-branch]
+                                                  # replay the run's commits onto your branch + stage the tail
+                                                  #   prints `target: <branch> @ <sha>` first; refuses wrong_branch off the run's base branch
+                                                  #   --onto <branch>: land on this (checked-out) branch instead; --force-branch: skip the check
                                                   #   --autostash: stash unrelated dirty files around the apply, then restore them (mirrors git rebase --autostash)
                                                   #   a run that commits on its own branch (agent/$FRAGUA_RUN_ID) is not in the inbox: land it via that branch
                                                   #   a --dirty run lands as unstaged changes instead (see below); --autostash is ignored
@@ -206,6 +229,20 @@ from `refs/fragua/bases/<run_id>`. `discard` never deletes that ref; `fragua gc
 Every `accept` writes `run.cwd`'s checkout, so it also refuses `checkout_busy` while
 a `--checkout` run holds that checkout — including a halted or cancelled one that
 awaits `fragua runs release`.
+
+**Accepting onto the right branch.** `accept` first prints the branch and HEAD it
+will land on (`target: <branch | detached> @ <short sha>`). When the run recorded a
+base branch (`runs status`'s `base:`) and the checkout is on a different branch —
+or detached — it refuses, writing nothing:
+
+```
+accept: run was based on <base>; current branch is <current> — pass --onto <current> or --force-branch [wrong_branch]
+```
+
+`--onto <branch>` lands on `<branch>` instead; the checkout must be on it (it is a
+confirmation, not a checkout). `--force-branch` skips the check. The two cannot be
+combined. A recorded base that names no branch (a sha, tag or `HEAD`) is not
+checked, and a remote-tracking base such as `origin/main` is compared as `main`.
 
 **Checkout runs are never in the inbox.** Their changes are already in the
 checkout, so `accept` and `discard` refuse `not_in_inbox`:
