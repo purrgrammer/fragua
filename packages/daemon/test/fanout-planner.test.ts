@@ -3,15 +3,14 @@
 // `runFanout` reads, calls, then applies.
 
 import { describe, expect, test } from "bun:test";
-import { type BudgetDecision, retryCountKey } from "@fragua/core";
+import { retryCountKey } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import {
   type FanoutFrontier,
   noteDisposition,
-  planBranchAbortLoop,
+  planBailSettlement,
   planBranchSettlement,
   planBranchTerminal,
-  planBudgetDisposition,
   planFanoutStep,
   planJoin,
   planSeedFanout,
@@ -166,56 +165,64 @@ describe("planBranchTerminal", () => {
   });
 });
 
-describe("planBranchAbortLoop", () => {
-  test("pauses the run at the per-branch ceiling", () => {
-    const streaks = new Map([
-      ["a", 2],
-      ["b", 5],
+describe("planBailSettlement", () => {
+  const usage = {
+    turnBilled: 30,
+    totalCostUsd: 0.25,
+    totalInputTokens: 20,
+    totalOutputTokens: 10,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+  };
+
+  test("planBailSettlement keeps node_completed, drops successor dispatch and run-level facts, credits unsettled usage", () => {
+    const completed: FactEvent = {
+      type: "fact.node_completed",
+      payload: { nodeId: "a", iteration: 0, tokens: 5, costUsd: 0.1, nextNode: "a2" },
+    };
+    const aborted: FactEvent = {
+      type: "fact.node_aborted",
+      payload: { nodeId: "b", iteration: 0, cause: "aborted", partialTokens: 3, partialCostUsd: 0.05 },
+    };
+    const out = planBailSettlement({
+      settled: [
+        {
+          facts: [
+            completed,
+            ...planDispatchStarted({ nodeId: "a2", iteration: 0, pass: 0, resumeOf: "fresh" }).facts,
+            { type: "fact.run_paused", payload: { reason: "operator", nodeId: "a" } },
+          ],
+        },
+        {
+          facts: [
+            aborted,
+            { type: "fact.run_terminated", payload: { status: "errored", reason: "error", detail: "boom" } },
+          ],
+        },
+      ],
+      unsettled: [{ nodeId: "c", iteration: 2, pass: 1, usage }],
+    });
+    expect(out).toEqual([
+      completed,
+      aborted,
+      {
+        type: "fact.node_aborted",
+        payload: {
+          nodeId: "c",
+          iteration: 2,
+          cause: "aborted",
+          partialTokens: 30,
+          partialCostUsd: 0.25,
+          pass: 1,
+          partialInputTokens: 20,
+          partialOutputTokens: 10,
+        },
+      },
     ]);
-    expect(planBranchAbortLoop(streaks, 5)).toEqual({
-      type: "fact.run_paused",
-      payload: { reason: "abort_loop", nodeId: "b", consecutiveAborts: 5 },
-    });
   });
 
-  test("no branch at the ceiling → undefined", () => {
-    expect(planBranchAbortLoop(new Map([["a", 1]]), 5)).toBeUndefined();
-  });
-});
-
-describe("planBudgetDisposition", () => {
-  const decision = (over: Partial<BudgetDecision>): BudgetDecision => ({
-    events: [],
-    shouldHalt: false,
-    newlyWarned: [],
-    ...over,
-  });
-
-  test("shouldHalt → fact.run_terminated{budget} carrying haltReason as detail", () => {
-    expect(planBudgetDisposition(decision({ shouldHalt: true, haltReason: "run cost 1.50 > 1.00" }), "p")).toEqual({
-      type: "fact.run_terminated",
-      payload: { status: "errored", reason: "budget", detail: "run cost 1.50 > 1.00" },
-    });
-  });
-
-  test("shouldHalt with empty haltReason → no detail field", () => {
-    expect(planBudgetDisposition(decision({ shouldHalt: true }), "p")).toEqual({
-      type: "fact.run_terminated",
-      payload: { status: "errored", reason: "budget" },
-    });
-  });
-
-  test("pauseBreach → fact.run_paused{budget} with scope/metric/limit/actual and nodeId", () => {
-    expect(
-      planBudgetDisposition(decision({ pauseBreach: { scope: "node", metric: "cost", limit: 1, actual: 2 } }), "p"),
-    ).toEqual({
-      type: "fact.run_paused",
-      payload: { reason: "budget", nodeId: "p", scope: "node", metric: "cost", limit: 1, actual: 2 },
-    });
-  });
-
-  test("no breach → undefined", () => {
-    expect(planBudgetDisposition(decision({}), "p")).toBeUndefined();
+  test("nothing settled and nothing in flight → no facts", () => {
+    expect(planBailSettlement({ settled: [], unsettled: [] })).toEqual([]);
   });
 });
 

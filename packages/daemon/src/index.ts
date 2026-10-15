@@ -14,8 +14,8 @@ export { makeGraphLoader } from "./graph-loader.ts";
 export { CommittingRecorder } from "./recorder.ts";
 export type { ResultContext } from "./result-to-facts.ts";
 export {
-  abortResultToFacts,
   cancelToFacts,
+  exitSpendFacts,
   resultToFacts,
 } from "./result-to-facts.ts";
 export type { ScheduleDispatcherOpts } from "./schedule-dispatcher.ts";

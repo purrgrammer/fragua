@@ -741,8 +741,8 @@ Every other terminal holder keeps the lane until the operator releases it. That
 includes:
 
 - a holder that ends `cancelled` or `halted`, including a leaked-handler halt: reason
-  `error` with detail `handler_leaked`, from `planLeakHalt`
-  (`predispatch-planner.ts:127-135`);
+  `error` with detail `handler_leaked`, from the leak arm of `planExit`
+  (`abort-planner.ts`);
 - a `completed` holder with no recorded terminal snapshot, because its capture failed,
   timed out ([§3.1](#31-capture)) or lost its OCC append, or the daemon died before the
   capture ran. Its work was not recorded, and handing its tree to a successor would
@@ -1452,7 +1452,7 @@ A **Door** is a follow-up that this design leaves room for without building it
   handler liveness.
 - **Snapshot-before-terminal-fact.** Capturing before the terminal commit would close
   the SIGKILL window, but it restructures every terminal path in `dispatchOne`
-  (`planCrashHalt`, cancel, structural halts, `planLeakHalt`). The operator release
+  (`planCrashHalt`, cancel, structural halts, `planExit`). The operator release
   already covers that window.
 - **A daemon-side unquarantine refusal in `wakeUnquarantine`.** An earlier revision
   added one as defence in depth. It consumed a stray `retry` or `treat_as_done` on a

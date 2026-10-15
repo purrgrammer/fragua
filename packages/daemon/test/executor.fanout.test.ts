@@ -7,13 +7,14 @@
 import { describe, expect, test } from "bun:test";
 import { OPERATOR_NOTES_KEY, type OperatorNote, readOperatorNotes } from "@fragua/core";
 import * as handler from "@fragua/core/handler";
-import { ConcurrencyError, deriveRunState, getFrontier } from "@fragua/store";
+import { ConcurrencyError, deriveRunState, type FactEvent, getFrontier } from "@fragua/store";
 import fc from "fast-check";
 import { pbtRuns } from "../../../test/pbt-runs.ts";
+import { planExit } from "../src/abort-planner.ts";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { planDispatchStarted } from "../src/lifecycle-planner.ts";
-import { planLeakHalt, planPreDispatch } from "../src/predispatch-planner.ts";
+import { planPreDispatch } from "../src/predispatch-planner.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, rig } from "./helpers.ts";
 
@@ -148,6 +149,12 @@ function registerHandlers(r: ReturnType<typeof rig>, calls: Record<string, () =>
   llm("synth");
 }
 
+/** A steer-like abort: named AbortError, so the branch exit classifies as a
+ * plain abort (re-drive + abort-loop streak), not a thrown-error halt. */
+function abortErr(message: string): Error {
+  return Object.assign(new Error(message), { name: "AbortError" });
+}
+
 /** Per-node call counters as block-body callbacks (no assign-in-expression). */
 function counter(seen: Record<string, number>, ...ids: string[]): Record<string, () => void> {
   const calls: Record<string, () => void> = {};
@@ -280,7 +287,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       handler: async () => {
         c["b_scan"]?.();
         bScanCalls++;
-        if (bScanCalls === 1) throw new Error("transient");
+        if (bScanCalls === 1) throw abortErr("transient");
         return {
           kind: "transition",
           outcomeStatus: "success",
@@ -390,7 +397,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       maxMs: 1000,
       handler: async () => {
         c["x_fail"]?.();
-        throw new Error("always fails");
+        throw abortErr("always aborts");
       },
     });
     const okLlm = (id: string) =>
@@ -435,7 +442,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       sideEffect: "external",
       maxMs: 1000,
       handler: async () => {
-        throw new Error("always fails");
+        throw abortErr("always aborts");
       },
     });
     const okLlm = (id: string) =>
@@ -502,7 +509,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       maxMs: 1000,
       handler: async () => {
         bCalls++;
-        if (bCalls === 1) throw new Error("transient abort");
+        if (bCalls === 1) throw abortErr("transient abort");
         return { kind: "transition", outcomeStatus: "success", tokens: 10, costUsd: 0.01 };
       },
     });
@@ -577,13 +584,15 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
 
     await drive(r, "hung1", { fanoutBranchTimeoutMs: 50, abortLoopCeiling: 2 });
     const final = r.store.getState("hung1")!;
-    // The deadline made the unbounded branch terminable: it aborted each turn and
-    // climbed to the ceiling rather than hanging the run forever.
-    expect(final.status).toBe("paused");
+    // The deadline made the long branch terminable: its timeout backs off with a
+    // watchdog timeout-retry pause, exactly as a timed-out linear node does.
+    expect(final.status).toBe("paused_auto");
     const paused = r.store.getEvents("hung1").find((e) => e.type === "fact.run_paused");
-    expect((paused?.payload as { reason?: string }).reason).toBe("abort_loop");
+    expect((paused?.payload as { reason?: string }).reason).toBe("timeout_retry");
     expect((paused?.payload as { nodeId?: string }).nodeId).toBe("hung");
-    expect(hungDispatches).toBe(2); // aborted at the 50ms deadline, twice → ceiling
+    expect((paused?.payload as { attemptedMs?: number }).attemptedMs).toBe(50);
+    expect(final.routing["internal.timeout_retries.hung"]).toBe(1);
+    expect(hungDispatches).toBe(1);
     expect(okRuns).toBe(1); // the healthy sibling completed and was not re-driven
     r.store.close();
   });
@@ -673,7 +682,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     r.store.close();
   });
 
-  test("a fan-out branch leak commits exactly planLeakHalt output", async () => {
+  test("a fan-out branch leak commits exactly planExit leak output", async () => {
     const r = rig({ yaml: HUNG_YAML });
     r.dispatcher.register(r.workflowSha, "begin", {
       kind: "llm",
@@ -708,12 +717,43 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     expect(terminated).toBeDefined();
     const nodeId = (leaked!.payload as { nodeId: string }).nodeId;
     const leakedAt = (leaked!.payload as { leakedAt: number }).leakedAt;
-    // The two facts the fan-out leak arm committed must be byte-identical to the
-    // pure planner's output for the same (nodeId, leakedAt) — no inline drift.
+    const spend = events.find(
+      (e) => e.type === "fact.node_aborted" && (e.payload as { nodeId?: string }).nodeId === nodeId,
+    );
+    expect(spend).toBeDefined();
+    // The three facts the fan-out leak arm committed must be byte-identical to the
+    // pure planner's output for the same (nodeId, leakedAt) — no inline drift. The
+    // sibling `ok` completed before the leak, so the bail carries no sibling facts.
+    const zero = {
+      turnBilled: 0,
+      totalCostUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+    };
     expect([
+      { type: spend!.type, payload: spend!.payload },
       { type: leaked!.type, payload: leaked!.payload },
       { type: terminated!.type, payload: terminated!.payload },
-    ]).toEqual(planLeakHalt({ nodeId, leakedAt }).facts);
+    ]).toEqual(
+      planExit({
+        exit: "leak",
+        currentNode: nodeId,
+        iteration: 0,
+        leakedAt,
+        reactiveBudgetHaltDetail: undefined,
+        reactiveBudgetPauseBreach: undefined,
+        usage: zero,
+        routingDelta: {},
+        appliedSeqs: [],
+        effectiveRouting: {},
+        now: leakedAt,
+        attemptedMs: 40,
+      }).facts as FactEvent[],
+    );
+    expect(spend!.seq).toBeLessThan(leaked!.seq);
+    expect(leaked!.seq).toBeLessThan(terminated!.seq);
     r.store.close();
   });
 
@@ -745,6 +785,7 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
       sideEffect: "external",
       maxMs: 5000,
       handler: async (ctx) => {
+        ctx.emit("cost.recorded", { cost_usd: 0.3, total_tokens: 40, input_tokens: 30, output_tokens: 10 });
         await new Promise<void>((resolve) => {
           if (ctx.signal.aborted) {
             okSawAbort = true;
@@ -780,10 +821,19 @@ describe("executor — fan-out (Model A on-log frontier)", () => {
     // The healthy sibling OBSERVED its abort — it was signalled, not abandoned.
     expect(okSawAbort).toBe(true);
     // ...and it never committed a completion (it was reclaimed mid-flight).
-    const okCompleted = r.store
-      .getEvents("leakabort1")
-      .some((e) => e.type === "fact.node_completed" && (e.payload as { nodeId?: string }).nodeId === "ok");
+    const events = r.store.getEvents("leakabort1");
+    const okCompleted = events.some(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId?: string }).nodeId === "ok",
+    );
     expect(okCompleted).toBe(false);
+    // Its spend is committed on its own node_aborted, ahead of the leak's halt.
+    const okAborted = events.find(
+      (e) => e.type === "fact.node_aborted" && (e.payload as { nodeId?: string }).nodeId === "ok",
+    );
+    expect(okAborted).toBeDefined();
+    expect((okAborted!.payload as { partialCostUsd: number }).partialCostUsd).toBeCloseTo(0.3, 6);
+    expect(okAborted!.seq).toBeLessThan(halted!.seq);
+    expect(final.metrics.totalCostUsd).toBeCloseTo(r.store.getRunCostTotals("leakabort1").costUsd, 6);
     r.store.close();
   });
 

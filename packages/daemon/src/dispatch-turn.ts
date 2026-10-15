@@ -26,7 +26,7 @@ import {
   materializeRouting,
   type RunState,
 } from "@fragua/store";
-import { planAbort, planAbortLoop } from "./abort-planner.ts";
+import { classifyExit, type ExitKind, planAbortLoop, planExit } from "./abort-planner.ts";
 import type { TitleRequest } from "./auto-titler.ts";
 import {
   buildDispatchContext,
@@ -50,7 +50,7 @@ import { runFanout } from "./fanout.ts";
 import { invokeHandler } from "./invoke-handler.ts";
 import { planDispatchStarted, planOperatorPause, planRunStarted } from "./lifecycle-planner.ts";
 import { commitParkOrTerminal, commitWithOcc, type DispatchOutcome, occAppendOnce } from "./occ-append.ts";
-import { planLeakHalt, planPreDispatch } from "./predispatch-planner.ts";
+import { planPreDispatch } from "./predispatch-planner.ts";
 import { cancelToFacts } from "./result-to-facts.ts";
 import { countDispatch, type RunTurnState, recordAbort, resetAborts } from "./run-turn-state.ts";
 import { captureBoundarySnapshot } from "./snapshot-service.ts";
@@ -489,57 +489,44 @@ async function dispatchHandler(
   for (const disarm of deadlines) disarm();
   if (invocation.kind !== "leak") releaseSignal();
 
-  let result: HandlerResult;
-  let wasAborted = false;
-  let abortCause: "timeout" | "aborted" = "aborted";
-  let leakedTimeout = false;
-  if (invocation.kind === "leak") {
-    leakedTimeout = true;
-    result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
-  } else if (invocation.kind === "thrown") {
-    wasAborted = invocation.abortByName;
-    if (
-      !wasAborted &&
-      signal.aborted &&
-      (reactiveBudgetHaltDetail !== undefined || reactiveBudgetPauseBreach !== undefined)
-    ) {
-      wasAborted = true;
-    }
-    if (wasAborted) abortCause = classifyAbortCause(signal, invocation.error);
-    result = { kind: "halt", reason: "error", detail: errorMessage(invocation.error) };
-  } else {
-    result = invocation.result;
-  }
-
-  if (leakedTimeout) {
-    obs.flush();
-    return commitLeak(deps, currentNode, iteration, recorder);
-  }
-  if (wasAborted) {
-    obs.flush();
-    return commitAbort(deps, ts, runState, decision, {
+  if (invocation.kind === "result") {
+    resetAborts(ts);
+    return commitTransition(deps, ts, runState, decision, {
       currentNode,
       iteration,
-      abortCause,
-      reactiveBudgetHaltDetail,
-      reactiveBudgetPauseBreach,
+      result: invocation.result,
       usage,
       effectiveRouting,
-      spec,
+      deferredPause,
+      obs,
       recorder,
     });
   }
-  resetAborts(ts);
-  return commitTransition(deps, ts, runState, decision, {
+
+  obs.flush();
+  const thrown = invocation.kind === "thrown" ? invocation : undefined;
+  const exit = classifyExit({
+    invocation: invocation.kind,
+    abortByName: thrown?.abortByName ?? false,
+    signalAborted: signal.aborted,
+    shutdownAborted: opts.shutdownSignal.aborted,
+    abortCause: thrown !== undefined ? classifyAbortCause(signal, thrown.error) : "aborted",
+    budgetTripped: reactiveBudgetHaltDetail !== undefined || reactiveBudgetPauseBreach !== undefined,
+  });
+  const exitArgs: ExitArgs = {
+    exit,
     currentNode,
     iteration,
-    result,
+    reactiveBudgetHaltDetail,
+    reactiveBudgetPauseBreach,
     usage,
     effectiveRouting,
-    deferredPause,
-    obs,
+    spec,
     recorder,
-  });
+  };
+  if (thrown !== undefined) exitArgs.errorDetail = errorMessage(thrown.error);
+  if (exit === "leak") return commitLeak(deps, ts, runState, decision, exitArgs);
+  return commitExit(deps, ts, runState, decision, exitArgs);
 }
 
 /** The budget snapshot the backend embeds into `llm.start.budget`. */
@@ -579,34 +566,25 @@ async function invokeHandlerFor(
   });
 }
 
-/** Leak arm: halt the run (leaked handler is unrecoverable) and bump the leak
- * budget. */
+/** Leak arm: the exit plan halts the run (a leaked handler is unrecoverable)
+ * with the turn's spend, then the leak budget is bumped. */
 async function commitLeak(
   deps: RunDeps,
-  currentNode: string,
-  iteration: number,
-  recorder: { version: () => number },
+  ts: RunTurnState,
+  runState: RunState,
+  decision: ProceedDecision,
+  a: ExitArgs,
 ): Promise<DispatchOutcome> {
-  const leakHalt = planLeakHalt({ nodeId: currentNode, leakedAt: deps.clock() });
-  const leakOutcome = await commitParkOrTerminal(
-    {
-      store: deps.opts.store,
-      runId: deps.runId,
-      occ: deps.occ,
-      nodeId: currentNode,
-      iteration,
-      expectedVersion: recorder.version(),
-    },
-    leakHalt.facts,
-  );
-  deps.leakBudget.recordLeak(deps.runId, currentNode);
-  return leakOutcome;
+  const outcome = await commitExit(deps, ts, runState, decision, a);
+  deps.leakBudget.recordLeak(deps.runId, a.currentNode);
+  return outcome;
 }
 
-interface AbortArgs {
+interface ExitArgs {
+  exit: ExitKind;
   currentNode: string;
   iteration: number;
-  abortCause: "timeout" | "aborted";
+  errorDetail?: string;
   reactiveBudgetHaltDetail: string | undefined;
   reactiveBudgetPauseBreach: ReactiveBudgetPause | undefined;
   usage: UsageAccumulator;
@@ -615,21 +593,24 @@ interface AbortArgs {
   recorder: { version: () => number };
 }
 
-/** Abort arm: the pure plan (reactive-budget halt/pause, timeout-retry/exhausted,
- * or a plain abort) applied under OCC, with the abort-loop trend-warn / ceiling. */
-async function commitAbort(
+/** Exit arm: the pure exit plan (leak / reactive-budget halt or pause /
+ * shutdown / timeout-retry or exhausted / thrown-error halt / plain abort)
+ * applied under OCC, with the abort-loop trend-warn / ceiling on a plain abort. */
+async function commitExit(
   deps: RunDeps,
   ts: RunTurnState,
   runState: RunState,
   decision: ProceedDecision,
-  a: AbortArgs,
+  a: ExitArgs,
 ): Promise<DispatchOutcome> {
   const opts = deps.opts;
   const { currentNode, iteration, recorder } = a;
-  const abortPlan = planAbort({
+  const plan = planExit({
+    exit: a.exit,
     currentNode,
     iteration,
-    abortCause: a.abortCause,
+    ...(a.errorDetail !== undefined ? { errorDetail: a.errorDetail } : {}),
+    leakedAt: deps.clock(),
     reactiveBudgetHaltDetail: a.reactiveBudgetHaltDetail,
     reactiveBudgetPauseBreach: a.reactiveBudgetPauseBreach,
     usage: a.usage.totals(),
@@ -639,26 +620,29 @@ async function commitAbort(
     now: deps.clock(),
     attemptedMs: a.spec.maxMs ?? 0,
   });
-  const abortAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
-  if (abortPlan.routingPatch !== undefined) abortAppendOpts.routingPatch = abortPlan.routingPatch;
-  if (abortPlan.advanceAppliedTo !== undefined) abortAppendOpts.advanceAppliedTo = abortPlan.advanceAppliedTo;
+  const appendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
+  if (plan.routingPatch !== undefined) appendOpts.routingPatch = plan.routingPatch;
+  if (plan.advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = plan.advanceAppliedTo;
+  const occCommit = {
+    occ: deps.occ,
+    nodeId: currentNode,
+    iteration,
+    expectedVersion: recorder.version(),
+    commit: occAppendOnce(opts.store, deps.runId, recorder.version(), appendOpts),
+  };
 
-  if (abortPlan.outcome === "timeout_retry") {
+  if (plan.outcome === "timeout_retry") {
     return commitWithOcc(
       {
-        occ: deps.occ,
-        nodeId: currentNode,
-        iteration,
-        expectedVersion: recorder.version(),
+        ...occCommit,
         attemptedFactType: "fact.run_paused",
-        commit: occAppendOnce(opts.store, deps.runId, recorder.version(), abortAppendOpts),
         successOutcome: { kind: "terminal" },
         statusOutcome: { kind: "terminal" },
       },
-      abortPlan.facts,
+      plan.facts,
     );
   }
-  if (abortPlan.outcome === "halt" || abortPlan.outcome === "pause") {
+  if (plan.outcome === "halt" || plan.outcome === "pause") {
     return commitParkOrTerminal(
       {
         store: opts.store,
@@ -667,19 +651,26 @@ async function commitAbort(
         nodeId: currentNode,
         iteration,
         expectedVersion: recorder.version(),
-        appendOpts: abortAppendOpts,
+        appendOpts,
       },
-      abortPlan.facts,
+      plan.facts,
+    );
+  }
+  if (plan.outcome === "shutdown") {
+    return commitWithOcc(
+      {
+        ...occCommit,
+        attemptedFactType: "fact.node_aborted",
+        successOutcome: { kind: "terminal" },
+        statusOutcome: { kind: "terminal" },
+      },
+      plan.facts,
     );
   }
   return commitWithOcc(
     {
-      occ: deps.occ,
-      nodeId: currentNode,
-      iteration,
-      expectedVersion: recorder.version(),
+      ...occCommit,
       attemptedFactType: "fact.node_aborted",
-      commit: occAppendOnce(opts.store, deps.runId, recorder.version(), abortAppendOpts),
       successOutcome: { kind: "continue" },
       statusOutcome: { kind: "continue" },
       onSuccess: () => {
@@ -706,7 +697,7 @@ async function commitAbort(
         return undefined;
       },
     },
-    abortPlan.facts,
+    plan.facts,
   );
 }
 

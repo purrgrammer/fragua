@@ -2,7 +2,7 @@
 // (the north-star "inject faults before/after every step and prove invariants").
 //
 // Faults are only meaningful at EFFECT boundaries — the pure sub-steps
-// (edge-selection, budget-eval, planTransition/planAbort) can't fail. So we
+// (edge-selection, budget-eval, planTransition/planExit) can't fail. So we
 // inject at the seams the executor actually commits/reads/dispatches through,
 // swept across every invocation over generated graphs, and assert the SPEC §4
 // invariants survive (or the run recovers / halts bounded — never wedges).

@@ -13,7 +13,7 @@
 // run_state metrics showing zero.
 //
 // Expected post-fix behavior mirrors the abort path
-// (fact.node_aborted.partial* — see abortResultToFacts and the store
+// (fact.node_aborted.partial* — see exitSpendFacts and the store
 // reducer fold): the halt path must surface the partial turn spend so
 // run totals and analytics stay accurate. Per AGENTS.md ground rule
 // #5 the reducer must NOT fold cost.recorded directly (observability
@@ -200,6 +200,42 @@ describe("executor — halt paths that bypass node_completed/node_aborted surfac
     expect(state.metrics.totalCostUsd).toBeCloseTo(0.55, 6);
     expect(state.metrics.billedTokens).toBe(2300);
 
+    r.store.close();
+  });
+
+  test("a thrown handler error lands its spend on node_aborted, not run_terminated", async () => {
+    const r = rig({ yaml: ROUTING_YAML });
+    r.dispatcher.register(r.workflowSha, "triage", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async (ctx) => {
+        emitTurnCosts(ctx);
+        throw new Error("handler bug");
+      },
+    });
+
+    await drive(r, "halt-cost-throw");
+
+    const events = r.store.getEvents("halt-cost-throw");
+    const aborted = events.find((e) => e.type === "fact.node_aborted");
+    expect(aborted).toBeDefined();
+    const a = aborted!.payload as { cause: string; partialTokens: number; partialCostUsd: number };
+    expect(a.cause).toBe("error");
+    expect(a.partialTokens).toBe(2300);
+    expect(a.partialCostUsd).toBeCloseTo(0.55, 6);
+
+    const halted = events.find((e) => e.type === "fact.run_terminated");
+    const p = halted!.payload as HaltPayload & { detail?: string };
+    expect(p.reason).toBe("error");
+    expect(p.detail).toBe("handler bug");
+    expect(p.partialCostUsd).toBeUndefined();
+    expect(p.partialTokens).toBeUndefined();
+
+    const state = r.store.getState("halt-cost-throw")!;
+    expect(state.status).toBe("halted");
+    expect(state.metrics.totalCostUsd).toBeCloseTo(0.55, 6);
+    expect(state.metrics.nodeCosts["triage"]?.costUsd).toBeCloseTo(0.55, 6);
     r.store.close();
   });
 });

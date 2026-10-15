@@ -6,7 +6,7 @@
 import { getRetry, isTerminalNextNode, readGoalGateRetries } from "@fragua/core";
 import type * as handler from "@fragua/core/handler";
 import type { FactEvent, RunState } from "@fragua/store";
-import { passField, type UsageTotals } from "./executor-helpers.ts";
+import { passField } from "./executor-helpers.ts";
 import { maxLoopsPause } from "./predispatch-planner.ts";
 
 type HandlerResult = handler.HandlerResult;
@@ -21,7 +21,7 @@ export interface ResultContext {
    * `fact.node_completed` and `fact.node_aborted` (route_not_picked /
    * route_call_not_isolated / edge_no_match, handler-returned error or
    * budget halts). The halt arm surfaces it as `partial*` fields on
-   * `fact.run_terminated{status:errored}` — mirroring `abortResultToFacts` — so the reducer
+   * `fact.run_terminated{status:errored}` — mirroring `exitSpendFacts` — so the reducer
    * folds the halted turn into `run_state.metrics` instead of dropping
    * it. The pause translations and non-halt arms ignore it (their fact
    * lists either carry a spend-bearing `fact.node_completed` already or
@@ -48,8 +48,8 @@ export interface HaltUsage {
 /**
  * Facts to emit AFTER a handler completes successfully.
  *
- * We never call this when the handler was aborted mid-flight; that path uses
- * abortResultToFacts instead.
+ * We never call this when the handler threw, leaked, or was aborted mid-flight;
+ * those exits go through `planExit` instead.
  */
 export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEvent[] {
   const facts: FactEvent[] = [];
@@ -246,7 +246,7 @@ function haltToFacts(result: Extract<HandlerResult, { kind: "halt" }>, ctx: Resu
   // Halts reaching this point bypass fact.node_completed AND
   // fact.node_aborted, so the turn's spend would otherwise vanish
   // from run totals. Surface it as partial* fields (same shape and
-  // >0 gating as abortResultToFacts) for the reducer to fold. The
+  // >0 gating as exitSpendFacts) for the reducer to fold. The
   // budget-halt sentinel path never comes through here (it keeps the
   // transition shape so node_completed lands first), so this cannot
   // double-count a turn.
@@ -272,48 +272,62 @@ function haltToFacts(result: Extract<HandlerResult, { kind: "halt" }>, ctx: Resu
   return facts;
 }
 
-/** The `pause_provider` arm — payment-required vs generic provider-error pause. */
+/** The `pause_provider` arm — the turn's spend on `fact.node_aborted`, then the
+ * payment-required vs generic provider-error pause. */
 function pauseProviderToFacts(
   result: Extract<HandlerResult, { kind: "pause_provider" }>,
   ctx: ResultContext,
 ): FactEvent[] {
+  const nodeId = ctx.state.currentNode ?? "";
+  const facts: FactEvent[] =
+    ctx.usage !== undefined
+      ? exitSpendFacts(
+          nodeId,
+          nodeRetryCount(ctx.state.routing, nodeId),
+          "provider_pause",
+          ctx.usage,
+          readGoalGateRetries(ctx.state.routing),
+        )
+      : [];
   // 402 → reason="payment_required" (top-up off-ledger). Anything else
   // in the manual class lands as reason="provider_error"; the
   // executor rewrites to reason="provider_retry" if the
   // provider-retry decision returns auto-retry (transient transport
   // class — 408/429/5xx/529/network).
   if (result.httpStatus === 402) {
-    return [
-      {
-        type: "fact.run_paused",
-        payload: {
-          reason: "payment_required",
-          nodeId: ctx.state.currentNode ?? "",
-          provider: result.provider,
-          errorMessage: result.errorMessage,
-        },
-      },
-    ];
-  }
-  return [
-    {
+    facts.push({
       type: "fact.run_paused",
       payload: {
-        reason: "provider_error",
-        nodeId: ctx.state.currentNode ?? "",
-        httpStatus: result.httpStatus,
+        reason: "payment_required",
+        nodeId,
         provider: result.provider,
         errorMessage: result.errorMessage,
       },
+    });
+    return facts;
+  }
+  facts.push({
+    type: "fact.run_paused",
+    payload: {
+      reason: "provider_error",
+      nodeId,
+      httpStatus: result.httpStatus,
+      provider: result.provider,
+      errorMessage: result.errorMessage,
     },
-  ];
+  });
+  return facts;
 }
 
-export function abortResultToFacts(
+/** The one producer of a non-success exit's spend: `fact.node_aborted` carrying
+ * the turn's partial usage. Every exit (throw, timeout, abort, shutdown, leak,
+ * provider pause) leads with it, on the linear and fan-out paths alike, so the
+ * reducer's `node_aborted` fold credits the spend whatever parks the run. */
+export function exitSpendFacts(
   nodeId: string,
   iteration: number,
   cause: string,
-  partial: UsageTotals,
+  partial: HaltUsage,
   pass = 0,
 ): FactEvent[] {
   const payload: Extract<FactEvent, { type: "fact.node_aborted" }>["payload"] = {
@@ -331,10 +345,14 @@ export function abortResultToFacts(
   // Per-bucket cost splits keep the analytics invariant (bucket sums ≈
   // total_cost_usd) intact for aborted spend — without them an aborted turn
   // raises the total while the splits stay flat.
-  if (partial.totalInputCostUsd > 0) payload.partialInputCostUsd = partial.totalInputCostUsd;
-  if (partial.totalOutputCostUsd > 0) payload.partialOutputCostUsd = partial.totalOutputCostUsd;
-  if (partial.totalCacheReadCostUsd > 0) payload.partialCacheReadCostUsd = partial.totalCacheReadCostUsd;
-  if (partial.totalCacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = partial.totalCacheWriteCostUsd;
+  const inputCostUsd = partial.totalInputCostUsd ?? 0;
+  const outputCostUsd = partial.totalOutputCostUsd ?? 0;
+  const cacheReadCostUsd = partial.totalCacheReadCostUsd ?? 0;
+  const cacheWriteCostUsd = partial.totalCacheWriteCostUsd ?? 0;
+  if (inputCostUsd > 0) payload.partialInputCostUsd = inputCostUsd;
+  if (outputCostUsd > 0) payload.partialOutputCostUsd = outputCostUsd;
+  if (cacheReadCostUsd > 0) payload.partialCacheReadCostUsd = cacheReadCostUsd;
+  if (cacheWriteCostUsd > 0) payload.partialCacheWriteCostUsd = cacheWriteCostUsd;
   return [{ type: "fact.node_aborted", payload }];
 }
 

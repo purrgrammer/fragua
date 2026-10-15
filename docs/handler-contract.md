@@ -181,6 +181,14 @@ await ctx.http.fetch("https://example.test");
 await fetch("https://example.test");
 ```
 
+When `ctx.signal` aborts your handler, **throw an `AbortError`** (an `Error` whose `name` is `"AbortError"`; `ctx.llm` / `ctx.http` already reject with one) — never return a `halt` for it. A `halt` is a decision the run cannot recover from; an abort is not your decision. The executor classifies the exit by the signal's cause (`planExit`, `packages/daemon/src/abort-planner.ts`):
+
+- **Timeout** (`maxMs`) → `fact.node_aborted{cause:"timeout"}` + a `timeout_retry` auto-wake pause, `timeout_exhausted` halt on the third.
+- **Daemon shutdown** → `fact.node_aborted{cause:"shutdown"}` only; the run is left `running`, and the next daemon's startup sweep requeues it, so the node re-dispatches after the restart.
+- **Steer / operator / budget** → `fact.node_aborted{cause:"aborted"}`; the node re-dispatches (bounded by the abort-loop ceiling) or the budget pauses/halts the run.
+
+A handler that throws anything else while its signal is live halts the run (`reason:"error"`, the message as `detail`). A throw *after* `ctx.signal` aborted is classified as an abort even if the error is not named `AbortError`. Every one of these exits records the dispatch's spend on `fact.node_aborted`.
+
 ### 2. No direct I/O — use `ctx`
 Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici`; they must not call bare `fetch`. The handler-discipline lint (`packages/core/test/handler/discipline.test.ts`) will fail CI if any of those appear under `packages/core/src/handler/handlers/` or in any module reachable from a handler over relative value imports — delegating the call to a helper outside `handlers/` does not escape it.
 
@@ -434,7 +442,7 @@ be paused.
 
 The executor re-runs a handler whenever:
 
-- The handler was aborted mid-flight (steer, timeout, shutdown)
+- The handler was aborted mid-flight (steer, timeout, shutdown). A shutdown abort leaves the run `running` with a `fact.node_aborted{cause:"shutdown"}`; the restarted daemon's startup sweep requeues it and the node re-dispatches
 - A transient failure left the run `queued`
 - The operator chose `intent.unquarantine: { resolution: "retry" }` after a hard-crash quarantine
 
@@ -449,7 +457,7 @@ Under replay, a handler must:
 
 If your handler can't be made replay-safe (rare), declare `sideEffect: "external"` and rely on `ctx.externalCall`'s quarantine behavior.
 
-Replay determinism rests on the executor's own decision/effect split (SPEC §3.11, invariant I12): the pure decision core (`planTransition` / `planAbort`) turns a handler's `HandlerResult` into a plan — `fact.*` events, a routing patch, a watermark advance, observability — with no clock or RNG, and the driver applies that plan under OCC. A handler is the one place where non-determinism legitimately enters the loop, which is why the rules above exist: keep the handler replay-safe and the surrounding control plane stays a pure fold.
+Replay determinism rests on the executor's own decision/effect split (SPEC §3.11, invariant I12): the pure decision core (`planTransition` / `planExit`) turns a handler's `HandlerResult` into a plan — `fact.*` events, a routing patch, a watermark advance, observability — with no clock or RNG, and the driver applies that plan under OCC. A handler is the one place where non-determinism legitimately enters the loop, which is why the rules above exist: keep the handler replay-safe and the surrounding control plane stays a pure fold.
 
 ---
 
