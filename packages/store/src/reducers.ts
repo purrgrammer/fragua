@@ -501,6 +501,7 @@ function closeDispatchInterval(next: RunState, now: number): void {
 /** activeMs credited when a fact closes the open dispatch interval at `now`.
  * Shared by the reducer and the sweep's SQL quarantine so the live projection
  * and a replay fold credit the same span. */
+// contract: no-bump — helper extraction; the reducer credits exactly the `now - dispatchStartedAt` it did before, the sweep now shares it
 export function dispatchIntervalActiveMsDelta(dispatchStartedAt: number | null, now: number): number {
   return dispatchStartedAt == null ? 0 : now - dispatchStartedAt;
 }
