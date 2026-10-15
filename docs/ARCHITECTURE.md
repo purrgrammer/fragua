@@ -334,7 +334,12 @@ sub-interface (so consumers reached them only through the concrete class or an
 - **`IBundleStore`** — portable `.fragua` export/import plus the CI pruning
   primitive (`exportRunBundle` / `importRunBundle` / `retainPortableTables`).
   `exportRunBundle` emits a scrubbed, replayable, manifest-first tar;
-  `importRunBundle` re-derives `run_state` by replaying the log.
+  `importRunBundle` re-derives `run_state` by replaying the log. It verifies
+  before writing: each workflow source must hash to its sha (the IR is
+  re-derived from source, never taken from the bundle), a run that exists
+  locally without the import marker is refused, and a re-import of an imported
+  run must extend its stored log as a prefix — the projection and `next_seq`
+  are then re-derived over the merged log.
 - **`IMetricsReader`** — the process-local write-path metrics snapshot
   (`metricsSnapshot`), backing `GET /metrics/store`.
 - **`IJudgeReader`** — recorded `judge_node` message history
