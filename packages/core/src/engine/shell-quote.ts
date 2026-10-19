@@ -6,7 +6,9 @@
 // plus the nested constructs that reset or defeat it, and reports the context
 // of every token so the caller can pick the escape — or refuse a position no
 // escape can make inert. A literal `$` glued to a token is one such position:
-// it fuses with the escaped value into `$(…)`, `$'…'` or `$name`.
+// it fuses with the escaped value into `$(…)`, `$'…'` or `$name`. A token in a
+// heredoc delimiter is another: its escaping decides whether the body expands
+// and where the body ends. A token the scan never places fails closed too.
 
 export type ShellQuoteContext = "bare" | "double" | "single";
 
@@ -18,7 +20,9 @@ export type UnsafeShellPosition =
   | "heredoc"
   | "ansi-c"
   | "arithmetic"
-  | "dollar-prefix";
+  | "dollar-prefix"
+  | "heredoc-delimiter"
+  | "unplaced";
 
 export type ShellTokenContext = ShellQuoteContext | { unsafe: UnsafeShellPosition };
 
@@ -39,7 +43,21 @@ export const UNSAFE_SHELL_POSITIONS: Readonly<Record<UnsafeShellPosition, { wher
     where: "directly after a literal `$`",
     fix: "remove the `$` or bind the value to a variable first",
   },
+  "heredoc-delimiter": {
+    where: "in a heredoc delimiter word",
+    fix: "use a literal delimiter word and bind the value to a variable used inside the body",
+  },
+  unplaced: {
+    where: "where the shell scan cannot place it",
+    fix: "move it into a bare or double-quoted word",
+  },
 };
+
+/** The context of the token at `offset`; a token the scan left unplaced is
+ * unsafe rather than defaulting to bare. */
+export function shellContextAt(contexts: ReadonlyMap<number, ShellTokenContext>, offset: number): ShellTokenContext {
+  return contexts.get(offset) ?? { unsafe: "unplaced" };
+}
 
 export function shellEscapeForContext(value: string, ctx: ShellQuoteContext): string {
   switch (ctx) {
@@ -131,6 +149,7 @@ export function scanShellTokenContexts(template: string, tokenRe: RegExp): Map<n
         let lineEnd = nl === -1 ? template.length : nl;
         const line = template.slice(pos, lineEnd);
         if ((doc.stripTabs ? line.replace(/^\t+/, "") : line) === doc.delim) {
+          for (let k = pos; k < lineEnd; k++) if (tokens.has(k)) out.set(k, { unsafe: "heredoc-delimiter" });
           pos = lineEnd + 1;
           break;
         }
@@ -158,6 +177,7 @@ export function scanShellTokenContexts(template: string, tokenRe: RegExp): Map<n
     const wordStart = k;
     while (k < template.length && !WORD_BREAK.test(at(k))) {
       const end = tokens.get(k);
+      if (end !== undefined) out.set(k, { unsafe: "heredoc-delimiter" });
       k = end ?? k + 1;
     }
     const delim = template.slice(wordStart, k).replace(/['"\\]/g, "");
@@ -293,5 +313,6 @@ export function scanShellTokenContexts(template: string, tokenRe: RegExp): Map<n
         break;
     }
   }
+  for (const k of tokens.keys()) if (!out.has(k)) out.set(k, { unsafe: "unplaced" });
   return out;
 }

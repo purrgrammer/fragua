@@ -104,7 +104,8 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     // CLOSED as a node `fail` (routes via fail-edge / aborted_exit) rather
     // than an uncaught throw the executor would turn into a fatal halt: an
     // unpopulated `${{ outputs.X.f }}`, and a token in a shell position no
-    // escape makes inert (backticks, a comment, a heredoc, after `\`).
+    // escape makes inert (backticks, a comment, a heredoc body or delimiter,
+    // after `\`).
     let command: string;
     try {
       command = substitute(rawCommand, {

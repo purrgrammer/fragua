@@ -21,6 +21,7 @@ import type { OutputStructValue, OutputsValue } from "../types/outputs.ts";
 import {
   ShellContextError,
   scanShellTokenContexts,
+  shellContextAt,
   shellEscapeForContext,
   type UnsafeShellRef,
 } from "./shell-quote.ts";
@@ -89,7 +90,7 @@ export function substituteOutputs(
       return whole;
     }
     if (contexts === undefined) return c.rendered;
-    const ctx = contexts.get(offset) ?? "bare";
+    const ctx = shellContextAt(contexts, offset);
     if (typeof ctx === "object") {
       unsafe.push({ ref: whole.trim(), position: ctx.unsafe });
       return whole;
