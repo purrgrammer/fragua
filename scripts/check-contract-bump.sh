@@ -29,7 +29,7 @@ PRAGMAS="packages/store/src/pragmas.ts"
 if [ "$MODE" = "worktree" ]; then
   RANGE="$(git merge-base HEAD "${BASE}")"
 else
-  RANGE="${RANGE}"
+  RANGE="${BASE}...HEAD"
 fi
 
 changed="$(git diff --name-only "${RANGE}")"
