@@ -21,8 +21,10 @@ import type { Database } from "bun:sqlite";
  * attribution for `doctor` / `daemon stop`; bookkeeping, never folded).
  * v10 adds the generated `events.outputs_blob_sha` column (the spilled-output
  * ref a `fact.node_completed` names) and its partial index, so blob GC roots
- * every ref the log holds, not only the latest outputs-index row. */
-export const CURRENT_SCHEMA_VERSION = 10;
+ * every ref the log holds, not only the latest outputs-index row.
+ * v11 adds `idx_events_side_effect_key` (the orphan side-effect anti-join;
+ * index only). */
+export const CURRENT_SCHEMA_VERSION = 11;
 
 /** Lowest schema version `migrate()` accepts and walks forward from. A v1
  * store (the 0.1.0 baseline) migrates to current; nothing older exists. */

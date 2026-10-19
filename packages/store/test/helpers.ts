@@ -47,6 +47,19 @@ export function twoStoresOnOneFile(nowStart = 1_700_000_000_000): {
   return { a: stores[0]!, b: stores[1]!, dispose };
 }
 
+/** Median wall time of `runs` calls to `fn`, after one untimed warm-up call. */
+export function medianMs(fn: () => unknown, runs = 3): number {
+  fn();
+  const samples: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    const t0 = performance.now();
+    fn();
+    samples.push(performance.now() - t0);
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)]!;
+}
+
 export function nextId(prefix = "run"): string {
   return `${prefix}_${++seq}`;
 }

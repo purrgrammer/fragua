@@ -193,6 +193,15 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, run_id, seq);
 -- on its own. With this index, `WHERE (ts, run_id, seq) > (?, ?, ?)
 -- ORDER BY ts, run_id, seq` walks the index without a sort step.
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts, run_id, seq);
+-- Orphan side-effect detection: an anti-join from each
+-- `fact.side_effect_intent` probes this for a matching done/failed by
+-- (run_id, idempotencyKey). Partial, so the high-volume `llm.*` /
+-- `cost.recorded` inserts never touch it. The trailing `type` makes it cover
+-- the probe — without it the planner, lacking ANALYZE stats, prefers the
+-- clustered (run_id, seq) primary key and scans the run.
+CREATE INDEX IF NOT EXISTS idx_events_side_effect_key
+  ON events(run_id, json_extract(payload, '$.idempotencyKey'), type)
+  WHERE type IN ('fact.side_effect_done', 'fact.side_effect_failed');
 
 -- messages.content stores a pi-agent-core `AgentMessage` as JSON — the
 -- same shape pi-ai hands us at message_end and hands back as

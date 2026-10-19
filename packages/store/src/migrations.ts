@@ -179,6 +179,15 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
       db.exec("ALTER TABLE events DROP COLUMN outputs_blob_sha");
     },
   },
+  // v10 → v11: the partial expression index the orphan side-effect anti-join
+  // probes. `down` is not lossy: an index holds no source-of-truth data.
+  11: {
+    up: (db) =>
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_events_side_effect_key
+  ON events(run_id, json_extract(payload, '$.idempotencyKey'), type)
+  WHERE type IN ('fact.side_effect_done', 'fact.side_effect_failed')`),
+    down: (db) => db.exec("DROP INDEX IF EXISTS idx_events_side_effect_key"),
+  },
 };
 
 /** Must match the `events.outputs_blob_sha` expression in `schema.sql`. */
