@@ -98,6 +98,15 @@ export function lastAssistantMessage(
   return undefined;
 }
 
+/** True when the transcript's last message is the assistant envelope
+ * pi-agent-core synthesises for a provider transport failure or an in-flight
+ * abort (`stopReason: "error" | "aborted"`). The model never chose to end that
+ * turn, so nothing about the turn's content is actionable. */
+export function endedOnDeadProviderTurn(messages: ReadonlyArray<{ role: string; stopReason?: string }>): boolean {
+  const last = messages[messages.length - 1];
+  return last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted");
+}
+
 /**
  * Scan the transcript for a call to the built-in `abort` tool. The agent
  * signals "I cannot proceed" by calling `abort({ reason })`; the tool sets

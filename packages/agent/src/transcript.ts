@@ -10,7 +10,13 @@ import type { EventType, LlmInput, OutputsDecl, SummariserBackend } from "@fragu
 import type { ExecutionEnvironment, FraguaToolContext, Skill, ToolRegistry } from "@fragua/workspace";
 import { sanitiseUnpairedToolCalls, toCatalogRecord } from "@fragua/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import { EMIT_OUTPUT_REMINDER, findAbortToolCall, findEmitOutputCall, lastAssistantMessage } from "./exit-tools.ts";
+import {
+  EMIT_OUTPUT_REMINDER,
+  endedOnDeadProviderTurn,
+  findAbortToolCall,
+  findEmitOutputCall,
+  lastAssistantMessage,
+} from "./exit-tools.ts";
 import type { MessageStore } from "./message-store.ts";
 import type { SteeringRegistry } from "./steering-registry.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
@@ -351,13 +357,17 @@ export async function executePromptLoop(
     await agent.waitForIdle();
     // One corrective re-prompt when a required `emit_output` exit was skipped —
     // absorbing a single transient miss. A second miss falls through to the
-    // non-retryable failure below. Routing nodes + deliberate aborts + dead
-    // provider turns are excluded.
+    // non-retryable failure below. Routing nodes + deliberate aborts are
+    // excluded, and so is a turn the provider killed (429/5xx/abort): the model
+    // never ended that turn, and the nudge is persisted on the node's thread,
+    // so after the provider pause the resumed dispatch would obey "emit now"
+    // and throw away the work it had done.
     if (
       outputsDecl !== undefined &&
       !hasRoutes &&
       !input.signal?.aborted &&
       lastAssistantMessage(agent.state.messages) !== undefined &&
+      !endedOnDeadProviderTurn(agent.state.messages) &&
       findEmitOutputCall(agent.state.messages.slice(hydratedCount)) == null &&
       findAbortToolCall(agent.state.messages.slice(hydratedCount)) == null
     ) {
