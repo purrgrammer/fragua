@@ -44,12 +44,13 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 | `intent.human_input` | `queued` / `running` (post-wake) / `paused_human` / `paused` / `paused_auto` | set `humanInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
 | `intent.priority_adjusted` | fold: any (accepted unconditionally — the fold only runs while the executor dispatches a turn, so terminal runs never reach it; no explicit per-state filter) | merge `newPriority` into `routingDelta` (last-wins) | n/a |
 | `intent.budget_adjusted` | fold: any (accepted unconditionally) | merge `routing.budget_override.<scope>.<metric> = newLimit` into `routingDelta`; the next turn-boundary budget check reads this before the graph/node attr | malformed payload (bad `scope`/`metric` or `newLimit ≤ 0`) → drop `wrong_state` |
-| `intent.unquarantine` | `quarantined` | handled outside the fold by `wakeUnquarantine` (`packages/daemon/src/wake-pending.ts`); resolves `cancel` / `retry` / `treat_as_done` (see *Pending-intent driver* below) | non-quarantined → drop `wrong_state` |
+| `intent.unquarantine` | `quarantined` | handled outside the fold by `wakeUnquarantine` (`packages/daemon/src/wake-pending.ts`); resolves `cancel` / `retry` / `treat_as_done` (see *Pending-intent driver* below) | no-op if it reaches the fold: the fold marks it applied in any status and never emits `intent.dropped` for it |
 | `intent.resume` | `paused` / `paused_auto` / `paused_human` / `quarantined` | handled outside the fold by `wakePending`; emits `fact.run_resumed` and re-queues the run — no-op if it reaches the fold | terminal → no fold turn |
 | `intent.max_retries_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_retries_override.<nodeId> = newLimit` into `routingDelta`; the next retry-policy check reads this before the node attr | malformed payload (bad `nodeId` or `newLimit ≤ 0`) → drop `wrong_state` |
 | `intent.goal_gate_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_goal_gate_retries_override = newLimit` into `routingDelta` | malformed payload (`newLimit ≤ 0`) → drop `wrong_state` |
 | `intent.max_loops_adjusted` | fold: any (accepted unconditionally) | merge `routing.max_loops_override = newLimit` into `routingDelta` | malformed payload (`newLimit ≤ 0`) → drop `wrong_state` |
 | `intent.accept_run` / `intent.discard_run` | terminal + `inbox_status='pending'` | handled outside the fold by `processOperatorActions` sweep — no-op if it reaches the fold | n/a |
+| `intent.checkout_release` | terminal checkout run | committed by the CLI together with `fact.checkout_released` in one transaction (see ARCHITECTURE.md §3); the fold has no case for it, so it is marked applied with no effect if it reaches the fold | n/a |
 
 ---
 
@@ -107,4 +108,4 @@ Tests live at `packages/daemon/test/wake-pending.test.ts`.
 
 ## Property test
 
-`P27` (in `packages/daemon/test/matrix.property.test.ts`) generates random batches of intents under all four `RunStatus` values and asserts the rules R1–R7 plus per-intent preconditions. 200 random runs per CI execution.
+`P27` (in `packages/daemon/test/matrix.property.test.ts`) generates random batches of intents under all run statuses and asserts the rules R1–R7 plus per-intent preconditions. 200 random runs per CI execution.
