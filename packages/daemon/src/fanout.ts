@@ -58,6 +58,7 @@ import { abortedActiveBranches, commitFanoutFact } from "./fanout-commit.ts";
 import {
   type FanoutPlan,
   noteDisposition,
+  partitionExitFacts,
   planBailSettlement,
   planBranchSettlement,
   planFanoutMalformed,
@@ -458,15 +459,10 @@ async function drainInflightPool(ctx: FanoutCtx): Promise<BranchOutcome[]> {
   return settled;
 }
 
-/** A leaked branch bails the pool: abort the in-flight siblings, wait for them
- * (bounded), and commit their completions / exits and the spend of any still
- * running ahead of the leak's own halt in one batch. */
-async function bailWithSiblings(
-  ctx: FanoutCtx,
-  outcome: Extract<BranchOutcome, { kind: "exit" }>,
-): Promise<DispatchOutcome> {
-  const { deps } = ctx;
-  deps.leakBudget.recordLeak(deps.runId, outcome.nodeId);
+/** A branch that halts the run bails the pool: abort the in-flight siblings,
+ * wait for them (bounded), and commit their completions / exits and the spend of
+ * any still running ahead of the terminal facts in one batch. */
+async function bailOnTerminal(ctx: FanoutCtx, terminalFacts: FactEvent[]): Promise<DispatchOutcome> {
   abortInflightPool(ctx);
   const settled = await drainInflightPool(ctx);
   const siblings = planBailSettlement({
@@ -480,26 +476,34 @@ async function bailWithSiblings(
       usage: b.usage.totals(),
     })),
   });
-  return commitFanoutDisposition(ctx, [...siblings, ...outcome.plan.facts]);
+  return commitFanoutDisposition(ctx, [...siblings, ...terminalFacts]);
+}
+
+/** A halting branch exit: its node-scoped facts (the spend-bearing
+ * `node_aborted`) plus the run's ranked halt, committed through the bail. A
+ * leak keeps its own facts verbatim and is charged to the leak budget. */
+function bailOnExitHalt(ctx: FanoutCtx, outcome: Extract<BranchOutcome, { kind: "exit" }>): Promise<DispatchOutcome> {
+  if (outcome.exit === "leak") {
+    ctx.deps.leakBudget.recordLeak(ctx.deps.runId, outcome.nodeId);
+    return bailOnTerminal(ctx, outcome.plan.facts);
+  }
+  const { branchFacts, disposition } = partitionExitFacts(ctx.disposition, outcome.plan.facts);
+  ctx.disposition = disposition;
+  return bailOnTerminal(ctx, disposition !== undefined ? [...branchFacts, disposition] : branchFacts);
 }
 
 /** Fold one branch's non-result exit: node-scoped facts (the spend-bearing
  * `node_aborted`, plus a timeout-retry's counter patch) commit on the branch
- * lane; the plan's park/terminal fact joins the pool disposition. A leak bails. */
+ * lane; the plan's park fact joins the ranked pool disposition. A leak or any
+ * halting exit bails. */
 async function settleExit(
   ctx: FanoutCtx,
   outcome: Extract<BranchOutcome, { kind: "exit" }>,
 ): Promise<DispatchOutcome | undefined> {
   const { deps, ts } = ctx;
-  if (outcome.exit === "leak") return bailWithSiblings(ctx, outcome);
-  const branchFacts: FactEvent[] = [];
-  for (const f of outcome.plan.facts) {
-    if (f.type === "fact.run_paused" || f.type === "fact.run_terminated") {
-      ctx.disposition = noteDisposition(ctx.disposition, f);
-    } else {
-      branchFacts.push(f);
-    }
-  }
+  if (outcome.exit === "leak" || outcome.plan.outcome === "halt") return bailOnExitHalt(ctx, outcome);
+  const { branchFacts, disposition } = partitionExitFacts(ctx.disposition, outcome.plan.facts);
+  ctx.disposition = disposition;
   return commitWithOcc(
     {
       occ: deps.occ,
@@ -564,7 +568,9 @@ async function settleBranch(ctx: FanoutCtx, outcome: BranchOutcome): Promise<Dis
         clearBranchAbort(ts, outcome.nodeId);
         captureDisposition(ctx);
         if (successor !== outcome.nodeId) fireNodeExited(deps.opts.onNodeExited, deps.runId, outcome.nodeId);
+        if (ctx.disposition?.type === "fact.run_terminated") return bailOnTerminal(ctx, [ctx.disposition]);
         if (successor !== undefined && ctx.disposition === undefined) poolDispatch(ctx, successor);
+        return undefined;
       },
     },
     settlement.branchFacts,

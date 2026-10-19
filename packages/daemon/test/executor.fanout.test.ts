@@ -1577,7 +1577,7 @@ steps:
     const origAppend = r.store.appendFact.bind(r.store);
     let haltConflicts = 0;
     r.store.appendFact = (runId, facts, version, appendOpts) => {
-      if (facts[0]?.type === "fact.run_terminated" && haltConflicts < 8) {
+      if (facts.some((f) => f.type === "fact.run_terminated") && haltConflicts < 8) {
         haltConflicts++;
         throw new ConcurrencyError(version, version + 1);
       }

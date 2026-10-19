@@ -604,29 +604,32 @@ const SELECT_NEXT_QUEUED_RUN_SQL = `
 const CLAIM_NEXT_RUN_SQL = `
   UPDATE run_state
      SET status = 'running',
-         node_started_at = ?,
+         node_started_at = ?1,
          version = version + 1,
          claim_epoch = claim_epoch + 1,
-         updated_at = ?
-   WHERE run_id = ? AND version = ? AND status = 'queued'
+         updated_at = ?2
+   WHERE run_id = ?3 AND version = ?4 AND status = 'queued'
+     AND (?5 IS NULL OR EXISTS (SELECT 1 FROM daemon_lock WHERE id = 1 AND pid = ?5))
    RETURNING run_id, claim_epoch
 `;
 
 /** OCC-protected claim: select highest-priority queued run, then update
- *  WHERE version matches, bumping `claim_epoch`. Returns the claimed run_id +
- *  its new epoch, or null if no candidate or the version moved between SELECT
- *  and UPDATE. */
+ *  WHERE version matches, bumping `claim_epoch`. With a `claimerPid`, the
+ *  claim also requires `daemon_lock` to be held by that pid, so an evicted
+ *  daemon claims nothing. Returns the claimed run_id + its new epoch, or null
+ *  if no candidate, the version moved between SELECT and UPDATE, or the lock
+ *  is not the claimer's. */
 export function selectNextQueuedRun(db: Database): { run_id: string; version: number } | null {
   return db.query<{ run_id: string; version: number }, []>(SELECT_NEXT_QUEUED_RUN_SQL).get() ?? null;
 }
 
 export function claimQueuedRun(
   db: Database,
-  args: { runId: string; expectedVersion: number; now: number },
+  args: { runId: string; expectedVersion: number; now: number; claimerPid?: number | undefined },
 ): { runId: string; claimEpoch: number } | null {
   const res = db
-    .query<{ run_id: string; claim_epoch: number }, [number, number, string, number]>(CLAIM_NEXT_RUN_SQL)
-    .get(args.now, args.now, args.runId, args.expectedVersion);
+    .query<{ run_id: string; claim_epoch: number }, [number, number, string, number, number | null]>(CLAIM_NEXT_RUN_SQL)
+    .get(args.now, args.now, args.runId, args.expectedVersion, args.claimerPid ?? null);
   return res != null ? { runId: res.run_id, claimEpoch: res.claim_epoch } : null;
 }
 

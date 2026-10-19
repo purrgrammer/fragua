@@ -21,6 +21,8 @@ import {
   type RunState,
 } from "@fragua/store";
 import { sleep } from "./executor-helpers.ts";
+import { planOccExhausted } from "./lifecycle-planner.ts";
+import { spendFactsFor } from "./result-to-facts.ts";
 
 /**
  * Outcome of a single dispatch turn. `dispatchOne` (and `commitParkOrTerminal`)
@@ -93,8 +95,9 @@ export type ConflictOutcome = { halted: true } | { halted: false; abandoned?: tr
 
 export interface OccController {
   /** Record an OCC conflict on an append. Backs off; warns once at
-   * OCC_WARN_AT; at OCC_CEILING tries to halt the run (`occ_exhausted`) and
-   * returns `{ halted: true }` only once the run really left `running`, else
+   * OCC_WARN_AT; at OCC_CEILING tries to halt the run (`occ_exhausted`, led by
+   * `spend` — the losing batch's spend facts) and returns `{ halted: true }`
+   * only once the run really left `running`, else
    * `{ halted: false, abandoned: true }`. Below the ceiling returns
    * `{ halted: false }` — the caller should re-read state and retry the turn. */
   onConflict(
@@ -102,12 +105,24 @@ export interface OccController {
     nodeId: string,
     iteration: number,
     lastVersion: number,
+    spend?: readonly FactEvent[],
   ): Promise<ConflictOutcome>;
   /** Record that an append landed. Emits `occ_conflict_resolved` if there
    * were prior conflicts this turn, then resets the counter. */
   onResolved(nodeId: string, iteration: number): void;
   /** Sticky: some conflict ended `abandoned` during this `runOne` pass. */
   wasAbandoned(): boolean;
+  /** Mark a fact batch as mid-commit; returns the token `releaseSpend` takes
+   * once the batch's fate is known (landed, or its spend committed elsewhere). */
+  holdSpend(facts: readonly FactEvent[]): number;
+  releaseSpend(token: number): void;
+  /** The spend of every batch still mid-commit — what a crash halt must carry
+   * so an interrupted commit's spend is not lost. */
+  pendingSpend(): FactEvent[];
+  /** Commit `spend` alone against fresh state, bounded by
+   * HALT_APPEND_MAX_ATTEMPTS — the spend of a result whose commit could not be
+   * re-planned, so it lands without re-running the handler. */
+  commitSpend(spend: readonly FactEvent[]): Promise<void>;
 }
 
 export function makeOccController(deps: {
@@ -119,9 +134,11 @@ export function makeOccController(deps: {
   let occCount = 0;
   let occWarned = false;
   let abandoned = false;
+  let nextToken = 0;
+  const held = new Map<number, readonly FactEvent[]>();
 
   return {
-    onConflict: async (attemptedFactType, nodeId, iteration, lastVersion) => {
+    onConflict: async (attemptedFactType, nodeId, iteration, lastVersion, spend = []) => {
       occCount++;
       if (occCount >= OCC_CEILING) {
         // The occ_exhausted halt is itself a fact append and can itself
@@ -133,17 +150,12 @@ export function makeOccController(deps: {
         for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
           const fresh = store.getState(runId);
           if (fresh == null || fresh.status !== "running") return { halted: true };
-          const res = appendCommit(store, runId, fresh.version, [
-            {
-              type: "fact.run_terminated",
-              payload: {
-                status: "errored",
-                reason: "occ_exhausted",
-                detail: `${occCount} consecutive OCC conflicts on ${attemptedFactType} for node ${nodeId}`,
-                occContext: { count: occCount, nodeId, iteration, lastVersion, attemptedFactType },
-              },
-            },
-          ]);
+          const res = appendCommit(
+            store,
+            runId,
+            fresh.version,
+            planOccExhausted({ count: occCount, nodeId, iteration, lastVersion, attemptedFactType, spend }).facts,
+          );
           if (res.ok || res.reason === "claim_lost") return { halted: true };
           await sleep(Math.min(2 ** attempt, OCC_BACKOFF_CAP_MS), shutdownSignal);
         }
@@ -181,6 +193,25 @@ export function makeOccController(deps: {
       occWarned = false;
     },
     wasAbandoned: () => abandoned,
+    holdSpend: (facts) => {
+      const token = nextToken++;
+      held.set(token, facts);
+      return token;
+    },
+    releaseSpend: (token) => {
+      held.delete(token);
+    },
+    pendingSpend: () => spendFactsFor([...held.values()].flat(), "crash"),
+    commitSpend: async (spend) => {
+      if (spend.length === 0) return;
+      for (let attempt = 0; attempt < HALT_APPEND_MAX_ATTEMPTS; attempt++) {
+        const fresh = store.getState(runId);
+        if (fresh == null) return;
+        const res = appendCommit(store, runId, fresh.version, [...spend]);
+        if (res.ok || res.reason === "claim_lost") return;
+        await sleep(Math.min(2 ** attempt, OCC_BACKOFF_CAP_MS), shutdownSignal);
+      }
+    },
   };
 }
 
@@ -274,7 +305,9 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
   let attempt: OccReplan = { facts, expectedVersion: plan.expectedVersion, commit: plan.commit };
   let replanned = false;
   for (;;) {
+    const token = plan.occ.holdSpend(attempt.facts);
     const res = await attempt.commit(attempt.facts);
+    if (res.ok || res.reason !== "occ") plan.occ.releaseSpend(token);
     if (res.ok) {
       if (replanned) plan.occ.onResolved(plan.nodeId, plan.iteration);
       const override = (await plan.onSuccess?.(attempt.facts)) as DispatchOutcome | undefined;
@@ -293,7 +326,9 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
       plan.nodeId,
       plan.iteration,
       attempt.expectedVersion,
+      spendFactsFor(attempt.facts, "occ_exhausted"),
     );
+    plan.occ.releaseSpend(token);
     if (conflict.halted) {
       plan.onPark?.(undefined);
       return { kind: "terminal" };
@@ -305,17 +340,24 @@ export async function commitWithOcc(plan: OccCommitPlan, facts: FactEvent[]): Pr
     }
     const next = nextReplan(plan);
     if (next === "status") break;
-    if (next === undefined) {
-      await plan.onNonHalt?.();
-      plan.onPark?.(attempt.facts);
-      return { kind: "continue" };
-    }
+    if (next === undefined) return parkUnplanned(plan, attempt.facts);
     attempt = next;
     replanned = true;
   }
   await plan.onNonHalt?.();
   plan.onPark?.(undefined);
   return plan.statusOutcome;
+}
+
+/** A conflicted batch with no in-turn re-plan: a parking lane (`onPark`) keeps
+ * the whole batch for re-commit next turn; without one the batch is dropped, so
+ * its spend commits on its own first — the handler result is never re-run to
+ * recover it. */
+async function parkUnplanned(plan: OccCommitPlan, facts: FactEvent[]): Promise<DispatchOutcome> {
+  await plan.onNonHalt?.();
+  if (plan.onPark !== undefined) plan.onPark(facts);
+  else await plan.occ.commitSpend(spendFactsFor(facts, "occ_replan_declined"));
+  return { kind: "continue" };
 }
 
 /** The re-plan for the next attempt: `status` when the run left `running` under

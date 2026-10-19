@@ -59,6 +59,7 @@ import {
   type ArtifactRef,
   type ArtifactScope,
   type ClaimFenceOpts,
+  type ClaimNextRunOpts,
   type CreateScheduleParams,
   type DaemonEvent,
   type DaemonEventRow,
@@ -193,8 +194,8 @@ export class SqliteStore implements IEventStore {
     writer.enqueueRun(this.ctx, params);
   }
 
-  claimNextRun(maxInFlight: number): { runId: string; claimEpoch: number } | null {
-    return writer.claimNextRun(this.ctx, maxInFlight);
+  claimNextRun(maxInFlight: number, opts?: ClaimNextRunOpts): { runId: string; claimEpoch: number } | null {
+    return writer.claimNextRun(this.ctx, maxInFlight, opts);
   }
 
   releaseClaim(runId: string, claimEpoch: number, opts?: { prevNode?: string; lastAliveAt?: number }): boolean {

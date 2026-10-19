@@ -30,6 +30,27 @@ describe("claim_epoch", () => {
     store.close();
   });
 
+  test("claimNextRun with a claimerPid claims nothing when daemon_lock is held by another pid", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.acquireDaemonLock(2, "h").acquired).toBe(true);
+
+    expect(store.claimNextRun(1, { claimerPid: 1 })).toBeNull();
+    expect(store.getState(runId)!.status).toBe("queued");
+    expect(store.getClaimEpoch(runId)).toBe(0);
+
+    expect(store.claimNextRun(1, { claimerPid: 2 })).toEqual({ runId, claimEpoch: 1 });
+    store.close();
+  });
+
+  test("claimNextRun with a claimerPid claims nothing when no daemon_lock row exists; no pid claims as before", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.claimNextRun(1, { claimerPid: 1 })).toBeNull();
+    expect(store.claimNextRun(1)).toEqual({ runId, claimEpoch: 1 });
+    store.close();
+  });
+
   test("startupSweep requeue and quarantine bump claim_epoch", async () => {
     const store = freshStore();
     const requeued = await seedRun(store);

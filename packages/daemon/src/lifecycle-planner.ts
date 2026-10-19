@@ -74,10 +74,12 @@ export function planDispatchStarted(input: {
 
 /** The executor-crash terminal — the outer safety net when the run body escaped
  * without terminalising. `detail` carries the node + error message the driver
- * assembled, clipped to the fact-text budget. */
-export function planCrashHalt(input: { detail: string }): LifecyclePlan {
+ * assembled, clipped to the fact-text budget. `spend` (from `spendFactsFor`) is
+ * the spend of the commit the crash interrupted, committed ahead of the halt. */
+export function planCrashHalt(input: { detail: string; spend?: readonly FactEvent[] }): LifecyclePlan {
   return {
     facts: [
+      ...(input.spend ?? []),
       {
         type: "fact.run_terminated",
         payload: { status: "errored", reason: "error", detail: clipPayloadText(input.detail) },
@@ -90,12 +92,42 @@ export const CRASH_HALT_MINIMAL_DETAIL = "executor crashed (detail exceeded payl
 
 /** The crash terminal with a fixed detail — the fallback when the store still
  * rejected the clipped crash halt as too large. */
-export function planCrashHaltMinimal(): LifecyclePlan {
+export function planCrashHaltMinimal(input: { spend?: readonly FactEvent[] } = {}): LifecyclePlan {
   return {
     facts: [
+      ...(input.spend ?? []),
       {
         type: "fact.run_terminated",
         payload: { status: "errored", reason: "error", detail: CRASH_HALT_MINIMAL_DETAIL },
+      },
+    ],
+  };
+}
+
+/** The OCC-ceiling terminal: `count` consecutive conflicts on
+ * `attemptedFactType` halt the run `occ_exhausted`. `spend` (from
+ * `spendFactsFor`) is the losing batch's spend, committed ahead of the halt so
+ * the discarded result's cost still reaches run totals. */
+export function planOccExhausted(input: {
+  count: number;
+  nodeId: string;
+  iteration: number;
+  lastVersion: number;
+  attemptedFactType: string;
+  spend?: readonly FactEvent[];
+}): LifecyclePlan {
+  const { count, nodeId, iteration, lastVersion, attemptedFactType } = input;
+  return {
+    facts: [
+      ...(input.spend ?? []),
+      {
+        type: "fact.run_terminated",
+        payload: {
+          status: "errored",
+          reason: "occ_exhausted",
+          detail: clipPayloadText(`${count} consecutive OCC conflicts on ${attemptedFactType} for node ${nodeId}`),
+          occContext: { count, nodeId, iteration, lastVersion, attemptedFactType },
+        },
       },
     ],
   };

@@ -156,6 +156,10 @@ export interface ExecutorOpts {
   /** Called once a run's fiber ends with the run in a hard-terminal status
    * (not on a pause). Best-effort: a throw is swallowed. */
   onRunTerminal?: (runId: string) => void;
+  /** The daemon pid that must hold `daemon_lock` for a claim to succeed. A
+   * daemon evicted from the lock claims nothing, even before its heartbeat
+   * notices. Absent (`fragua ci`, tests), claims are not lock-gated. */
+  claimerPid?: number;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -186,10 +190,12 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   // One leak budget per executor process — counts handler leaks across
   // every run; fires opts.onLeakLimitExceeded once when the limit trips.
   const leakBudget = makeLeakBudget(opts);
+  const claimOpts = opts.claimerPid !== undefined ? { claimerPid: opts.claimerPid } : undefined;
   while (!opts.shutdownSignal.aborted) {
     wakePending(opts.store);
     processOperatorActions(opts.store);
-    const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns);
+    if (opts.shutdownSignal.aborted) break;
+    const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns, claimOpts);
     if (claimed == null) {
       await sleep(pollMs, opts.shutdownSignal);
       continue;
@@ -277,8 +283,9 @@ function notifyRunTerminal(runId: string, opts: ExecutorOpts): void {
 
 async function runOneGuarded(runId: string, opts: ExecutorOpts, epoch: number, leakBudget?: LeakBudget): Promise<void> {
   const budget = leakBudget ?? makeLeakBudget(opts);
+  const runOcc = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
   try {
-    await runOneInner(runId, opts, epoch, budget);
+    await runOneInner(runId, opts, epoch, budget, runOcc);
   } catch (err) {
     // The run was requeued or re-claimed under us: it is another fiber's, so
     // there is nothing to terminalise.
@@ -295,34 +302,44 @@ async function runOneGuarded(runId: string, opts: ExecutorOpts, epoch: number, l
     // ceiling rather than silently rethrowing with the terminal fact
     // lost. The store's startupSweep is only a last-resort backstop for a
     // process that dies mid-recovery, not the primary recovery path.
-    await commitCrashHalt(runId, opts, epoch, err);
+    await commitCrashHalt(runId, opts, epoch, err, runOcc.pendingSpend());
     throw err;
   }
 }
 
 /** Terminalise a run whose body escaped without doing so. The clipped crash
  * halt is tried first; if the store still rejects it as too large, a fixed
- * minimal detail is committed instead. A run still `running` afterwards (every
- * append lost, or abandoned at the OCC ceiling) gives its claim back. */
-async function commitCrashHalt(runId: string, opts: ExecutorOpts, epoch: number, err: unknown): Promise<void> {
+ * minimal detail is committed instead. Both lead with the spend of any commit
+ * the crash interrupted. A run still `running` afterwards (every append lost or
+ * threw, or abandoned at the OCC ceiling) gives its claim back. */
+async function commitCrashHalt(
+  runId: string,
+  opts: ExecutorOpts,
+  epoch: number,
+  err: unknown,
+  spend: FactEvent[],
+): Promise<void> {
   const state = opts.store.getState(runId);
   if (state == null || state.status !== "running") return;
   const nodeId = state.currentNode ?? "<no-node>";
   const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
   try {
-    await driveCrashHalt(
-      runId,
-      opts,
-      occ,
-      nodeId,
-      planCrashHalt({ detail: `executor crashed at ${nodeId}: ${errorMessage(err)}` }).facts,
-    );
-  } catch (appendErr) {
-    if (!(appendErr instanceof PayloadTooLargeError)) throw appendErr;
-    await driveCrashHalt(runId, opts, occ, nodeId, planCrashHaltMinimal().facts);
+    try {
+      await driveCrashHalt(
+        runId,
+        opts,
+        occ,
+        nodeId,
+        planCrashHalt({ detail: `executor crashed at ${nodeId}: ${errorMessage(err)}`, spend }).facts,
+      );
+    } catch (appendErr) {
+      if (!(appendErr instanceof PayloadTooLargeError)) throw appendErr;
+      await driveCrashHalt(runId, opts, occ, nodeId, planCrashHaltMinimal({ spend }).facts);
+    }
+  } finally {
+    releaseIfAbandoned(runId, opts, epoch, occ);
+    releaseIfStillRunning(runId, opts, epoch);
   }
-  releaseIfAbandoned(runId, opts, epoch, occ);
-  releaseIfStillRunning(runId, opts, epoch);
 }
 
 async function driveCrashHalt(
@@ -356,9 +373,14 @@ function releaseIfAbandoned(runId: string, opts: ExecutorOpts, epoch: number, oc
   opts.store.releaseClaim(runId, epoch, { lastAliveAt: (opts.clock ?? Date.now)() });
 }
 
-async function runOneInner(runId: string, opts: ExecutorOpts, epoch: number, leakBudget: LeakBudget): Promise<void> {
+async function runOneInner(
+  runId: string,
+  opts: ExecutorOpts,
+  epoch: number,
+  leakBudget: LeakBudget,
+  occ: OccController,
+): Promise<void> {
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
-  const occ = makeOccController({ store: opts.store, runId, shutdownSignal: opts.shutdownSignal });
   const loader = opts.graphLoader ?? makeGraphLoader(opts.store);
   const deps: RunDeps = {
     opts,

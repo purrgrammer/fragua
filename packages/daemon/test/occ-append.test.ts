@@ -78,6 +78,49 @@ describe("makeOccController", () => {
     expect(appends).toBe(1); // occ_exhausted run_halted committed once
   });
 
+  test("occ_exhausted batch carries the held spend", async () => {
+    const batches: FactEvent[][] = [];
+    const store = stubStore({
+      getState: (() => ({ status: "running", version: 1 })) as unknown as IEventStore["getState"],
+      appendFact: ((_r: string, facts: FactEvent[]) => {
+        batches.push(facts);
+      }) as unknown as IEventStore["appendFact"],
+      appendObservabilityEvents: (() => {}) as unknown as IEventStore["appendObservabilityEvents"],
+    });
+    const spend: FactEvent[] = [
+      {
+        type: "fact.node_aborted",
+        payload: { nodeId: "n", iteration: 0, cause: "occ_exhausted", partialTokens: 100, partialCostUsd: 0.25 },
+      },
+    ];
+    const occ = makeOccController({ store, runId: "r", shutdownSignal: noSignal });
+    await occ.onConflict("fact.node_completed", "n", 0, 1, spend);
+    await occ.onConflict("fact.node_completed", "n", 0, 1, spend);
+    expect(await occ.onConflict("fact.node_completed", "n", 0, 1, spend)).toEqual({ halted: true });
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]![0]).toEqual(spend[0]!);
+    expect(batches[0]![1]?.payload).toMatchObject({ status: "errored", reason: "occ_exhausted" });
+  });
+
+  test("pendingSpend reports a held batch's spend until it is released", () => {
+    const occ = makeOccController({ store: stubStore({}), runId: "r", shutdownSignal: noSignal });
+    const token = occ.holdSpend([
+      {
+        type: "fact.node_completed",
+        payload: { nodeId: "n", iteration: 0, tokens: 100, costUsd: 0.25, nextNode: "m" },
+      },
+    ]);
+    expect(occ.pendingSpend()).toEqual([
+      {
+        type: "fact.node_aborted",
+        payload: { nodeId: "n", iteration: 0, cause: "crash", partialTokens: 100, partialCostUsd: 0.25 },
+      },
+    ]);
+    occ.releaseSpend(token);
+    expect(occ.pendingSpend()).toEqual([]);
+  });
+
   test("onConflict returns {halted:false, abandoned:true} when every halt append loses", async () => {
     let appends = 0;
     const store = stubStore({
@@ -143,7 +186,16 @@ describe("makeOccController", () => {
 const pausedFact: FactEvent = { type: "fact.run_paused", payload: { reason: "operator", nodeId: "n" } };
 
 function fakeOcc(over: Partial<OccController> = {}): OccController {
-  return { onConflict: async () => ({ halted: false }), onResolved: () => {}, wasAbandoned: () => false, ...over };
+  return {
+    onConflict: async () => ({ halted: false }),
+    onResolved: () => {},
+    wasAbandoned: () => false,
+    holdSpend: () => 0,
+    releaseSpend: () => {},
+    pendingSpend: () => [],
+    commitSpend: async () => {},
+    ...over,
+  };
 }
 
 type ConcretePlan = OccCommitPlan & { successOutcome: { kind: "terminal" | "continue" } };

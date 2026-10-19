@@ -3,11 +3,13 @@
 // store, clock, or randomness: every case is a plain input → plan assertion.
 
 import { describe, expect, test } from "bun:test";
+import type { FactEvent } from "@fragua/store";
 import {
   CRASH_HALT_MINIMAL_DETAIL,
   planCrashHalt,
   planCrashHaltMinimal,
   planDispatchStarted,
+  planOccExhausted,
   planOperatorPause,
   planRunStarted,
 } from "../src/lifecycle-planner.ts";
@@ -88,5 +90,37 @@ describe("planCrashHalt", () => {
         payload: { status: "errored", reason: "error", detail: CRASH_HALT_MINIMAL_DETAIL },
       },
     ]);
+  });
+});
+
+describe("spend-leading terminals", () => {
+  const spend: FactEvent[] = [
+    {
+      type: "fact.node_aborted",
+      payload: { nodeId: "n1", iteration: 0, cause: "crash", partialTokens: 100, partialCostUsd: 0.25 },
+    },
+  ];
+
+  test("planCrashHalt and planOccExhausted lead with the given spend facts", () => {
+    const crash = planCrashHalt({ detail: `executor crashed at n1: ${"x".repeat(10_000)}`, spend }).facts;
+    const minimal = planCrashHaltMinimal({ spend }).facts;
+    const occ = planOccExhausted({
+      count: 3,
+      nodeId: "n1",
+      iteration: 0,
+      lastVersion: 7,
+      attemptedFactType: "fact.node_completed",
+      spend,
+    }).facts;
+    for (const facts of [crash, minimal, occ]) {
+      expect(facts.slice(0, -1)).toEqual(spend);
+      expect(facts[facts.length - 1]?.type).toBe("fact.run_terminated");
+      expect(new TextEncoder().encode(JSON.stringify(facts[facts.length - 1]?.payload)).length).toBeLessThan(4096);
+    }
+    expect(occ[1]?.payload).toMatchObject({
+      status: "errored",
+      reason: "occ_exhausted",
+      occContext: { count: 3, nodeId: "n1", iteration: 0, lastVersion: 7, attemptedFactType: "fact.node_completed" },
+    });
   });
 });

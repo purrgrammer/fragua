@@ -220,9 +220,17 @@ describe("decision-core purity discipline", () => {
       /\btype:\s*"fact\.node_aborted"/,
       /\btype:\s*"fact\.handler_timeout_leaked"/,
       /reason:\s*"abort_loop"/,
+      /reason:\s*"occ_exhausted"/,
     ];
     const offenders: string[] = [];
-    for (const name of ["fanout.ts", "fanout-commit.ts", "dispatch-turn.ts", "dispatch-replan.ts"]) {
+    for (const name of [
+      "fanout.ts",
+      "fanout-commit.ts",
+      "dispatch-turn.ts",
+      "dispatch-replan.ts",
+      "occ-append.ts",
+      "executor.ts",
+    ]) {
       const lines = readFileSync(join(SRC_DIR, name), "utf8").split("\n");
       lines.forEach((line, i) => {
         const trimmed = line.trimStart();
@@ -230,9 +238,10 @@ describe("decision-core purity discipline", () => {
         if (literals.some((re) => re.test(line))) offenders.push(`${name}:${i + 1}`);
       });
     }
-    expect(offenders, "build these facts via planDispatchStarted / planLoopCeiling / planExit / planAbortLoop").toEqual(
-      [],
-    );
+    expect(
+      offenders,
+      "build these facts via planDispatchStarted / planLoopCeiling / planExit / planAbortLoop / planOccExhausted",
+    ).toEqual([]);
   });
 
   test("fanout-planner.ts is covered by the scan", () => {
