@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-10-19
+
 ### Added
 
 - **`FRAGUA_RUN_ID`.** Every `bash` tool call and every `tool` step process now sees the run's id as an engine-set variable: never stripped by the env allow-list, never placed in the prompt. A workflow can name its own branch with `git switch -c "agent/$FRAGUA_RUN_ID"`; such a run lands through that branch, not the inbox.
