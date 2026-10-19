@@ -91,7 +91,7 @@ steps:
         echo "landing_gate: schema version $mine is already taken on main (main is at $main_v): renumber this run's migration, its test and its docs to $((main_v + 1)), and pin the test to a floor" >&2
         exit 1
       fi
-      bash scripts/check-contract-bump.sh origin/main
+      bash scripts/check-contract-bump.sh origin/main --worktree
     on:
       success: ci
       fail: fix

@@ -10,14 +10,29 @@
 # EVENT_CONTRACT_VERSION or carry an explicit no-bump marker. Two mechanical
 # gates, no reliance on anyone remembering the bump table.
 #
-# Usage: scripts/check-contract-bump.sh [base-ref]   (default: origin/main)
+# Usage: scripts/check-contract-bump.sh [base-ref] [--worktree]   (default: origin/main)
+#   --worktree  diff the WORKING TREE against the merge-base instead of HEAD —
+#               for a converge run, whose edits are uncommitted when the gate runs.
 set -euo pipefail
 
-BASE="${1:-origin/main}"
+BASE="origin/main"
+MODE="committed"
+for arg in "$@"; do
+  case "$arg" in
+    --worktree) MODE="worktree" ;;
+    *) BASE="$arg" ;;
+  esac
+done
 REDUCERS="packages/store/src/reducers.ts"
 PRAGMAS="packages/store/src/pragmas.ts"
 
-changed="$(git diff --name-only "${BASE}...HEAD")"
+if [ "$MODE" = "worktree" ]; then
+  RANGE="$(git merge-base HEAD "${BASE}")"
+else
+  RANGE="${RANGE}"
+fi
+
+changed="$(git diff --name-only "${RANGE}")"
 
 if ! grep -qx "${REDUCERS}" <<<"${changed}"; then
   echo "contract touch-gate: ${REDUCERS} untouched — ok"
@@ -25,7 +40,7 @@ if ! grep -qx "${REDUCERS}" <<<"${changed}"; then
 fi
 
 # reducers.ts changed → require a version bump OR a no-bump marker in the diff.
-pragmas_diff="$(git diff "${BASE}...HEAD" -- "${PRAGMAS}")"
+pragmas_diff="$(git diff "${RANGE}" -- "${PRAGMAS}")"
 if grep -qE '^\+[^+].*EVENT_CONTRACT_VERSION[[:space:]]*=[[:space:]]*[0-9]+' <<<"${pragmas_diff}"; then
   echo "contract touch-gate: EVENT_CONTRACT_VERSION bumped — ok"
   exit 0
@@ -35,7 +50,7 @@ fi
 # maintainer: the author who writes the diff also writes the marker. When a
 # second regular committer lands, this gate should grow CODEOWNERS-or-label
 # enforcement so a no-bump claim is reviewed by someone other than its author.
-reducers_diff="$(git diff "${BASE}...HEAD" -- "${REDUCERS}")"
+reducers_diff="$(git diff "${RANGE}" -- "${REDUCERS}")"
 if grep -qiE '^\+.*contract:[[:space:]]*no-bump' <<<"${reducers_diff}"; then
   echo "contract touch-gate: '// contract: no-bump' marker present — ok"
   exit 0
