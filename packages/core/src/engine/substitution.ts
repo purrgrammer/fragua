@@ -22,6 +22,7 @@ import {
   ShellContextError,
   type ShellTokenContext,
   scanShellTokenContexts,
+  shellContextAt,
   shellEscapeForContext,
   type UnsafeShellRef,
 } from "./shell-quote.ts";
@@ -104,7 +105,7 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
   const unsafe: UnsafeShellRef[] = [];
   const fmt = (raw: string, offset: number, whole: string): string => {
     if (contexts === undefined) return raw;
-    const ctx = contexts.get(offset) ?? "bare";
+    const ctx = shellContextAt(contexts, offset);
     if (typeof ctx === "object") {
       unsafe.push({ ref: whole.trim(), position: ctx.unsafe });
       return whole;
@@ -156,10 +157,8 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
 export function shellReferenceContexts(template: string): Array<{ ref: string; context: ShellTokenContext }> {
   const contexts = scanShellTokenContexts(template, COMBINED_REF_RE);
   const out: Array<{ ref: string; context: ShellTokenContext }> = [];
-  for (const m of template.matchAll(COMBINED_REF_RE)) {
-    const context = contexts.get(m.index);
-    if (context !== undefined) out.push({ ref: m[0].trim(), context });
-  }
+  for (const m of template.matchAll(COMBINED_REF_RE))
+    out.push({ ref: m[0].trim(), context: shellContextAt(contexts, m.index) });
   return out;
 }
 

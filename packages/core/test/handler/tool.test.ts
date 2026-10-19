@@ -268,6 +268,25 @@ describe("makeToolHandler — substitution", () => {
       expect(result.failureReason).toContain("inside backticks");
     }
   });
+
+  test("a token in a heredoc delimiter fails the node closed", async () => {
+    const ctx = stubCtx({ args: { inputs: { d: "A" } } });
+    let spawned = false;
+    const spec = makeToolHandler({
+      toolCommand: "cat <<${{ inputs.d }}\n$(touch PWNED)\n${{ inputs.d }}\n",
+      spawner: async () => {
+        spawned = true;
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
+      },
+    });
+    const result = await spec.handler(ctx);
+    expect(spawned).toBe(false);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.failureReason).toContain("heredoc delimiter");
+    }
+  });
 });
 
 describe("makeToolHandler — failure modes", () => {

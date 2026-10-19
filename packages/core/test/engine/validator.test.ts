@@ -428,6 +428,24 @@ describe("validate — E058 shell quoting context in a tool run:", () => {
     }
   });
 
+  test("a token in a heredoc delimiter in run: → E058 heredoc-delimiter", () => {
+    const { where, fix } = UNSAFE_SHELL_POSITIONS["heredoc-delimiter"];
+    const diags = validate(toolGraph("cat <<${{ inputs.d }}\nx\n${{ inputs.d }}", "tool", ["d"]));
+    expect(diags.filter((d) => d.severity === "error" && d.code !== "E058")).toEqual([]);
+    const e058 = diags.filter((d) => d.code === "E058");
+    expect(e058).toHaveLength(1);
+    expect(e058[0]).toMatchObject({ code: "E058", severity: "error", nodeId: "run" });
+    expect(e058[0]?.message).toContain(where);
+    expect(e058[0]?.message).toContain(fix);
+  });
+
+  test("a token in a quoted heredoc body still reports heredoc body, not delimiter", () => {
+    const e058 = validate(toolGraph("cat <<'EOF'\n${{ inputs.v }}\nEOF")).filter((d) => d.code === "E058");
+    expect(e058).toHaveLength(1);
+    expect(e058[0]?.message).toContain("inside a heredoc body");
+    expect(e058[0]?.message).not.toContain(UNSAFE_SHELL_POSITIONS["heredoc-delimiter"].where);
+  });
+
   test("a backslash-escaped $ before a token does not trip dollar-prefix", () => {
     expect(codesOf(toolGraph('echo "\\$${{ inputs.v }}"'))).not.toContain("E058");
   });

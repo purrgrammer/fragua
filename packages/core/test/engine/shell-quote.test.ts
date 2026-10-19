@@ -7,7 +7,9 @@ import { substituteOutputs } from "../../src/engine/outputs-substitution.ts";
 import {
   ShellContextError,
   scanShellTokenContexts,
+  shellContextAt,
   shellEscapeForContext,
+  UNSAFE_SHELL_POSITIONS,
   type UnsafeShellPosition,
 } from "../../src/engine/shell-quote.ts";
 import { shellReferenceContexts, substitute } from "../../src/engine/substitution.ts";
@@ -143,6 +145,7 @@ describe("unsafe positions throw ShellContextError", () => {
     ["inside $((…))", "echo $(( ${{ inputs.v }} + 1 ))", "arithmetic"],
     ["directly after $ in double quotes", 'echo "Price: $${{ inputs.v }}"', "dollar-prefix"],
     ["directly after $ bare", "echo $${{ inputs.v }}", "dollar-prefix"],
+    ["in a heredoc delimiter", "cat <<${{ inputs.v }}\nx\n", "heredoc-delimiter"],
   ];
 
   test.each(cases)("%s", (_label, tpl, position) => {
@@ -206,6 +209,65 @@ describe("R2-B1/B2 — a $-prefixed token is refused", () => {
     );
     expect(caught).toBeInstanceOf(ShellContextError);
     expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ outputs.p.v }}", position: "dollar-prefix" }]);
+  });
+});
+
+describe("R3-B1 — a token in a heredoc delimiter is refused", () => {
+  const ctxs = (tpl: string) => shellReferenceContexts(tpl).map((r) => r.context);
+  const refusal = (fn: () => unknown): unknown => {
+    try {
+      fn();
+    } catch (err) {
+      return err;
+    }
+    return undefined;
+  };
+
+  test("R3-B1: cat <<${{ inputs.d }} with d=A throws ShellContextError and nothing runs", () => {
+    let rendered: string | undefined;
+    const caught = refusal(() => {
+      rendered = substitute("cat <<${{ inputs.d }}\n$(touch PWNED)\n${{ inputs.d }}\n", {
+        args: { inputs: { d: "A" } },
+        escapeForShell: true,
+      });
+    });
+    expect(rendered).toBeUndefined();
+    expect(caught).toBeInstanceOf(ShellContextError);
+    expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ inputs.d }}", position: "heredoc-delimiter" }]);
+  });
+
+  test("quoted, <<- and partial delimiters are heredoc-delimiter", () => {
+    for (const op of ['<<"${{ inputs.d }}"', "<<'${{ inputs.d }}'", "<<-${{ inputs.d }}", "<<EOF${{ inputs.d }}"]) {
+      expect(ctxs(`cat ${op}\nx\nEOF\n`)[0]).toEqual({ unsafe: "heredoc-delimiter" });
+    }
+  });
+
+  test("substituteOutputs refuses a heredoc-delimiter output token", () => {
+    const caught = refusal(() =>
+      substituteOutputs("cat <<${{ outputs.p.v }}\nx\n", { p: { v: "A" } }, { escapeForShell: true }),
+    );
+    expect(caught).toBeInstanceOf(ShellContextError);
+    expect((caught as ShellContextError).refs).toEqual([{ ref: "${{ outputs.p.v }}", position: "heredoc-delimiter" }]);
+  });
+
+  test("near-miss: a token in a quoted heredoc body stays heredoc", () => {
+    expect(ctxs("cat <<'EOF'\n${{ inputs.v }}\nEOF")).toEqual([{ unsafe: "heredoc" }]);
+  });
+
+  test("near-miss: <<< here-string token stays bare", () => {
+    expect(ctxs("cat <<< ${{ inputs.v }}")).toEqual(["bare"]);
+  });
+
+  test("near-miss: \\$${{ inputs.v }} stays bare/double", () => {
+    expect(ctxs('echo \\$${{ inputs.v }} "\\$${{ inputs.v }}"')).toEqual(["bare", "double"]);
+  });
+});
+
+describe("fail closed on an unplaced token", () => {
+  test("shellContextAt returns unplaced for an offset with no entry", () => {
+    expect(shellContextAt(new Map(), 0)).toEqual({ unsafe: "unplaced" });
+    const err = new ShellContextError([{ ref: "${{ inputs.v }}", position: "unplaced" }]);
+    expect(err.message).toContain(UNSAFE_SHELL_POSITIONS.unplaced.where);
   });
 });
 
@@ -283,6 +345,17 @@ describe("shellEscapeForContext — property", () => {
         },
       ),
       { numRuns: 50 },
+    );
+  });
+
+  test("property: a token anywhere in a heredoc delimiter word throws for any value", () => {
+    fc.assert(
+      fc.property(value, (v) => {
+        expect(() =>
+          substitute("cat <<X${{ inputs.v }}Y\nbody\nX\n", { args: { inputs: { v } }, escapeForShell: true }),
+        ).toThrow(ShellContextError);
+      }),
+      { numRuns: 100 },
     );
   });
 

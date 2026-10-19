@@ -360,7 +360,8 @@ it sits in, and runs the shell command:
   skips validation still gets the value quote-escaped, never executed.
 - **Unsafe positions** — after a backslash, directly after a literal `$`
   (`$${{ inputs.x }}`), inside backticks, a `#` comment, a
-  heredoc body, `$'…'` or `$((…))`. No escape keeps a value inert there: the
+  heredoc body or delimiter (`<<${{ inputs.x }}`), `$'…'` or `$((…))`, and any
+  token the quote-state scan cannot place. No escape keeps a value inert there: the
   validator rejects them (E058) and the tool step fails if one reaches runtime.
   Bind the value to a variable first (`v=${{ inputs.x }}`) and use `"$v"`. Stdout + stderr become artifacts keyed by
 `${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay. A tool
