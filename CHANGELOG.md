@@ -30,6 +30,7 @@ guarantee.
 - **A `judge` step that hits its own `max-ms` retries with backoff** (`timeout_retry`, then `timeout_exhausted`) instead of halting the run with `judge aborted`.
 - **An `AbortError` or `TimeoutError` a step throws while its own signal is live now halts the run with `reason: "error"`** and the error message as detail, instead of being treated as a watchdog timeout (`timeout_retry`) or an operator abort (re-dispatch up to `abort_loop`). Aborts are classified by which signal fired — the step's deadline, an operator intent, the budget gate, or daemon shutdown.
 - **Schema v9.** Adds `daemon_lock.harness_pid` (the harness supervising the daemon) and `server_endpoint.hostname`; the event contract is unchanged, and `fragua db migrate --to 8` reverses it without data loss.
+- **Schema v10.** Adds the generated `events.outputs_blob_sha` column and its partial index, so blob GC roots every spilled output the event log names; the event contract is unchanged, and `fragua db migrate --to 9` reverses it without data loss.
 - **`fragua doctor` reports liveness from the process and the row together.** Each reported pid is probed on this host, so the daemon line distinguishes `alive`, `alive, heartbeat stale`, `dead (… stale lock)`, `running without a lock` and `no daemon`, and the server line distinguishes a live server, a dead pid's stale endpoint, and a harness serving without its row. A foreign-host row is shown unprobed.
 - **The harness keeps its live daemon's heartbeat fresh.** On readiness and every reaper tick it re-asserts the child's heartbeat and records itself as the supervisor, so a child whose own heartbeat is starved does not read as stale; a child that lost its lock still shuts down.
 - **`fragua daemon stop` refuses to signal a harness-supervised daemon** while its harness is alive, since the harness would only respawn it, and names the harness pid to stop instead.
@@ -75,6 +76,11 @@ guarantee.
 - **A stale executor can no longer re-run a step after crash recovery.** Once a run is requeued (startup sweep or reaper) and claimed again, the fiber that held it can't commit any further fact, so it exits without dispatching the node a second time or halting the run.
 - **A run whose halt keeps losing write races is requeued instead of left `running`.** When even the `occ_exhausted` halt can't land, the executor gives the run back to the queue with `fact.run_requeued_after_crash`.
 - **Unquarantine no longer discards pending operator raises.** Budget, retry, goal-gate and loop-cap raises (and priority changes) filed before an `unquarantine` now land in the run's routing instead of being marked applied unread; a pending cancel still wins.
+- **`fragua runs export` no longer fails after blob GC when a step re-completed with a large output.** GC now keeps the blob of every spilled output the event log names, not only the latest one per step iteration.
+- **Concurrent `fragua import` of the same bundle no longer fails with `UNIQUE constraint failed`.** One import inserts the run and the others are no-ops; two imports extending the same run no longer fail with a concurrency error.
+- **An imported run keeps its title.** The title set at enqueue is restored on import instead of being dropped.
+- **Two writers storing different content under one artifact key no longer both succeed.** Exactly one wins and the other gets an artifact-collision error, unless it passed `replace`.
+- **A step retried after a write conflict no longer commits a large output with no blob record.** The output is spilled again on retry, so GC cannot reclaim it.
 - **Blob GC no longer strands a concurrent writer's blob.** A GC sweep racing another process's run enqueue, output spill, artifact write or import can no longer delete the file of a blob that write then references; GC unlinks orphan files under its write lock and writers restore their content after committing.
 
 ## [0.12.0] — 2026-10-12

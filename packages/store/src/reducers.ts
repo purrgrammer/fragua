@@ -413,8 +413,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
  * `cwd` is `null` by construction (a local binding, never in the log). The
  * seq/version bookkeeping (`version`, `nextSeq`, `lastAppliedSeq`) is the
  * write-path's, not the reducer's — the import path sets it from the actual
- * event seqs. `title` is not in the log (the summariser writes it out-of-band),
- * so it derives to `null`; the UI falls back to the workflow name.
+ * event seqs. `title` derives from the genesis payload when the enqueue set
+ * one, else `null` (a generated title lives in `run.title_generated`, out of the
+ * fold); the UI falls back to the workflow name.
+ * contract: no-bump — comment-only change in reducers.ts; title derivation code is unchanged in this diff
  */
 // The genesis seed reads `baseGitSha`/`baseGitRef` and, since contract v7,
 // `baseHeadSha`. The run_started fact still overrides the base at provision.

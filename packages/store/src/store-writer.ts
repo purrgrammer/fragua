@@ -3,7 +3,9 @@ import type { RunEnqueuedPayload } from "@fragua/types";
 import {
   blobRowExists,
   deleteOrphanBlobs,
+  insertArtifactIfAbsent,
   insertBlobIfAbsent,
+  selectArtifactRef,
   selectBlobRootShas,
   selectDeletableOrphanFiles,
   upsertArtifact,
@@ -143,31 +145,30 @@ export function appendFact(
   // CAS here (blob written before the txn, same crash-safety as routing
   // spill): the event payload + the index then hold a tiny `{$fragua_blob}`
   // ref, so neither needs raising past the 4 KiB cap, and a large struct is
-  // no longer a node failure.
+  // no longer a node failure. The ref goes into a copy of the event: the
+  // caller's object stays inline, so a retry after a ConcurrencyError spills
+  // (and inserts the blob row for) the same struct again instead of committing
+  // a bare ref with no `blobs` row.
   const outputsInserts: Array<{ nodeId: string; iteration: number; structJson: string }> = [];
   const outputsSpilledBlobs: Array<{ sha: string; bytes: number }> = [];
   const outputsSpilledData: Array<{ sha: string; data: Uint8Array }> = [];
-  for (const event of events) {
-    if (event.type === "fact.node_completed") {
-      const p = event.payload as { nodeId: string; iteration: number; outputs?: Record<string, unknown> };
-      if (p.outputs !== undefined) {
-        const structJson = JSON.stringify(p.outputs);
-        const ref = maybeSpillStruct(structJson, (sha, bytes) => {
-          ctx.blobs.put(sha, bytes);
-          outputsSpilledData.push({ sha, data: bytes });
-        });
-        if (ref !== null) {
-          // Replace the inline struct in the event payload with the ref so the
-          // event stays under the 4 KiB cap; the index stores the same ref.
-          p.outputs = { ...ref };
-          outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(ref) });
-          outputsSpilledBlobs.push({ sha: ref.$fragua_blob, bytes: ref.bytes });
-        } else {
-          outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
-        }
-      }
+  const effectiveEvents: FactEvent[] = events.map((event) => {
+    if (event.type !== "fact.node_completed") return event;
+    const p = event.payload as { nodeId: string; iteration: number; outputs?: Record<string, unknown> };
+    if (p.outputs === undefined) return event;
+    const structJson = JSON.stringify(p.outputs);
+    const ref = maybeSpillStruct(structJson, (sha, bytes) => {
+      ctx.blobs.put(sha, bytes);
+      outputsSpilledData.push({ sha, data: bytes });
+    });
+    if (ref === null) {
+      outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson });
+      return event;
     }
-  }
+    outputsInserts.push({ nodeId: p.nodeId, iteration: p.iteration, structJson: JSON.stringify(ref) });
+    outputsSpilledBlobs.push({ sha: ref.$fragua_blob, bytes: ref.bytes });
+    return { ...event, payload: { ...event.payload, outputs: { ...ref } } } as FactEvent;
+  });
 
   try {
     // Fold + serialize OUTSIDE the write lock (invariant I1: no JSON.stringify
@@ -185,7 +186,7 @@ export function appendFact(
     }
 
     let state = rowToRunState(row);
-    for (const event of events) {
+    for (const event of effectiveEvents) {
       state = applyFact(state, event, ts);
     }
     if (opts.routingPatch != null) {
@@ -209,8 +210,8 @@ export function appendFact(
       metricsJson: JSON.stringify(state.metrics),
       changeStatJson: state.changeStat != null ? JSON.stringify(state.changeStat) : null,
     };
-    const eventPayloads = events.map((event) => ctx.validatePayload(event.payload));
-    const epochBump = events.some((event) => event.type === "fact.run_requeued_after_crash") ? 1 : 0;
+    const eventPayloads = effectiveEvents.map((event) => ctx.validatePayload(event.payload));
+    const epochBump = effectiveEvents.some((event) => event.type === "fact.run_requeued_after_crash") ? 1 : 0;
     committedState = state;
     newVersion = state.version;
 
@@ -226,10 +227,10 @@ export function appendFact(
         throw new ConcurrencyError(expectedVersion, current.version);
       }
 
-      for (let i = 0; i < events.length; i++) {
+      for (let i = 0; i < effectiveEvents.length; i++) {
         const seq = bumpRunSeq(ctx.db, runId);
         seqs.push(seq);
-        insertEventDaemon(ctx.db, runId, seq, events[i]!.type, eventPayloads[i]!, ts);
+        insertEventDaemon(ctx.db, runId, seq, effectiveEvents[i]!.type, eventPayloads[i]!, ts);
       }
 
       // Durability barrier for spilled-output blobs: the BlobFS.put() ran
@@ -658,6 +659,9 @@ export function putArtifact(
   //  - different content + replace → overwrite (the legacy behaviour,
   //    now opt-in).
   // See `docs/handler-contract.md` "replay semantics."
+  // This read is only a fast path that skips the blob write; the decision is
+  // re-made under the write lock below, where a writer that committed in
+  // between is visible.
   const existing = ctx.store.getArtifactRef(scope);
   if (existing != null) {
     if (existing.sha256 === sha) {
@@ -674,27 +678,32 @@ export function putArtifact(
   ctx.blobs.put(sha, content);
 
   const claimEpoch = opts?.claimEpoch;
+  const row = {
+    runId: scope.runId,
+    nodeId: scope.nodeId,
+    iteration: scope.iteration,
+    key: scope.key,
+    blobSha: sha,
+    mime: mime ?? null,
+    now,
+  };
+  let stored: ArtifactRef | null = null;
   ctx.writeTxn(() => {
     if (claimEpoch !== undefined) assertClaimEpoch(ctx, scope.runId, claimEpoch);
     insertBlobIfAbsent(ctx.db, sha, bytes, now);
-    upsertArtifact(ctx.db, {
-      runId: scope.runId,
-      nodeId: scope.nodeId,
-      iteration: scope.iteration,
-      key: scope.key,
-      blobSha: sha,
-      mime: mime ?? null,
-      now,
-    });
+    if (replace) {
+      upsertArtifact(ctx.db, row);
+      return;
+    }
+    if (insertArtifactIfAbsent(ctx.db, row)) return;
+    const current = selectArtifactRef(ctx.db, scope);
+    if (current == null) throw new Error(`artifact row vanished under the write lock at ${scope.key}`);
+    if (current.blob_sha !== sha) throw new ArtifactCollisionError(scope, current.blob_sha, sha);
+    stored = { ...scope, sha256: current.blob_sha, sizeBytes: current.size_bytes, mime: current.mime };
   });
   reputBlobs(ctx, [{ sha, data: content }]);
 
-  return {
-    ...scope,
-    sha256: sha,
-    sizeBytes: bytes,
-    mime: mime ?? null,
-  };
+  return stored ?? { ...scope, sha256: sha, sizeBytes: bytes, mime: mime ?? null };
 }
 
 export function saveWorkflow(

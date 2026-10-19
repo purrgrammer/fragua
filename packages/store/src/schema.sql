@@ -171,6 +171,19 @@ CREATE TABLE IF NOT EXISTS events (
   -- the looser code-point cap would violate it and abort the rebuild migration.
   payload TEXT NOT NULL CHECK (length(payload) < 4096),
   ts INTEGER NOT NULL,
+  -- The spilled-output blob a `fact.node_completed` names. A blob GC root: the
+  -- outputs index keeps only the latest struct per (node, iteration), but the
+  -- log keeps every ref and export ships them all. VIRTUAL so schema v10 can
+  -- ADD it to an existing table; its partial index `idx_events_outputs_blob`
+  -- is created by migrations.ts, since this file re-runs before that step.
+  outputs_blob_sha TEXT GENERATED ALWAYS AS (
+    CASE
+      WHEN type <> 'fact.node_completed' THEN NULL
+      WHEN NOT json_valid(payload) THEN NULL
+      WHEN json_type(payload, '$.outputs."$fragua_blob"') = 'text'
+        THEN json_extract(payload, '$.outputs."$fragua_blob"')
+    END
+  ) VIRTUAL,
   PRIMARY KEY (run_id, seq)
 ) STRICT, WITHOUT ROWID;
 
@@ -222,7 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
 
 -- Structured step outputs index. Rebuildable from fact.node_completed.payload.outputs.
 -- Keyed by (run_id, node_id, iteration); INSERT OR REPLACE provides last-write-wins
--- semantics for re-entrant nodes. `struct` is JSON validated at write time;
+-- semantics for re-entrant nodes, so an earlier pass's spilled ref can drop out of
+-- this table while its event still names it (`events.outputs_blob_sha` keeps it rooted). `struct` is JSON validated at write time;
 -- bounded by the 4KB event-payload cap (store enforces at appendFact time, not here).
 -- OFF the run_state fold: the reducer never reads this table; it is a re-snapshot.
 CREATE TABLE IF NOT EXISTS outputs (

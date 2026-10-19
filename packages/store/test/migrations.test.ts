@@ -123,7 +123,7 @@ describe("v8 ↔ v9 — daemon_lock.harness_pid + server_endpoint.hostname", () 
   test("v8→v9 adds harness_pid and server hostname; down drops them without data loss", () => {
     const db = freshDb();
     migrate(db);
-    expect(CURRENT_SCHEMA_VERSION).toBe(9);
+    expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(9);
     expect(cols(db, "daemon_lock")).toContain("harness_pid");
     expect(cols(db, "server_endpoint")).toContain("hostname");
     expect(planMigration(9, 8).steps).toEqual([{ version: 9, class: "full" }]);
@@ -152,6 +152,61 @@ describe("v8 ↔ v9 — daemon_lock.harness_pid + server_endpoint.hostname", () 
       .query<{ url: string; pid: number }, []>("SELECT url, pid FROM server_endpoint WHERE id = 1")
       .get();
     expect(endpoint).toEqual({ url: "u", pid: 7 });
+    db.close();
+  });
+});
+
+describe("v9 ↔ v10 — events.outputs_blob_sha", () => {
+  const xcols = (db: Database) =>
+    db
+      .query<{ name: string }, []>("PRAGMA table_xinfo(events)")
+      .all()
+      .map((c) => c.name);
+  const hasIndex = (db: Database) =>
+    db
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_outputs_blob'",
+      )
+      .get() != null;
+  const SHA = "f".repeat(64);
+
+  test("v9→v10 adds events.outputs_blob_sha + idx_events_outputs_blob, exposes pre-existing refs; down drops both without data loss", () => {
+    const db = freshDb();
+    db.exec("PRAGMA foreign_keys = OFF");
+    migrate(db);
+    expect(CURRENT_SCHEMA_VERSION).toBe(10);
+    expect(xcols(db)).toContain("outputs_blob_sha");
+    expect(hasIndex(db)).toBe(true);
+    expect(planMigration(10, 9).steps).toEqual([{ version: 10, class: "full" }]);
+
+    migrateTo(db, 9);
+    expect(xcols(db)).not.toContain("outputs_blob_sha");
+    expect(hasIndex(db)).toBe(false);
+    db.query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES ('r', 1, ?, 'daemon', ?, 1)").run(
+      "fact.node_completed",
+      JSON.stringify({ nodeId: "scope", iteration: 0, outputs: { $fragua_blob: SHA, bytes: 9000 } }),
+    );
+    db.query(
+      "INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES ('r', 2, 'llm.done', 'daemon', '{}', 2)",
+    ).run();
+
+    migrate(db);
+    expect(xcols(db)).toContain("outputs_blob_sha");
+    expect(hasIndex(db)).toBe(true);
+    const shas = db
+      .query<{ seq: number; outputs_blob_sha: string | null }, []>(
+        "SELECT seq, outputs_blob_sha FROM events WHERE run_id = 'r' ORDER BY seq",
+      )
+      .all();
+    expect(shas).toEqual([
+      { seq: 1, outputs_blob_sha: SHA },
+      { seq: 2, outputs_blob_sha: null },
+    ]);
+
+    migrateTo(db, 9);
+    expect(xcols(db)).not.toContain("outputs_blob_sha");
+    expect(hasIndex(db)).toBe(false);
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE run_id = 'r'").get()?.n).toBe(2);
     db.close();
   });
 });

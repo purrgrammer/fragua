@@ -20,7 +20,8 @@ import {
   workflowSourcePath,
   writeTar,
 } from "../src/index.ts";
-import { freshStore, hashedWorkflowSource, seedHashedWorkflow } from "./helpers.ts";
+import type { StoreCtx } from "../src/store-ctx.ts";
+import { freshStore, hashedWorkflowSource, seedHashedWorkflow, storesOnOneFile } from "./helpers.ts";
 
 const enc = new TextEncoder();
 
@@ -268,5 +269,81 @@ describe("bundle import — re-import of an imported run (C1)", () => {
     expect(after.version).toBe(before.version);
     expect(after.nextSeq).toBe(before.nextSeq);
     dst.close();
+  });
+});
+
+describe("bundle import — concurrent import (R3-C7)", () => {
+  function beforeFirstWriteTxn(store: Store, hook: () => void): void {
+    const ctx = (store as unknown as { ctx: StoreCtx }).ctx;
+    const writeTxn = ctx.writeTxn.bind(ctx);
+    let fired = false;
+    (ctx as { writeTxn: StoreCtx["writeTxn"] }).writeTxn = (fn) => {
+      if (!fired) {
+        fired = true;
+        hook();
+      }
+      writeTxn(fn);
+    };
+  }
+
+  test("N stores importing one bundle concurrently: one insert, N−1 no-ops", async () => {
+    const src = freshStore();
+    const { runId } = await seedStartedRun(src);
+    const bytes = exportBundle(src, runId);
+    src.close();
+
+    const rig = storesOnOneFile(3);
+    try {
+      const [a, b, c] = rig.stores as [Store, Store, Store];
+      const results: { store: string; imported: boolean }[] = [];
+      beforeFirstWriteTxn(b, () => {
+        results.push({ store: "c", imported: c.importRunBundle(bytes).runs[0]!.imported });
+      });
+      beforeFirstWriteTxn(a, () => {
+        results.push({ store: "b", imported: b.importRunBundle(bytes).runs[0]!.imported });
+      });
+      results.push({ store: "a", imported: a.importRunBundle(bytes).runs[0]!.imported });
+
+      expect(results).toHaveLength(3);
+      expect(results.filter((r) => r.imported)).toEqual([{ store: "c", imported: true }]);
+      expect(results.filter((r) => !r.imported)).toHaveLength(2);
+      const state = a.getState(runId)!;
+      expect(state.imported).toBe(true);
+      expect(state.version).toBe(deriveRunState(runId, a.getEvents(runId)).version);
+    } finally {
+      rig.dispose();
+    }
+  });
+
+  test("an extension racing an extension re-classifies instead of throwing ConcurrencyError", async () => {
+    const src = freshStore();
+    const { runId } = await seedStartedRun(src);
+    const b1 = exportBundle(src, runId);
+    terminate(src, runId);
+    const b2 = exportBundle(src, runId);
+    src.close();
+
+    const rig = storesOnOneFile(2);
+    try {
+      const [a, b] = rig.stores as [Store, Store];
+      a.importRunBundle(b1);
+      let bImported: boolean | undefined;
+      beforeFirstWriteTxn(a, () => {
+        bImported = b.importRunBundle(b2).runs[0]!.imported;
+      });
+      const aResult = a.importRunBundle(b2);
+
+      expect(bImported).toBe(true);
+      expect(aResult.runs).toEqual([{ runId, imported: false }]);
+      const events = a.getEvents(runId);
+      const replay = deriveRunState(runId, events);
+      const state = a.getState(runId)!;
+      expect(state.status).toBe("completed");
+      expect(state.status).toBe(replay.status);
+      expect(state.version).toBe(replay.version);
+      expect(state.nextSeq).toBe(Math.max(...events.map((e) => e.seq)) + 1);
+    } finally {
+      rig.dispose();
+    }
   });
 });
