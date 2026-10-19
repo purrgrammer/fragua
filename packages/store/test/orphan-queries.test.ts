@@ -226,7 +226,9 @@ describe("orphan detection — anti-join", () => {
     store.close();
   });
 
-  test("scales linearly: 2n intent/done pairs sweep < 2.5× n", async () => {
+  // A 4× size spread puts linear (4×) and quadratic (16×) two-fold apart from
+  // the 8× bound on either side, so shared-runner noise cannot flip the verdict.
+  test("scales linearly: 4n intent/done pairs sweep < 8× n", async () => {
     const timeFor = async (pairs: number): Promise<number> => {
       const store = freshStore();
       const runId = await seedRun(store);
@@ -245,12 +247,12 @@ describe("orphan detection — anti-join", () => {
         }
         store.appendFact(runId, facts, store.getState(runId)!.version);
       }
-      const ms = medianMs(() => expect(store.startupSweep().quarantined).toEqual([]));
+      const ms = medianMs(() => expect(store.startupSweep().quarantined).toEqual([]), 5);
       store.close();
       return ms;
     };
-    const n = await timeFor(2000);
-    const n2 = await timeFor(4000);
-    expect(n2 / n).toBeLessThan(2.5);
+    const n = await timeFor(1000);
+    const n4 = await timeFor(4000);
+    expect(n4 / n).toBeLessThan(8);
   }, 60_000);
 });
