@@ -82,6 +82,12 @@ runs:
           exit 1
         fi
 
+        # macOS kills a binary whose code signature does not verify; releases
+        # up to v0.12.0 shipped darwin binaries with a stale ad-hoc signature.
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          codesign --force --sign - "$dir/$asset"
+        fi
+
         mv "$dir/$asset" "$dir/fragua"
         chmod +x "$dir/fragua"
         echo "$dir" >> "$GITHUB_PATH"

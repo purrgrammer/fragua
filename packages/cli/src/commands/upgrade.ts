@@ -7,11 +7,12 @@
 // The release repo is PUBLIC, so downloads go over plain HTTPS with no auth and
 // no `gh` CLI required. The pure parts — target mapping, asset naming, the
 // download-URL builder, checksum lookup, tag comparison, and the upgrade
-// decision — are factored out and unit-tested; only the `fetch` calls and the
-// rename are thin and untested.
+// decision — are factored out and unit-tested; only the `fetch` calls, the
+// darwin `codesign` spawn and the rename are thin and untested.
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
@@ -201,6 +202,17 @@ export async function upgradeCommand(opts: UpgradeOptions): Promise<number> {
   try {
     writeFileSync(staging, bytes);
     chmodSync(staging, 0o755);
+    // macOS kills a binary whose code signature does not verify, and releases
+    // up to v0.12.0 shipped darwin binaries with a stale ad-hoc signature.
+    // Re-sign the staged copy so every published tag can be upgraded to.
+    if (process.platform === "darwin") {
+      const signed = spawnSync("codesign", ["--force", "--sign", "-", staging], { stdio: "ignore" });
+      if (signed.error != null || signed.status !== 0) {
+        rmSync(staging, { force: true });
+        console.error(chalk.red(`fragua upgrade: could not sign ${asset} (codesign --force --sign - failed)`));
+        return 1;
+      }
+    }
     renameSync(staging, self);
   } catch (e) {
     console.error(
