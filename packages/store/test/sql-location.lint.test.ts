@@ -4,8 +4,9 @@
 // string / template literals (via the AST, so SQL keywords in comments don't
 // count) of every `packages/store/src` module and fails on DML/DQL outside a
 // `*-queries.ts` file — except a small, named allowlist of maintenance sites.
-// Conflict-clause forms (`INSERT OR … INTO`, `UPDATE OR … SET`, `REPLACE INTO`)
-// and CTE-led statements (`WITH x AS (`) count as DML/DQL too.
+// Conflict-clause forms (`INSERT OR … INTO`, `UPDATE OR … SET`, `REPLACE INTO`),
+// an aliased or index-hinted target (`UPDATE t AS r SET`, `UPDATE t INDEXED BY
+// i SET`) and CTE-led statements (`WITH x AS (`) count as DML/DQL too.
 //
 // A `+` chain of literal operands is folded into one string before testing, so
 // `"SEL" + "ECT …"` is caught; a non-literal operand ends the fold. Keywords
@@ -27,11 +28,12 @@ const ALLOWLIST = new Map<string, string>([["migrations.ts", "schema DDL + schem
 
 /** Table DML/DQL that must be centralised in a `*-queries.ts`. */
 const SQL_RE =
-  /\b(SELECT\b|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|REPLACE\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE\s+[\w".]+\s+SET\b|UPDATE\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK)\s+[\w".]+\s+SET\b|WITH\s+(?:RECURSIVE\s+)?\w+\s+AS\s*\()/i;
+  /\b(SELECT\b|INSERT(?:\s+OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK))?\s+INTO\b|REPLACE\s+INTO\b|DELETE\s+FROM\b|CREATE\s+TABLE\b|CREATE\s+INDEX\b|UPDATE(?:\s+OR\s+\w+)?\s+[\w."]+(?:\s+AS\s+[\w"]+)?(?:\s+(?:INDEXED\s+BY\s+\w+|NOT\s+INDEXED))?\s+SET\b|WITH\s+(?:RECURSIVE\s+)?\w+\s+AS\s*\()/i;
 
 const CONFLICT_FIXTURE = join(__dirname, "fixtures", "sql-location", "conflict-clauses.ts");
 const CONCAT_FIXTURE = join(__dirname, "fixtures", "sql-location", "concat.ts");
 const NO_SPACE_FIXTURE = join(__dirname, "fixtures", "sql-location", "no-space.ts");
+const UPDATE_ALIAS_FIXTURE = join(__dirname, "fixtures", "sql-location", "update-alias.ts");
 
 function collectSources(dir: string): string[] {
   const out: string[] = [];
@@ -161,6 +163,19 @@ describe("SQL lives in *-queries.ts", () => {
 
   test("flags SELECT* with no whitespace after the keyword (R2-M2)", () => {
     expect(sqlLiteralLines(parseSource(NO_SPACE_FIXTURE))).toEqual([6]);
+  });
+
+  test("flags UPDATE … AS alias … SET (R3-M4)", () => {
+    expect(sqlLiteralLines(parseSource(UPDATE_ALIAS_FIXTURE))).toEqual([6, 7, 8, 9]);
+  });
+
+  test("flags UPDATE … INDEXED BY / NOT INDEXED … SET", () => {
+    expect(scanString('db.query("UPDATE t INDEXED BY i SET a = 1").run();\n')).toEqual([1]);
+    expect(scanString('db.query("UPDATE t AS r NOT INDEXED SET a = 1").run();\n')).toEqual([1]);
+  });
+
+  test("does not flag prose that mentions update … as … set (R3-M4 control)", () => {
+    expect(scanString('const a = "update status as soon as set";\nconst b = "UPDATE run_state AS r";\n')).toEqual([]);
   });
 
   test("reports a matching concat chain once", () => {

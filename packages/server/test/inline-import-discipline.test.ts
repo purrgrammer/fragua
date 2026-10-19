@@ -7,7 +7,10 @@
 //
 // This is an AST scan: it catches dynamic `import(...)`, `import(...).then(...)`,
 // and `require(...)` — whether the specifier is a string literal, a template
-// literal, or a computed expression — scans
+// literal, or a computed expression, and whether `require` is called directly,
+// through a local alias (`const r = require`), a global receiver
+// (`globalThis.require`), a destructuring (`const { require: q } = globalThis`)
+// or `.call` / `.apply` / `.bind` (the shared `normalizeCallee`) — scans
 // `packages/*/src` AND `packages/cli/bin`, and does NOT flag a type-position
 // `import("x").Y` (an ImportTypeNode carries no runtime import).
 
@@ -21,6 +24,7 @@ const ROOT = join(import.meta.dir, "..", "..", ".."); // repo root from packages
 const PACKAGES_DIR = join(ROOT, "packages");
 const ALLOW_MARKER = "inline-import-allow:";
 const DYNAMIC_FIXTURE = join(import.meta.dir, "fixtures", "inline-import", "dynamic-specifiers.ts");
+const ALIASED_REQUIRE_FIXTURE = join(import.meta.dir, "fixtures", "inline-import", "aliased-require.ts");
 
 function walkTs(dir: string): string[] {
   const out: string[] = [];
@@ -99,6 +103,20 @@ describe("inline-import discipline — no dynamic import()/require() in producti
       { line: 8, kind: "dynamic" },
       { line: 12, kind: "require" },
     ]);
+  });
+
+  test("catches an aliased, global-receiver, destructured or forwarded require (R3-M1)", () => {
+    expect(scan(parseSource(ALIASED_REQUIRE_FIXTURE))).toEqual([
+      { line: 6, kind: "require" },
+      { line: 10, kind: "require" },
+      { line: 15, kind: "require" },
+      { line: 19, kind: "require" },
+    ]);
+  });
+
+  test("does not flag require-like names that are not require (R3-M1 control)", () => {
+    const src = `function f(ctx) {\n  requireAuth("x");\n  ctx.require("y");\n  const r = requireAuth;\n  r("z");\n}\n`;
+    expect(scanString(src)).toEqual([]);
   });
 
   test("does not flag a type-position import(...)", () => {

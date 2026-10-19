@@ -6,6 +6,12 @@
 // or computed specifiers), and a transitive relative import walk from an entry
 // file. A regex source scan can be defeated by
 // renaming or by routing the forbidden call through a helper; these walks can't.
+//
+// `normalizeCallee` is the one place callee shapes are canonicalised for every
+// lint: global-object receivers (`globalThis.JSON` is `JSON` unless a local
+// binding shadows the receiver), literal-key element access, local `const` /
+// `let` aliases and destructurings (`const J = JSON`, `const { stringify } =
+// JSON`), and a trailing `.call` / `.apply` / `.bind` forwarder.
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -106,6 +112,205 @@ export interface CallInfo {
    * source text when the callee is not a {@link propertyChain}. */
   text: string;
   node: ts.CallExpression;
+}
+
+/** Receiver names that denote the global object when no local binding shadows
+ * them. */
+export const GLOBAL_RECEIVERS: ReadonlySet<string> = new Set(["globalThis", "global", "self", "window"]);
+
+export type CalleeForwarder = "call" | "apply" | "bind";
+
+export interface NormalizedCallee {
+  /** Dotted path rooted at a global name or at an opaque local binding (a
+   * parameter, an import, a non-alias initializer). `[]` is the global object. */
+  chain: string[];
+  /** Set when the callee was reached through `.call` / `.apply` / `.bind`. */
+  forwarder?: CalleeForwarder;
+}
+
+const MAX_ALIAS_DEPTH = 8;
+
+function unwrapExpression(expr: ts.Expression): ts.Expression {
+  let e = expr;
+  for (;;) {
+    if (
+      ts.isParenthesizedExpression(e) ||
+      ts.isNonNullExpression(e) ||
+      ts.isAsExpression(e) ||
+      ts.isSatisfiesExpression(e) ||
+      ts.isTypeAssertionExpression(e)
+    )
+      e = e.expression;
+    else if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.CommaToken) e = e.right;
+    else return e;
+  }
+}
+
+interface RawChain {
+  /** An identifier, or `this`. */
+  head: ts.Expression;
+  keys: string[];
+}
+
+function rawChain(expr: ts.Expression): RawChain | undefined {
+  const e = unwrapExpression(expr);
+  if (ts.isIdentifier(e) || e.kind === ts.SyntaxKind.ThisKeyword) return { head: e, keys: [] };
+  if (ts.isPropertyAccessExpression(e)) {
+    const inner = rawChain(e.expression);
+    return inner === undefined ? undefined : { head: inner.head, keys: [...inner.keys, e.name.text] };
+  }
+  if (ts.isElementAccessExpression(e)) {
+    const key = literalKey(e);
+    const inner = key === undefined ? undefined : rawChain(e.expression);
+    return inner === undefined || key === undefined ? undefined : { head: inner.head, keys: [...inner.keys, key] };
+  }
+  return undefined;
+}
+
+function isForwarder(name: string | undefined): name is CalleeForwarder {
+  return name === "call" || name === "apply" || name === "bind";
+}
+
+function splitForwarder(expr: ts.Expression): { target: ts.Expression; forwarder?: CalleeForwarder } {
+  const e = unwrapExpression(expr);
+  if (ts.isPropertyAccessExpression(e) && isForwarder(e.name.text))
+    return { target: e.expression, forwarder: e.name.text };
+  if (ts.isElementAccessExpression(e)) {
+    const key = literalKey(e);
+    if (isForwarder(key)) return { target: e.expression, forwarder: key };
+  }
+  return { target: e };
+}
+
+/** What an alias initializer stands for: `x` for `x.bind(…)`, else itself. */
+function aliasTarget(init: ts.Expression): ts.Expression {
+  const e = unwrapExpression(init);
+  if (ts.isCallExpression(e)) {
+    const split = splitForwarder(e.expression);
+    if (split.forwarder === "bind") return split.target;
+  }
+  return e;
+}
+
+function propertyKeyText(n: ts.PropertyName | ts.BindingName): string | undefined {
+  return ts.isIdentifier(n) || ts.isStringLiteralLike(n) || ts.isNumericLiteral(n) ? n.text : undefined;
+}
+
+/** Key path from a binding pattern's initializer to `target`: `[]` for a plain
+ * identifier, `["a","b"]` for `{ a: { b: target } }`; `null` when `target` is
+ * bound unresolvably (array pattern, rest, computed key); `undefined` when the
+ * pattern does not bind it. */
+function bindingPath(name: ts.BindingName, target: string): string[] | null | undefined {
+  if (ts.isIdentifier(name)) return name.text === target ? [] : undefined;
+  if (ts.isArrayBindingPattern(name)) {
+    for (const el of name.elements)
+      if (ts.isBindingElement(el) && bindingPath(el.name, target) !== undefined) return null;
+    return undefined;
+  }
+  for (const el of name.elements) {
+    const sub = bindingPath(el.name, target);
+    if (sub === undefined) continue;
+    if (sub === null || el.dotDotDotToken !== undefined) return null;
+    const key = propertyKeyText(el.propertyName ?? el.name);
+    return key === undefined ? null : [key, ...sub];
+  }
+  return undefined;
+}
+
+function boundNames(name: ts.BindingName): string[] {
+  if (ts.isIdentifier(name)) return [name.text];
+  const out: string[] = [];
+  for (const el of name.elements) if (ts.isBindingElement(el)) out.push(...boundNames(el.name));
+  return out;
+}
+
+interface AliasBinding {
+  init: ts.Expression;
+  path: string[];
+}
+
+/** How one block binds `name`: an alias, `null` for an opaque binding, or
+ * `undefined` when the block does not declare it. */
+function statementBinding(statements: ts.NodeArray<ts.Statement>, name: string): AliasBinding | null | undefined {
+  for (const stmt of statements) {
+    if (
+      (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt) || ts.isEnumDeclaration(stmt)) &&
+      stmt.name?.text === name
+    )
+      return null;
+    if (ts.isImportDeclaration(stmt) && importBindsName(stmt, name)) return null;
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      const path = bindingPath(decl.name, name);
+      if (path === undefined) continue;
+      return path === null || decl.initializer === undefined ? null : { init: decl.initializer, path };
+    }
+  }
+  return undefined;
+}
+
+function loopBindsName(scope: ts.Node, name: string): boolean {
+  if (!(ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope))) return false;
+  const init = scope.initializer;
+  return (
+    init !== undefined &&
+    ts.isVariableDeclarationList(init) &&
+    init.declarations.some((d) => bindingPath(d.name, name) !== undefined)
+  );
+}
+
+/** Innermost binding of `id`: an alias, `null` when opaque (parameter, function,
+ * class, import, catch / loop variable, uninitialised declaration), or
+ * `undefined` when unbound in the file (a global). */
+function findBinding(id: ts.Identifier): AliasBinding | null | undefined {
+  const name = id.text;
+  for (let scope: ts.Node | undefined = id.parent; scope !== undefined; scope = scope.parent) {
+    if (ts.isFunctionLike(scope) && scope.parameters.some((p) => bindingPath(p.name, name) !== undefined)) return null;
+    if ((ts.isFunctionExpression(scope) || ts.isClassExpression(scope)) && scope.name?.text === name) return null;
+    if (
+      ts.isCatchClause(scope) &&
+      scope.variableDeclaration !== undefined &&
+      bindingPath(scope.variableDeclaration.name, name) !== undefined
+    )
+      return null;
+    if (loopBindsName(scope, name)) return null;
+    if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseOrDefaultClause(scope)) {
+      const bound = statementBinding(scope.statements, name);
+      if (bound !== undefined) return bound;
+    }
+  }
+  return undefined;
+}
+
+function resolveIdentifier(id: ts.Identifier, depth: number): string[] {
+  const binding = findBinding(id);
+  if (binding === undefined) return GLOBAL_RECEIVERS.has(id.text) ? [] : [id.text];
+  if (binding === null || depth >= MAX_ALIAS_DEPTH) return [id.text];
+  const base = resolveChain(aliasTarget(binding.init), depth + 1);
+  return base === undefined ? [id.text] : [...base, ...binding.path];
+}
+
+function resolveChain(expr: ts.Expression, depth: number): string[] | undefined {
+  const raw = rawChain(expr);
+  if (raw === undefined) return undefined;
+  const prefix = ts.isIdentifier(raw.head) ? resolveIdentifier(raw.head, depth) : ["this"];
+  const keys = [...raw.keys];
+  while (prefix.length === 0 && keys[0] !== undefined && GLOBAL_RECEIVERS.has(keys[0])) keys.shift();
+  return [...prefix, ...keys];
+}
+
+/** Canonical dotted form of a callee (or any member-access chain), shared by
+ * every discipline lint so a forbidden reach can't hide behind syntax:
+ * `globalThis.JSON["stringify"]`, `const J = JSON; J.stringify`,
+ * `const { stringify } = JSON; stringify` and `JSON.stringify.call(…)` all
+ * yield `["JSON","stringify"]`. A global receiver is only stripped when no
+ * local binding shadows its name. Undefined when the expression is not a
+ * statically-resolvable chain. */
+export function normalizeCallee(expr: ts.Expression): NormalizedCallee | undefined {
+  const { target, forwarder } = splitForwarder(expr);
+  const chain = resolveChain(target, 0);
+  if (chain === undefined) return undefined;
+  return forwarder === undefined ? { chain } : { chain, forwarder };
 }
 
 /** All call expressions under `root`. `skipNested` excludes calls inside nested
@@ -365,12 +570,56 @@ function dynamicSpecifier(arg: ts.Expression): string {
   return ts.isStringLiteralLike(arg) ? arg.text : DYNAMIC_SPECIFIER;
 }
 
+/** Head identifiers a `require` reach can start from in this file: `require`,
+ * the global receivers, and every local name aliased (transitively) off one. A
+ * cheap prefilter so `normalizeCallee` only runs on plausible calls. */
+function requireCandidateHeads(sf: ts.SourceFile): Set<string> {
+  const heads = new Set<string>(["require", ...GLOBAL_RECEIVERS]);
+  const aliases: Array<{ names: string[]; head: string }> = [];
+  walk(sf, (n) => {
+    if (!ts.isVariableDeclaration(n) || n.initializer === undefined) return;
+    const head = rawChain(aliasTarget(n.initializer))?.head;
+    if (head !== undefined && ts.isIdentifier(head)) aliases.push({ names: boundNames(n.name), head: head.text });
+  });
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const alias of aliases) {
+      if (!heads.has(alias.head)) continue;
+      for (const name of alias.names) {
+        if (heads.has(name)) continue;
+        heads.add(name);
+        grew = true;
+      }
+    }
+  }
+  return heads;
+}
+
+/** Specifier a `require` call loads: argument 0, argument 1 behind `.call`,
+ * and {@link DYNAMIC_SPECIFIER} behind `.apply` / `.bind`. */
+function requireSpecifier(call: ts.CallExpression, forwarder: CalleeForwarder | undefined): string | undefined {
+  if (forwarder === "apply" || forwarder === "bind") return DYNAMIC_SPECIFIER;
+  const arg = call.arguments[forwarder === "call" ? 1 : 0];
+  return arg === undefined ? undefined : dynamicSpecifier(arg);
+}
+
+function requireCallSpecifier(call: ts.CallExpression, heads: Set<string>): string | undefined {
+  const head = rawChain(call.expression)?.head;
+  if (head === undefined || !ts.isIdentifier(head) || !heads.has(head.text)) return undefined;
+  const callee = normalizeCallee(call.expression);
+  if (callee === undefined || callee.chain.length !== 1 || callee.chain[0] !== "require") return undefined;
+  return requireSpecifier(call, callee.forwarder);
+}
+
 /** All module references: static `import`/`export … from`, dynamic `import()`
- * calls, and `require()` calls. A non-literal `import()`/`require()` specifier is
+ * calls, and `require()` calls — including `require` reached through an alias,
+ * a destructuring, a global receiver, or `.call` / `.apply` / `.bind` (see
+ * {@link normalizeCallee}). A non-literal `import()`/`require()` specifier is
  * recorded as {@link DYNAMIC_SPECIFIER}. Type-position `import("x").Y` (an
  * ImportTypeNode, not a call) is naturally excluded — it carries no runtime import. */
 export function collectImports(sf: ts.SourceFile): ImportInfo[] {
   const out: ImportInfo[] = [];
+  const requireHeads = requireCandidateHeads(sf);
   walk(sf, (n) => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
       out.push({
@@ -384,9 +633,9 @@ export function collectImports(sf: ts.SourceFile): ImportInfo[] {
     } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const arg = n.arguments[0];
       if (arg !== undefined) out.push({ module: dynamicSpecifier(arg), kind: "dynamic", typeOnly: false, node: n });
-    } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "require") {
-      const arg = n.arguments[0];
-      if (arg !== undefined) out.push({ module: dynamicSpecifier(arg), kind: "require", typeOnly: false, node: n });
+    } else if (ts.isCallExpression(n)) {
+      const module = requireCallSpecifier(n, requireHeads);
+      if (module !== undefined) out.push({ module, kind: "require", typeOnly: false, node: n });
     }
   });
   return out;

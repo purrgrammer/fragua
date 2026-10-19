@@ -17,9 +17,10 @@
 //      column when a new status is added, with no compiler signal: the
 //      SQL hardcodes the arms and the row type carries no `satisfies`.
 //      Equality (not membership) is what catches the MISSING arm;
-//   4. every quoted literal in a bare `<alias.>status = '…'` comparison —
-//      predicate position (`WHERE status = 'queued'`) AND assignment
-//      position (`SET status = 'running'`) — must be a known RunStatus.
+//   4. every quoted literal in a bare `<alias.>status <op> '…'` comparison —
+//      `<op>` one of `=`, `==`, `!=`, `<>`, `IS`, `IS NOT`; predicate
+//      position (`WHERE status = 'queued'`) AND assignment position
+//      (`SET status = 'running'`) — must be a known RunStatus.
 //      These are the dispatch-claim and crash-sweep transitions in
 //      run-state-queries.ts; a renamed literal there would never match a
 //      row (or would trip the CHECK only at runtime). The four predicates
@@ -92,13 +93,14 @@ function statusCaseSites(file: string, source: string): StatusSite[] {
   return sites;
 }
 
-/** Extract every bare `<alias.>status = 'literal'` comparison or assignment.
- * `<>` / `!=` / `<=` / `>=` never match (no `=` directly after the column).
- * Overlaps the CASE arms by design — this check is membership only.
- * `inbox_status` is a different enum and is excluded. */
+/** Extract every bare `<alias.>status <op> 'literal'` comparison or assignment,
+ * `<op>` one of `=`, `==`, `!=`, `<>`, `IS`, `IS NOT`. Ordering comparisons
+ * (`<=` / `>=`) and `IS NULL` never match. Overlaps the CASE arms by design —
+ * this check is membership only. `inbox_status` is a different enum and is
+ * excluded. */
 function statusEqualitySites(file: string, source: string): StatusSite[] {
   const sites: StatusSite[] = [];
-  const EQ_RE = /([A-Za-z_.]*status)\s*=\s*'([^']*)'/gi;
+  const EQ_RE = /([A-Za-z_.]*status)(?:\s*(?:==?|!=|<>)\s*|\s+IS(?:\s+NOT)?\s+)'([^']*)'/gi;
   for (const match of source.matchAll(EQ_RE)) {
     const column = match[1] ?? "";
     if (column.includes("inbox_status")) continue;
@@ -212,12 +214,28 @@ describe("enum-literal consumers (SQL)", () => {
       CLAIM_NEXT_RUN_SQL: literalsOf("CLAIM_NEXT_RUN_SQL"),
       UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL: literalsOf("UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL"),
       UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL: literalsOf("UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL"),
+      RELEASE_CLAIM_SQL: literalsOf("RELEASE_CLAIM_SQL"),
     }).toEqual({
       SELECT_NEXT_QUEUED_RUN_SQL: ["queued"],
       CLAIM_NEXT_RUN_SQL: ["running", "queued"],
       UPDATE_RUN_STATE_QUARANTINED_BY_SWEEP_SQL: ["quarantined"],
       UPDATE_RUN_STATE_REQUEUED_AFTER_CRASH_SQL: ["queued"],
+      RELEASE_CLAIM_SQL: ["queued", "running"],
     });
+  });
+
+  test("flags a stale literal behind ==, !=, <>, IS and IS NOT (R3-M5)", () => {
+    const sql =
+      "WHERE status == 'runing' OR status != 'queud' OR r.status <> 'haltd' OR status IS 'x' OR status IS NOT 'y'";
+    expect(bareEqualityOffenders(sql)).toEqual(["runing", "queud", "haltd", "x", "y"]);
+  });
+
+  test("flags status == 'runing' planted in RELEASE_CLAIM_SQL (R3-M5)", () => {
+    const source = readFileSync(join(SRC_ROOT, "run-state-queries.ts"), "utf8");
+    const body = sqlConstBody(source, "RELEASE_CLAIM_SQL") ?? "";
+    const planted = body.replace("status = 'running'", "status == 'runing'");
+    expect(planted).not.toBe(body);
+    expect(bareEqualityOffenders(planted)).toEqual(["runing"]);
   });
 
   test("flags a renamed literal in a bare predicate the IN/CASE matchers miss", () => {
@@ -227,9 +245,11 @@ describe("enum-literal consumers (SQL)", () => {
     expect(bareEqualityOffenders(sql)).toEqual(["archived", "queud"]);
   });
 
-  test("does not flag inbox_status or inequality comparisons", () => {
+  test("does not flag inbox_status or ordering comparisons (R3-M5 control)", () => {
     expect(statusEqualitySites("synthetic.sql", "WHERE inbox_status = 'pending'")).toEqual([]);
     expect(statusEqualitySites("synthetic.sql", "WHERE rs.inbox_status='pending'")).toEqual([]);
-    expect(statusEqualitySites("synthetic.sql", "WHERE status <> 'x' OR status != 'y'")).toEqual([]);
+    expect(statusEqualitySites("synthetic.sql", "WHERE inbox_status <> 'pending'")).toEqual([]);
+    expect(statusEqualitySites("synthetic.sql", "WHERE status <= 'x' OR status >= 'y'")).toEqual([]);
+    expect(statusEqualitySites("synthetic.sql", "WHERE status IS NULL")).toEqual([]);
   });
 });

@@ -3,10 +3,16 @@
 // Handlers receive their I/O through HandlerContext (ctx.llm, ctx.http,
 // ctx.tools, ctx.messages, ctx.artifacts, ctx.externalCall). A handler that
 // reaches directly for `fetch`, `undici`, a `node:*` or bare Node builtin module
-// (`fs`, `child_process`, …), a computed `import()`/`require()`, `Bun.*`, or
-// `process.env` breaks the invariant — the executor can't enforce AbortSignal,
-// idempotency keys, or accounting on those paths. A justified seam (the tool
-// handler's injected default spawner) is marked `// handler-discipline-allow:`.
+// (`fs`, `child_process`, …), a computed `import()`/`require()`, `Bun.*`,
+// `process.env`, or the global object itself (`globalThis`) breaks the
+// invariant — the executor can't enforce AbortSignal, idempotency keys, or
+// accounting on those paths. Reaches are matched after the shared
+// `normalizeCallee`, so a global receiver (`globalThis.process.env`,
+// `self.fetch`), a local alias (`const p = process`) or a destructuring
+// (`const { spawn } = Bun`) is caught like the plain form, while a local binding
+// that shadows a receiver name (`const window = …`) is not. A justified seam
+// (the tool handler's injected default spawner) is marked
+// `// handler-discipline-allow:`.
 // Both checks are AST-based and follow each handler's transitive relative
 // imports: the I/O ban reaches a helper module OUTSIDE handlers/ that a handler
 // delegates its `fetch` / `node:fs` / `Bun.*` call to, and the
@@ -28,9 +34,9 @@ import {
   type CallInfo,
   collectCalls,
   collectImports,
-  collectMemberAccess,
   DYNAMIC_SPECIFIER,
   lineOf,
+  normalizeCallee,
   parseSource,
   transitiveRelativeImports,
   walk,
@@ -64,22 +70,104 @@ function bannedModule(mod: string): string | undefined {
   return undefined;
 }
 
-/** A call whose callee is the `fetch` identifier or `globalThis`/`window`/`self`
- * `.fetch` — `ctx.http.fetch` (a property access on any other object) is fine. */
+/** A call whose callee normalises to the global `fetch` — `ctx.http.fetch` (a
+ * property access on any other object) is fine. */
 function isRawFetch(call: CallInfo): boolean {
-  const c = call.node.expression;
-  if (ts.isIdentifier(c) && c.text === "fetch") return true;
-  return (
-    ts.isPropertyAccessExpression(c) &&
-    c.name.text === "fetch" &&
-    ts.isIdentifier(c.expression) &&
-    (c.expression.text === "globalThis" || c.expression.text === "window" || c.expression.text === "self")
-  );
+  const chain = normalizeCallee(call.node.expression)?.chain;
+  return chain?.length === 1 && chain[0] === "fetch";
 }
 
 interface Offense {
   rule: string;
   line: number;
+}
+
+type Access = ts.PropertyAccessExpression | ts.ElementAccessExpression;
+type Wrapper = ts.ParenthesizedExpression | ts.NonNullExpression | ts.AsExpression | ts.SatisfiesExpression;
+
+function isAccess(n: ts.Node): n is Access {
+  return ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n);
+}
+
+function isWrapper(n: ts.Node): n is Wrapper {
+  return (
+    ts.isParenthesizedExpression(n) || ts.isNonNullExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n)
+  );
+}
+
+/** The nearest ancestor that is not a parenthesis / assertion wrapper, and the
+ * child it was reached from. */
+function unwrappedParent(n: ts.Node): { parent: ts.Node; child: ts.Node } {
+  let child = n;
+  let parent = n.parent;
+  while (isWrapper(parent)) {
+    child = parent;
+    parent = parent.parent;
+  }
+  return { parent, child };
+}
+
+/** True when `n` is a receiver extended by a member access (`n.x`, `n[k]`). */
+function isAccessReceiver(n: ts.Node): boolean {
+  const { parent, child } = unwrappedParent(n);
+  return isAccess(parent) && parent.expression === child;
+}
+
+function chainRoot(n: ts.Expression): ts.Expression {
+  let e = n;
+  while (isAccess(e) || isWrapper(e)) e = e.expression;
+  return e;
+}
+
+function isGlobalThisId(n: ts.Node): boolean {
+  return ts.isIdentifier(n) && n.text === "globalThis";
+}
+
+/** `globalThis` in value position, outside a member-access chain (which is
+ * judged as a whole) and outside type queries. */
+function isBareGlobalThis(n: ts.Node): boolean {
+  if (!isGlobalThisId(n) || isAccessReceiver(n)) return false;
+  const p = n.parent;
+  if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
+  if (ts.isPropertyAssignment(p) && p.name === n) return false;
+  return !ts.isQualifiedName(p) && !ts.isTypeQueryNode(p);
+}
+
+/** The rule a normalised reach breaks: `Bun.*` or `process.env`. */
+function reachRule(chain: string[] | undefined): string | undefined {
+  if (chain?.[0] === "Bun") return "Bun.*";
+  if (chain?.[0] === "process" && chain[1] === "env") return "process.env";
+  return undefined;
+}
+
+/** Names bound by an object destructuring, as their declaring identifiers. */
+function patternIdentifiers(pattern: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(pattern)) return [pattern];
+  const out: ts.Identifier[] = [];
+  for (const el of pattern.elements) if (ts.isBindingElement(el)) out.push(...patternIdentifiers(el.name));
+  return out;
+}
+
+/** `Bun.*` / `process.env` / `globalThis` reaches: each outermost member-access
+ * chain yields at most one offense (`Bun.*` over `process.env` over a
+ * `globalThis` root), plus bare `globalThis` references and object
+ * destructurings off `Bun` / `process.env`. */
+function globalReachOffenses(sf: ts.SourceFile): Offense[] {
+  const out: Offense[] = [];
+  const push = (rule: string | undefined, node: ts.Node): void => {
+    if (rule !== undefined && !allowMarked(sf, node, ALLOW_MARKER)) out.push({ rule, line: lineOf(sf, node) });
+  };
+  walk(sf, (n) => {
+    if (isAccess(n) && !isAccessReceiver(n)) {
+      const rule = reachRule(normalizeCallee(n)?.chain) ?? (isGlobalThisId(chainRoot(n)) ? "globalThis" : undefined);
+      push(rule, n);
+    } else if (isBareGlobalThis(n)) {
+      push("globalThis", n);
+    } else if (ts.isVariableDeclaration(n) && ts.isObjectBindingPattern(n.name)) {
+      for (const id of patternIdentifiers(n.name)) push(reachRule(normalizeCallee(id)?.chain), id);
+    }
+  });
+  return out;
 }
 
 function scanHandler(sf: ts.SourceFile, includeRuntime: boolean): Offense[] {
@@ -94,13 +182,7 @@ function scanHandler(sf: ts.SourceFile, includeRuntime: boolean): Offense[] {
     if (isRawFetch(call) && !allowMarked(sf, call.node, ALLOW_MARKER))
       out.push({ rule: "raw fetch", line: lineOf(sf, call.node) });
   }
-  for (const m of collectMemberAccess(sf)) {
-    if (m.objectName === "Bun" && !allowMarked(sf, m.node, ALLOW_MARKER))
-      out.push({ rule: "Bun.*", line: lineOf(sf, m.node) });
-    if (m.objectName === "process" && m.name === "env" && !allowMarked(sf, m.node, ALLOW_MARKER)) {
-      out.push({ rule: "process.env", line: lineOf(sf, m.node) });
-    }
-  }
+  out.push(...globalReachOffenses(sf));
   return out;
 }
 
@@ -194,6 +276,30 @@ describe("handler discipline", () => {
     expect(scanString(`const r = await fetch(u);\n`).some((o) => o.rule === "raw fetch")).toBe(true);
     expect(scanString(`const r = await globalThis.fetch(u);\n`).some((o) => o.rule === "raw fetch")).toBe(true);
     expect(scanString(`const r = await window.fetch(u);\n`).some((o) => o.rule === "raw fetch")).toBe(true);
+  });
+
+  test("globalThis.process.env and globalThis.Bun.spawn delegated to a helper are flagged (R3-M3)", () => {
+    const offenses = handlerIoOffenses(join(IO_FIXTURES, "global-receiver.ts"));
+    expect(offenses.map((o) => o.offense.rule)).toEqual(["process.env", "Bun.*"]);
+    expect(offenses.every((o) => o.file.endsWith("global-helper.ts"))).toBe(true);
+  });
+
+  test("aliased and destructured process / Bun / fetch are flagged", () => {
+    const rules = (src: string): string[] => scanString(src).map((o) => o.rule);
+    expect(rules(`const p = process;\nconst v = p.env.X;\n`)).toEqual(["process.env"]);
+    expect(rules(`const { env } = process;\n`)).toEqual(["process.env"]);
+    expect(rules(`const { spawn } = Bun;\n`)).toEqual(["Bun.*"]);
+    expect(rules(`const f = fetch;\nconst r = f(u);\n`)).toEqual(["raw fetch"]);
+  });
+
+  test("any globalThis reference is flagged", () => {
+    expect(scanString(`const c = globalThis.structuredClone(x);\n`).map((o) => o.rule)).toEqual(["globalThis"]);
+    expect(scanString(`const g = globalThis;\n`).map((o) => o.rule)).toEqual(["globalThis"]);
+  });
+
+  test("a local window and ctx-scoped env / Bun / fetch are not flagged (R3-M3 control)", () => {
+    const src = `const window = pick();\nwindow.fetch(u);\nconst h = ctx.env.HOME;\ndeps.Bun.spawn(c);\nctx.http.fetch(u);\n`;
+    expect(scanString(src)).toEqual([]);
   });
 
   test("Bun.* and process.env are flagged unless allow-marked", () => {
