@@ -15,10 +15,10 @@
 // per-branch abort-loop and budget-breach facts come from `abort-planner.ts`,
 // the same producers the linear path uses.
 
-import type { FactEvent } from "@fragua/store";
+import { AUTO_WAKE_PAUSE_REASONS, type FactEvent } from "@fragua/store";
 import { nodeRetryCount, passField } from "./executor-helpers.ts";
 import { planDispatchStarted } from "./lifecycle-planner.ts";
-import { exitSpendFacts, type HaltUsage } from "./result-to-facts.ts";
+import { exitSpendFacts, type HaltUsage, spendFactsFor, withoutSpend } from "./result-to-facts.ts";
 
 /** The frontier of one `type: parallel` node at the start of a fan-out turn,
  * as plain data. `active`/`redispatch` are already folded by the caller — the
@@ -66,15 +66,41 @@ export function planFanoutStep(frontier: FanoutFrontier): FanoutPlan {
   return { kind: "dispatch", active, redispatch };
 }
 
+/** A run-level disposition's precedence: a halt (3) beats a budget pause (2),
+ * which beats an operator-resumable pause (1), which beats an auto-wake pause
+ * (0 — `timeout_retry` / `handler_retry` / `provider_retry`, which would wake on
+ * a timer and so must never mask a pause the operator has to act on). */
+export function dispositionRank(fact: FactEvent): number {
+  if (fact.type === "fact.run_terminated") return 3;
+  if (fact.type !== "fact.run_paused") return -1;
+  const reason = fact.payload.reason;
+  if (reason === "budget") return 2;
+  return reason !== "human" && AUTO_WAKE_PAUSE_REASONS.has(reason) ? 0 : 1;
+}
+
 /** Fold one settling branch's run-level fact into the pool's single disposition
- * slot with the precedence rule: a halt (`run_terminated`) always overrides a
- * pause (terminal beats resumable), first-of-each-kind wins, and a pause never
- * downgrades a captured halt. Returns the (possibly unchanged) disposition. */
+ * slot: the higher `dispositionRank` wins, and of two equal ranks the first
+ * captured stays. Returns the (possibly unchanged) disposition. The slot never
+ * carries spend — each branch commits its own on its lane. */
 export function noteDisposition(current: FactEvent | undefined, incoming: FactEvent): FactEvent | undefined {
-  if (incoming.type === "fact.run_terminated") {
-    return current?.type === "fact.run_terminated" ? current : incoming;
+  if (current === undefined) return incoming;
+  return dispositionRank(incoming) > dispositionRank(current) ? incoming : current;
+}
+
+/** Split a branch exit plan: its park/terminal fact folds into the ranked
+ * disposition, the node-scoped rest (the spend-bearing `node_aborted`, a
+ * timeout-retry's facts) is returned for the branch's own commit. */
+export function partitionExitFacts(
+  disposition: FactEvent | undefined,
+  facts: readonly FactEvent[],
+): { branchFacts: FactEvent[]; disposition: FactEvent | undefined } {
+  const branchFacts: FactEvent[] = [];
+  let next = disposition;
+  for (const f of facts) {
+    if (f.type === "fact.run_paused" || f.type === "fact.run_terminated") next = noteDisposition(next, f);
+    else branchFacts.push(f);
   }
-  return current ?? incoming;
+  return { branchFacts, disposition: next };
 }
 
 /** The fail-closed halt for a branch that resolved to a run terminal (`next:
@@ -180,11 +206,13 @@ export function planBranchSettlement(args: {
   const branchFacts: FactEvent[] = [];
   let disposition = args.disposition;
   let terminal = false;
+  const at = { iteration: nodeRetryCount(args.liveRouting, args.nodeId), pass: args.pass };
   for (const f of args.facts) {
     if (f.type === "fact.run_terminated" && f.payload.status === "completed") {
       terminal = true;
     } else if (f.type === "fact.run_terminated" || f.type === "fact.run_paused") {
-      disposition = noteDisposition(disposition, f);
+      branchFacts.push(...spendFactsFor([f], "halt", at));
+      disposition = noteDisposition(disposition, withoutSpend(f));
     } else if (f.type !== "fact.node_started") {
       branchFacts.push(f);
     }
@@ -219,15 +247,21 @@ export function planBranchSettlement(args: {
 const BAIL_KEPT_FACTS = new Set<string>(["fact.node_completed", "fact.node_aborted", "fact.handler_timeout_leaked"]);
 
 /** The sibling facts an early-terminal bail commits ahead of its terminal: each
- * settled sibling's completion or exit spend, and — for a sibling still running
- * when the bounded drain gave up — its accrued usage on `fact.node_aborted`, so
- * no branch's spend leaves run totals with the bail. */
+ * settled sibling's completion or exit spend (a spend-bearing sibling halt is
+ * split down to its spend), and — for a sibling still running when the bounded
+ * drain gave up — its accrued usage on `fact.node_aborted`, so no branch's spend
+ * leaves run totals with the bail. */
 export function planBailSettlement(args: {
   settled: readonly { facts: readonly FactEvent[] }[];
   unsettled: readonly { nodeId: string; iteration: number; pass: number; usage: HaltUsage }[];
 }): FactEvent[] {
   const out: FactEvent[] = [];
-  for (const s of args.settled) for (const f of s.facts) if (BAIL_KEPT_FACTS.has(f.type)) out.push(f);
+  for (const s of args.settled) {
+    for (const f of s.facts) {
+      if (BAIL_KEPT_FACTS.has(f.type)) out.push(f);
+      else if (f.type === "fact.run_terminated") out.push(...spendFactsFor([f], "halt"));
+    }
+  }
   for (const u of args.unsettled) out.push(...exitSpendFacts(u.nodeId, u.iteration, "aborted", u.usage, u.pass));
   return out;
 }

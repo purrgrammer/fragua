@@ -37,6 +37,12 @@ guarantee.
 
 ### Fixed
 
+- **A step result lost to repeated write conflicts keeps its spend.** When a commit hits the `occ_exhausted` ceiling, or can't be re-planned against fresh state, the result's cost is still recorded on the run. Before, it went to zero and the handler was not re-run to recover it.
+- **Fan-out: every branch's spend counts when several branches stop the run.** Before, only the first halting or pausing branch's cost was recorded. Now each branch records its own spend, whichever outcome the run takes.
+- **Fan-out pause precedence.** When branches settle with different outcomes, a halt beats a `budget` pause, which beats other operator pauses, which beat automatic retries (`timeout_retry`, `handler_retry`, `provider_retry`). A budget overrun is no longer hidden behind a timeout retry that would wake on its own.
+- **A fan-out branch that halts the run aborts its siblings.** A branch that throws, exhausts its timeout retries, hits a budget stop, returns a halt, or ends the region early now stops the other in-flight branches, as a leak already did. Their work and spend are recorded ahead of the halt. Before, the siblings ran to completion.
+- **A run is never left `running` after a failed crash halt.** If the executor's crash halt can't be written, the run is still given back to the queue. The crash halt also records the spend of any commit the crash interrupted.
+- **A daemon that lost its `daemon_lock` claims no new runs.** A claim succeeds only while the lock row belongs to the claiming daemon, so an evicted daemon stops picking up work right away instead of at its next heartbeat. A daemon that is shutting down also claims nothing.
 - **A step's result and spend are committed once, even when its commit races another write.** A mid-step steer (or any concurrent fact) no longer re-runs the step and drops the first run's cost; the result is re-planned against the fresh state and committed in the same turn.
 - **A leaked handler is never dispatched again.** A leak halt that loses a write race is retried until it lands instead of re-running the still-running handler.
 - **Oversized error text no longer crashes or strands a run.** Provider error messages, halt details and executor-crash details are clipped to 2 KB (with a `… [clipped N bytes]` marker), so a large provider error body pauses the run normally with its spend recorded, and a crash halt that is still too large falls back to a fixed detail and releases the run.

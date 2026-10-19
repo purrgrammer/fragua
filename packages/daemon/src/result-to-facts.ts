@@ -356,6 +356,108 @@ export function exitSpendFacts(
   return [{ type: "fact.node_aborted", payload }];
 }
 
+type PartialSpendPayload = {
+  nodeId?: string;
+  partialTokens?: number;
+  partialCostUsd?: number;
+  partialInputTokens?: number;
+  partialOutputTokens?: number;
+  partialCacheReadTokens?: number;
+  partialCacheWriteTokens?: number;
+  partialInputCostUsd?: number;
+  partialOutputCostUsd?: number;
+  partialCacheReadCostUsd?: number;
+  partialCacheWriteCostUsd?: number;
+};
+
+const PARTIAL_SPEND_KEYS = [
+  "nodeId",
+  "partialTokens",
+  "partialCostUsd",
+  "partialInputTokens",
+  "partialOutputTokens",
+  "partialCacheReadTokens",
+  "partialCacheWriteTokens",
+  "partialInputCostUsd",
+  "partialOutputCostUsd",
+  "partialCacheReadCostUsd",
+  "partialCacheWriteCostUsd",
+] as const;
+
+function partialSpendOf(fact: FactEvent): PartialSpendPayload | undefined {
+  if (fact.type === "fact.run_halted") return fact.payload;
+  if (fact.type === "fact.run_terminated" && fact.payload.status === "errored") return fact.payload;
+  return undefined;
+}
+
+function hasSpend(usage: HaltUsage): boolean {
+  return usage.turnBilled > 0 || usage.totalCostUsd > 0;
+}
+
+/** The spend a planned fact batch carries, as stand-alone `fact.node_aborted`
+ * facts tagged `cause` — what an exit that discards the batch (an OCC ceiling, a
+ * crash, a losing fan-out disposition) commits instead so the spend lands
+ * exactly once. A `node_completed` converts to its `node_aborted` twin, a
+ * `node_aborted` passes through, a halt's `partial*` fields split out (keyed on
+ * its `nodeId`, at `at`'s iteration / pass); zero-spend facts and everything
+ * else drop. Pure. */
+export function spendFactsFor(
+  facts: readonly FactEvent[],
+  cause: string,
+  at: { iteration: number; pass: number } = { iteration: 0, pass: 0 },
+): FactEvent[] {
+  const out: FactEvent[] = [];
+  for (const f of facts) {
+    if (f.type === "fact.node_aborted") {
+      if (f.payload.partialTokens > 0 || f.payload.partialCostUsd > 0) out.push(f);
+      continue;
+    }
+    if (f.type === "fact.node_completed") {
+      const p = f.payload;
+      const usage: HaltUsage = {
+        turnBilled: p.tokens,
+        totalCostUsd: p.costUsd,
+        totalInputTokens: p.inputTokens ?? 0,
+        totalOutputTokens: p.outputTokens ?? 0,
+        totalCacheReadTokens: p.cacheReadTokens ?? 0,
+        totalCacheWriteTokens: p.cacheWriteTokens ?? 0,
+        totalInputCostUsd: p.inputCostUsd ?? 0,
+        totalOutputCostUsd: p.outputCostUsd ?? 0,
+        totalCacheReadCostUsd: p.cacheReadCostUsd ?? 0,
+        totalCacheWriteCostUsd: p.cacheWriteCostUsd ?? 0,
+      };
+      if (hasSpend(usage)) out.push(...exitSpendFacts(p.nodeId, p.iteration, cause, usage, p.pass ?? 0));
+      continue;
+    }
+    const p = partialSpendOf(f);
+    if (p === undefined) continue;
+    const usage: HaltUsage = {
+      turnBilled: p.partialTokens ?? 0,
+      totalCostUsd: p.partialCostUsd ?? 0,
+      totalInputTokens: p.partialInputTokens ?? 0,
+      totalOutputTokens: p.partialOutputTokens ?? 0,
+      totalCacheReadTokens: p.partialCacheReadTokens ?? 0,
+      totalCacheWriteTokens: p.partialCacheWriteTokens ?? 0,
+      totalInputCostUsd: p.partialInputCostUsd ?? 0,
+      totalOutputCostUsd: p.partialOutputCostUsd ?? 0,
+      totalCacheReadCostUsd: p.partialCacheReadCostUsd ?? 0,
+      totalCacheWriteCostUsd: p.partialCacheWriteCostUsd ?? 0,
+    };
+    if (hasSpend(usage)) out.push(...exitSpendFacts(p.nodeId ?? "", at.iteration, cause, usage, at.pass));
+  }
+  return out;
+}
+
+/** The fact with any halt `partial*` spend (and its `nodeId` key) stripped —
+ * the disposition half of a halt whose spend `spendFactsFor` split out. Other
+ * facts return unchanged. */
+export function withoutSpend(fact: FactEvent): FactEvent {
+  if (partialSpendOf(fact) === undefined) return fact;
+  const payload: Record<string, unknown> = { ...fact.payload };
+  for (const k of PARTIAL_SPEND_KEYS) delete payload[k];
+  return { ...fact, payload } as FactEvent;
+}
+
 export function cancelToFacts(intentSeq: number): FactEvent[] {
   return [{ type: "fact.run_terminated", payload: { status: "aborted", intentSeq } }];
 }

@@ -224,6 +224,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         llmCall: opts.llmCall,
         maxConcurrentRuns: opts.maxConcurrentRuns ?? DEFAULT_CONCURRENCY,
         shutdownSignal: ctrl.signal,
+        claimerPid: pid,
       };
       if (opts.judgeClient) executorOpts.judgeClient = opts.judgeClient;
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;

@@ -6,8 +6,10 @@ import { describe, expect, test } from "bun:test";
 import { retryCountKey } from "@fragua/core";
 import type { FactEvent } from "@fragua/store";
 import {
+  dispositionRank,
   type FanoutFrontier,
   noteDisposition,
+  partitionExitFacts,
   planBailSettlement,
   planBranchSettlement,
   planBranchTerminal,
@@ -145,14 +147,66 @@ describe("noteDisposition", () => {
     expect(noteDisposition(first, halt("b"))).toBe(first);
   });
 
-  test("first pause wins over a later pause", () => {
+  test("first pause of equal rank wins over a later one", () => {
     const first = pause("a");
     expect(noteDisposition(first, pause("b"))).toBe(first);
+  });
+
+  test("a budget pause outranks an earlier timeout_retry pause", () => {
+    const timeoutRetry: FactEvent = {
+      type: "fact.run_paused",
+      payload: {
+        reason: "timeout_retry",
+        nodeId: "a",
+        attempt: 1,
+        delayMs: 5000,
+        resumeAt: 5000,
+        maxAttempts: 3,
+        attemptedMs: 100,
+      },
+    };
+    const budget: FactEvent = {
+      type: "fact.run_paused",
+      payload: { reason: "budget", nodeId: "fan", scope: "run", metric: "cost", limit: 1, actual: 1.05 },
+    };
+    expect(noteDisposition(timeoutRetry, budget)).toBe(budget);
+    expect(noteDisposition(budget, timeoutRetry)).toBe(budget);
+  });
+
+  test("an operator pause outranks an auto-wake pause and yields to budget", () => {
+    const providerRetry = {
+      type: "fact.run_paused",
+      payload: { reason: "provider_retry", nodeId: "a" },
+    } as unknown as FactEvent;
+    const operator = pause("b");
+    const budget: FactEvent = {
+      type: "fact.run_paused",
+      payload: { reason: "budget", nodeId: "fan", scope: "run", metric: "cost", limit: 1, actual: 2 },
+    };
+    expect(noteDisposition(providerRetry, operator)).toBe(operator);
+    expect(noteDisposition(operator, providerRetry)).toBe(operator);
+    expect(noteDisposition(operator, budget)).toBe(budget);
+    expect(dispositionRank(halt("x"))).toBeGreaterThan(dispositionRank(budget));
+    expect(dispositionRank(budget)).toBeGreaterThan(dispositionRank(operator));
+    expect(dispositionRank(operator)).toBeGreaterThan(dispositionRank(providerRetry));
   });
 
   test("undefined current takes the incoming fact", () => {
     const incoming = pause("a");
     expect(noteDisposition(undefined, incoming)).toBe(incoming);
+  });
+});
+
+describe("partitionExitFacts", () => {
+  test("partitionExitFacts routes the park/terminal fact to the ranked disposition and keeps node facts", () => {
+    const aborted: FactEvent = {
+      type: "fact.node_aborted",
+      payload: { nodeId: "a", iteration: 0, cause: "error", partialTokens: 1, partialCostUsd: 0.1 },
+    };
+    const captured = pause("b");
+    const r = partitionExitFacts(captured, [aborted, halt("a")]);
+    expect(r.branchFacts).toEqual([aborted]);
+    expect(r.disposition).toEqual(halt("a"));
   });
 });
 
@@ -223,6 +277,25 @@ describe("planBailSettlement", () => {
 
   test("nothing settled and nothing in flight → no facts", () => {
     expect(planBailSettlement({ settled: [], unsettled: [] })).toEqual([]);
+  });
+
+  test("planBailSettlement credits a settled sibling's spend-bearing halt", () => {
+    const out = planBailSettlement({
+      settled: [
+        {
+          facts: [
+            {
+              type: "fact.run_terminated",
+              payload: { status: "errored", reason: "error", nodeId: "s", partialTokens: 7, partialCostUsd: 0.2 },
+            },
+          ],
+        },
+      ],
+      unsettled: [],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.type).toBe("fact.node_aborted");
+    expect(out[0]?.payload).toMatchObject({ nodeId: "s", partialTokens: 7, partialCostUsd: 0.2 });
   });
 });
 
@@ -347,6 +420,26 @@ describe("planBranchSettlement", () => {
     const completed = nodeCompleted("b0", "synth");
     const r = planBranchSettlement(args({ facts: [started, completed], nextNode: "synth" }));
     expect(r.branchFacts).toEqual([completed]);
+  });
+
+  test("planBranchSettlement moves a halt's partial spend onto branchFacts", () => {
+    const spendingHalt: FactEvent = {
+      type: "fact.run_terminated",
+      payload: { status: "errored", reason: "error", detail: "x", nodeId: "b0", partialTokens: 9, partialCostUsd: 0.3 },
+    };
+    const r = planBranchSettlement(args({ facts: [spendingHalt], liveRouting: { [retryCountKey("b0")]: 2 } }));
+    expect(r.disposition).toEqual({
+      type: "fact.run_terminated",
+      payload: { status: "errored", reason: "error", detail: "x" },
+    });
+    expect(r.branchFacts).toHaveLength(1);
+    expect(r.branchFacts[0]?.payload).toMatchObject({
+      nodeId: "b0",
+      iteration: 2,
+      cause: "halt",
+      partialTokens: 9,
+      partialCostUsd: 0.3,
+    });
   });
 
   test("halt-over-pause precedence: incoming disposition halt survives a branch pause", () => {

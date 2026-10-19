@@ -474,6 +474,11 @@ export interface ClaimFenceOpts {
   claimEpoch?: number;
 }
 
+/** Lock gate for `claimNextRun`: the pid that must hold `daemon_lock`. */
+export interface ClaimNextRunOpts {
+  claimerPid?: number;
+}
+
 export interface AppendMessageOpts extends ClaimFenceOpts {
   dedup?: boolean;
 }
@@ -869,8 +874,10 @@ export interface IEventWriter {
    * ready_at), or `null` when the daemon is at capacity or no run is
    * eligible. Bumps the run's `claim_epoch` and returns the new value; the
    * claiming fiber passes it as `AppendFactOpts.claimEpoch` on every append.
+   * With `claimerPid`, the claim only lands while `daemon_lock` is held by
+   * that pid — an evicted daemon claims nothing.
    */
-  claimNextRun(maxInFlight: number): { runId: string; claimEpoch: number } | null;
+  claimNextRun(maxInFlight: number, opts?: ClaimNextRunOpts): { runId: string; claimEpoch: number } | null;
   /**
    * Give a claimed run back to the queue when its fiber can no longer commit
    * (every halt append lost its OCC race): appends `fact.run_requeued_after_crash`

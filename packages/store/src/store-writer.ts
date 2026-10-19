@@ -46,6 +46,7 @@ import {
   CheckoutBusyError,
   type ClaimFenceOpts,
   ClaimLostError,
+  type ClaimNextRunOpts,
   ConcurrencyError,
   type EnqueueRunParams,
   type FactAppendResult,
@@ -502,8 +503,13 @@ export function enqueueRun(ctx: StoreCtx, params: EnqueueRunParams): void {
   reputBlobs(ctx, spilledData);
 }
 
-export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: string; claimEpoch: number } | null {
+export function claimNextRun(
+  ctx: StoreCtx,
+  maxInFlight: number,
+  opts?: ClaimNextRunOpts,
+): { runId: string; claimEpoch: number } | null {
   const now = ctx.now();
+  const claimerPid = opts?.claimerPid;
   let claimed: { runId: string; claimEpoch: number } | null = null;
 
   ctx.writeTxn(() => {
@@ -514,7 +520,7 @@ export function claimNextRun(ctx: StoreCtx, maxInFlight: number): { runId: strin
     const row = selectNextQueuedRun(ctx.db);
     if (row == null) return;
 
-    claimed = claimQueuedRun(ctx.db, { runId: row.run_id, expectedVersion: row.version, now });
+    claimed = claimQueuedRun(ctx.db, { runId: row.run_id, expectedVersion: row.version, now, claimerPid });
   });
 
   return claimed;

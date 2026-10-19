@@ -186,6 +186,49 @@ describe("exits commit once", () => {
     ).toHaveLength(1);
   });
 
+  test("a replan that declines because the cursor moved still commits the handler's spend once and does not re-dispatch", async () => {
+    const r = rig({
+      yaml: `name: moved
+defaults: { provider: anthropic, model: m }
+steps:
+  work: { type: llm, prompt: x, next: other }
+  other: { type: llm, prompt: x, next: exit }
+`,
+    });
+    let workCalls = 0;
+    r.dispatcher.register(r.workflowSha, "work", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async (ctx): Promise<handler.HandlerResult> => {
+        workCalls++;
+        ctx.emit("cost.recorded", SPEND);
+        const state = r.store.getState("moved")!;
+        r.store.appendFact(
+          "moved",
+          [{ type: "fact.node_started", payload: { nodeId: "other", iteration: 0 } }],
+          state.version,
+        );
+        return { kind: "transition", outcomeStatus: "success", tokens: 100, costUsd: 0.25 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "other", {
+      kind: "llm",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "moved", "work");
+    r.store.claimNextRun(1);
+    await runOne("moved", baseOpts(r));
+
+    const state = r.store.getState("moved")!;
+    expect(workCalls).toBe(1);
+    expect(state.status).toBe("completed");
+    expect(state.metrics.totalCostUsd).toBeCloseTo(0.25, 10);
+    expect(state.metrics.totalCostUsd).toBeCloseTo(recordedCost(r, "moved"), 10);
+  });
+
   test("a leak-halt OCC loss halts without re-dispatch", async () => {
     const r = rig();
     let calls = 0;
