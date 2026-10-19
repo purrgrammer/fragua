@@ -13,8 +13,12 @@ import {
   selectBlobRootShas,
   selectDeletableOrphanFiles,
 } from "../src/artifact-queries.ts";
+import { insertEventDaemon } from "../src/event-queries.ts";
+import { newRunId } from "../src/index.ts";
 import { insertOutput } from "../src/outputs-queries.ts";
-import { freshStore, seedRun } from "./helpers.ts";
+import { bumpRunSeq } from "../src/run-state-queries.ts";
+import { sha256Hex } from "../src/sha256.ts";
+import { freshStore, seedHashedWorkflow, seedRun } from "./helpers.ts";
 
 const ROUTED = "a".repeat(64);
 const EMITTED = "b".repeat(64);
@@ -58,6 +62,58 @@ describe("blob GC roots", () => {
 
     expect(selectDeletableOrphanFiles(db, JSON.stringify([ROUTED, EMITTED, ROWED, BARE]))).toEqual([BARE]);
     expect(selectDeletableOrphanFiles(db, "[]")).toEqual([]);
+    store.close();
+  });
+
+  test("a fact.node_completed outputs ref stays a root after its outputs row is replaced, and export succeeds (C3)", async () => {
+    const store = freshStore();
+    const sha = await seedHashedWorkflow(store, "gc-roots");
+    const runId = newRunId();
+    store.enqueueRun({ runId, workflowSha: sha, cwd: "/home/dev/p" });
+    const first = { report: "1".repeat(5000) };
+    const second = { report: "2".repeat(5000) };
+    const firstSha = sha256Hex(new TextEncoder().encode(JSON.stringify(first)));
+    const secondSha = sha256Hex(new TextEncoder().encode(JSON.stringify(second)));
+    let v = store.getState(runId)!.version;
+    v = store.appendFact(
+      runId,
+      [{ type: "fact.run_started", payload: { workflowSha: sha, contractVersion: 1, startNode: "scope" } }],
+      v,
+    ).newVersion;
+    for (const outputs of [first, second]) {
+      v = store.appendFact(
+        runId,
+        [
+          {
+            type: "fact.node_completed",
+            payload: { nodeId: "scope", iteration: 0, tokens: 0, costUsd: 0, nextNode: "scope", outputs },
+          },
+        ],
+        v,
+      ).newVersion;
+    }
+    store.appendFact(runId, [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "scope" } }], v);
+
+    expect(store.getOutputsForRun(runId)).toHaveLength(1);
+    expect(store.gcBlobs().deleted).toBe(0);
+    expect(store.readBlob(firstSha)).not.toBeNull();
+    expect(store.readBlob(secondSha)).not.toBeNull();
+    expect(() => store.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" })).not.toThrow();
+    store.close();
+  });
+
+  test("only fact.node_completed payloads root a blob through events.outputs_blob_sha", async () => {
+    const store = freshStore();
+    const db = (store as unknown as { db: Database }).db;
+    const runId = await seedRun(store);
+    const ref = JSON.stringify({ nodeId: "scope", iteration: 0, outputs: { $fragua_blob: EMITTED, bytes: 9000 } });
+    const other = JSON.stringify({ nodeId: "scope", outputs: { $fragua_blob: ORPHAN, bytes: 9000 } });
+    insertEventDaemon(db, runId, bumpRunSeq(db, runId), "fact.node_completed", ref, 1);
+    insertEventDaemon(db, runId, bumpRunSeq(db, runId), "llm.done", other, 1);
+
+    const roots = selectBlobRootShas(db);
+    expect(roots.has(EMITTED)).toBe(true);
+    expect(roots.has(ORPHAN)).toBe(false);
     store.close();
   });
 

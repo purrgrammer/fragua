@@ -52,6 +52,34 @@ export function upsertArtifact(
   );
 }
 
+const INSERT_ARTIFACT_IF_ABSENT_SQL = `
+  INSERT INTO artifacts
+    (run_id, node_id, iteration, key, blob_sha, mime, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(run_id, node_id, iteration, key) DO NOTHING
+`;
+
+/** Insert an artifact row unless one already holds the scope. Returns whether
+ *  this call inserted it; on `false` the caller reads the stored row in the
+ *  same transaction to decide between a replay no-op and a collision. */
+export function insertArtifactIfAbsent(
+  db: Database,
+  args: {
+    runId: string;
+    nodeId: string;
+    iteration: number;
+    key: string;
+    blobSha: string;
+    mime: string | null;
+    now: number;
+  },
+): boolean {
+  const res = db
+    .query(INSERT_ARTIFACT_IF_ABSENT_SQL)
+    .run(args.runId, args.nodeId, args.iteration, args.key, args.blobSha, args.mime, args.now);
+  return res.changes > 0;
+}
+
 interface ArtifactRefRow {
   blob_sha: string;
   mime: string | null;
@@ -117,8 +145,12 @@ export function selectArtifactsForRun(db: Database, runId: string): ArtifactList
 
 /** Every blob sha the live data still points at, beyond the `artifacts`
  *  table: a `{ "$fragua_blob": "<sha>" }` ref anywhere inside a run's routing
- *  (spilled inputs — `json_tree` walks the nesting), or an outputs-index row
- *  that is itself a spilled-struct ref. Computed in SQL so the orphan DELETE
+ *  (spilled inputs — `json_tree` walks the nesting), an outputs-index row
+ *  that is itself a spilled-struct ref, or the spilled-struct ref of any
+ *  `fact.node_completed` in the log (`events.outputs_blob_sha`, partial-indexed).
+ *  The event root matters because the outputs index is last-write-wins per
+ *  (node, iteration): a re-completion replaces the row while the earlier event
+ *  still names its blob, and export ships every event's blob. Computed in SQL so the orphan DELETE
  *  below can read it in the same statement it deletes under — a root that lands
  *  between a separate scan and the delete can't be collected, because there is
  *  no "between". `routing` is `NOT NULL` and written as JSON; the `json_valid`
@@ -131,6 +163,10 @@ const BLOB_ROOTS_SQL = `
   SELECT json_extract(o.struct, '$."$fragua_blob"') AS sha256
     FROM outputs o
    WHERE json_type(o.struct, '$."$fragua_blob"') = 'text'
+  UNION
+  SELECT e.outputs_blob_sha AS sha256
+    FROM events e
+   WHERE e.outputs_blob_sha IS NOT NULL
 `;
 
 const SELECT_BLOB_ROOTS_SQL = `
@@ -153,7 +189,7 @@ const DELETE_ORPHAN_BLOBS_SQL = `
   RETURNING sha256
 `;
 
-/** The routing / outputs blob roots, for the file-side pass that has no row
+/** The routing / outputs / event blob roots, for the file-side pass that has no row
  *  to join against. */
 export function selectBlobRootShas(db: Database): Set<string> {
   return new Set(
@@ -165,7 +201,7 @@ export function selectBlobRootShas(db: Database): Set<string> {
 }
 
 /** Delete up to `limit` orphan blob rows — no artifact referent AND not a
- *  routing / outputs root — and return their sha256s so the caller can drop
+ *  routing / outputs / event root — and return their sha256s so the caller can drop
  *  the on-disk content under the same write lock. The roots are resolved
  *  inside this one statement, so the scan and the delete see a single
  *  snapshot. RETURNING ensures row-without-file is impossible mid-sweep. */
@@ -186,7 +222,7 @@ const SELECT_DELETABLE_ORPHAN_FILES_SQL = `
 `;
 
 /** Of the candidate file shas (a JSON array), the ones with neither a `blobs`
- *  row nor a routing / outputs root. Run under the write lock right before the
+ *  row nor a routing / outputs / event root. Run under the write lock right before the
  *  file deletes, so a row or root committed after the candidates were listed
  *  still protects its file. */
 export function selectDeletableOrphanFiles(db: Database, candidatesJson: string): string[] {

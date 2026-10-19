@@ -160,7 +160,41 @@ const SCHEMA_MIGRATIONS: Record<number, Migration> = {
       db.exec("ALTER TABLE daemon_lock DROP COLUMN harness_pid");
     },
   },
+  // v9 → v10: `events.outputs_blob_sha`, the spilled-output ref a
+  // `fact.node_completed` names, rooted by blob GC. SQLite only ADDs a VIRTUAL
+  // generated column; `table_xinfo` (not `table_info`) lists generated
+  // columns, so it guards the ADD. `down` is not lossy: the column is derived.
+  10: {
+    up: (db) => {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_xinfo(events)").all();
+      if (!cols.some((c) => c.name === "outputs_blob_sha")) {
+        db.exec(
+          `ALTER TABLE events ADD COLUMN outputs_blob_sha TEXT GENERATED ALWAYS AS (${OUTPUTS_BLOB_SHA_EXPR}) VIRTUAL`,
+        );
+      }
+      db.exec(EVENTS_OUTPUTS_BLOB_INDEX_SQL);
+    },
+    down: (db) => {
+      db.exec("DROP INDEX IF EXISTS idx_events_outputs_blob");
+      db.exec("ALTER TABLE events DROP COLUMN outputs_blob_sha");
+    },
+  },
 };
+
+/** Must match the `events.outputs_blob_sha` expression in `schema.sql`. */
+const OUTPUTS_BLOB_SHA_EXPR = `CASE
+      WHEN type <> 'fact.node_completed' THEN NULL
+      WHEN NOT json_valid(payload) THEN NULL
+      WHEN json_type(payload, '$.outputs."$fragua_blob"') = 'text'
+        THEN json_extract(payload, '$.outputs."$fragua_blob"')
+    END`;
+
+/** The event-referenced blob-root index. Kept out of `schema.sql` for the same
+ * reason as {@link CHECKOUT_INDEX_SQL}: a pre-v10 `events` has no
+ * `outputs_blob_sha` when that file re-runs. */
+const EVENTS_OUTPUTS_BLOB_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_events_outputs_blob
+  ON events(outputs_blob_sha)
+  WHERE outputs_blob_sha IS NOT NULL`;
 
 /** The held-checkout lookup index. Kept out of `schema.sql` because that file
  * re-runs before the walk-forward steps, when a pre-v7 `run_state` has no
@@ -195,6 +229,7 @@ export function migrate(db: Database): void {
     db.transaction(() => {
       db.exec(SCHEMA_SQL);
       db.exec(CHECKOUT_INDEX_SQL);
+      db.exec(EVENTS_OUTPUTS_BLOB_INDEX_SQL);
       db.query("INSERT INTO schema_version (id, version) VALUES (1, ?)").run(CURRENT_SCHEMA_VERSION);
     })();
     return;
@@ -206,6 +241,7 @@ export function migrate(db: Database): void {
     db.transaction(() => {
       db.exec(SCHEMA_SQL);
       db.exec(CHECKOUT_INDEX_SQL);
+      db.exec(EVENTS_OUTPUTS_BLOB_INDEX_SQL);
     })();
     return;
   }

@@ -3,7 +3,14 @@
 
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { applyFact, emptyMetrics, MAX_EVENT_PAYLOAD_BYTES, SqliteStore } from "../src/index.ts";
+import {
+  applyFact,
+  ConcurrencyError,
+  emptyMetrics,
+  type FactEvent,
+  MAX_EVENT_PAYLOAD_BYTES,
+  SqliteStore,
+} from "../src/index.ts";
 import { getLatestOutput, getLatestOutputBatch, getOutputsForRun, insertOutput } from "../src/outputs-queries.ts";
 import { STRUCT_INLINE_MAX_BYTES } from "../src/routing-blobs.ts";
 import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
@@ -245,6 +252,70 @@ describe("appendFact + outputs index (same-transaction write)", () => {
     // GC must NOT collect the spilled output blob (it's a root via the index).
     store.gcBlobs();
     expect(JSON.parse(store.getOutputsForRun(runId)[0]!.struct).report).toBe(big);
+  });
+
+  test("appendFact leaves the caller's payload untouched on ConcurrencyError, and the retry commits a blob row for its ref (C6)", async () => {
+    const { store, runId } = await makeStoreWithRun();
+    const db = rawDb(store);
+    const state = store.getState(runId)!;
+    const v1 = store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: 1, startNode: "scope" },
+        },
+      ],
+      state.version,
+    ).newVersion;
+    const events: FactEvent[] = [
+      {
+        type: "fact.node_completed",
+        payload: {
+          nodeId: "scope",
+          iteration: 0,
+          tokens: 0,
+          costUsd: 0,
+          nextNode: "exit",
+          outputs: { report: "c".repeat(8000), pr: "7" },
+        },
+      },
+    ];
+    const before = structuredClone(events);
+
+    expect(() => store.appendFact(runId, events, state.version)).toThrow(ConcurrencyError);
+    expect(events).toEqual(before);
+
+    store.appendFact(runId, events, v1);
+    const ev = store.getEvents(runId).find((e) => e.type === "fact.node_completed")!;
+    const sha = (ev.payload as { outputs: Record<string, unknown> }).outputs["$fragua_blob"] as string;
+    expect(sha).toMatch(/^[0-9a-f]{64}$/);
+    expect(db.query("SELECT 1 FROM blobs WHERE sha256 = ?").get(sha)).not.toBeNull();
+    const indexed = getOutputsForRun(db, runId);
+    expect(JSON.parse(indexed[0]!.struct)["$fragua_blob"]).toBe(sha);
+  });
+
+  test("a committed appendFact does not rewrite the caller's outputs to a blob ref", async () => {
+    const { store, runId } = await makeStoreWithRun();
+    const state = store.getState(runId)!;
+    const outputs = { report: "d".repeat(8000) };
+    const completed: FactEvent = {
+      type: "fact.node_completed",
+      payload: { nodeId: "scope", iteration: 0, tokens: 0, costUsd: 0, nextNode: "exit", outputs },
+    };
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: state.workflowSha, contractVersion: 1, startNode: "scope" },
+        },
+        completed,
+      ],
+      state.version,
+    );
+    expect((completed.payload as { outputs: unknown }).outputs).toBe(outputs);
+    expect(outputs).toEqual({ report: "d".repeat(8000) });
   });
 
   test("a spilled output whose blob is missing is dropped, not thrown (read fails closed)", async () => {

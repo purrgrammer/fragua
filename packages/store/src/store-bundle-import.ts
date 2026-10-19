@@ -25,7 +25,13 @@ import { EVENT_CONTRACT_VERSION, MIN_COMPATIBLE_CONTRACT_VERSION } from "./pragm
 import { deriveRunState } from "./reducers.ts";
 import { isBlobRef, maybeSpillStruct } from "./routing-blobs.ts";
 import { assertSafeRunId } from "./run-id.ts";
-import { insertRunState, markRunImported, setRunStateNextSeq, writeRunStateProjection } from "./run-state-queries.ts";
+import {
+  insertRunState,
+  markRunImported,
+  selectRunStateRow,
+  setRunStateNextSeq,
+  writeRunStateProjection,
+} from "./run-state-queries.ts";
 import { sha256Hex } from "./sha256.ts";
 import type { StoreCtx } from "./store-ctx.ts";
 import { reputBlobs } from "./store-writer.ts";
@@ -206,7 +212,6 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
       throw new Error(`importRunBundle: run ${r.runId} genesis contractVersion is not a number`);
     }
     asObject(gp["routing"], `run ${r.runId} genesis routing`);
-    const existing = classifyExistingRun(ctx, r.runId, events);
 
     const derived = deriveRunState(r.runId, events);
     // Rebuild the outputs index from node_completed facts, mirroring the live
@@ -240,6 +245,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
       }
     }
     return {
+      events,
       derived,
       outputsRows,
       outputsSpilledBlobs,
@@ -266,24 +272,22 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
         };
       }),
       artifacts,
-      existing,
     };
   });
 
   const now = ctx.now();
-  const result: { runId: string; imported: boolean }[] = [];
-
-  // Blob files before the txn (fs I/O); reap any orphan if the txn throws.
-  try {
-    for (const b of blobs) ctx.blobs.put(b.sha256, b.data);
-
+  const classifyAll = () =>
+    runsToImport.map((r) => ({ r, existing: classifyExistingRun(ctx, r.derived.runId, r.events) }));
+  const writeAll = (plan: ReturnType<typeof classifyAll>): { runId: string; imported: boolean }[] => {
+    const written: { runId: string; imported: boolean }[] = [];
     ctx.writeTxn(() => {
       for (const w of workflows) insertWorkflowIfAbsent(ctx.db, w.sha, w.name, w.source, w.ir, w.irVersion, now);
       for (const b of blobs) insertBlobIfAbsent(ctx.db, b.sha256, b.size, now);
 
-      for (const r of runsToImport) {
+      for (const { r, existing } of plan) {
         const d = r.derived;
-        if (r.existing.mode === "new") {
+        assertImportFence(ctx, d.runId, existing);
+        if (existing.mode === "new") {
           insertRunState(ctx.db, {
             runId: d.runId,
             workflowSha: d.workflowSha,
@@ -301,6 +305,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             workflowScope: d.workflowScope,
             workflowPath: d.workflowPath,
             scheduleId: d.scheduleId,
+            title: d.title,
             baseGitSha: d.baseGitSha,
             baseGitRef: d.baseGitRef,
             baseHeadSha: d.baseHeadSha,
@@ -308,11 +313,11 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             checkoutPath: null, // a local binding — an imported run never holds a checkout
           });
         }
-        if (r.existing.mode !== "identical") {
+        if (existing.mode !== "identical") {
           // A fresh row was inserted at version 1; an extension replaces the
           // projection over the merged log (the stored log is a prefix of the
           // bundle's, so `derived` already is its replay).
-          const expectedVersion = r.existing.mode === "new" ? 1 : r.existing.expectedVersion;
+          const expectedVersion = existing.mode === "new" ? 1 : existing.version;
           const applied = writeRunStateProjection(ctx.db, {
             runId: d.runId,
             version: d.version,
@@ -341,7 +346,7 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
           if (!applied) throw new ConcurrencyError(expectedVersion, -1);
           setRunStateNextSeq(ctx.db, d.runId, d.nextSeq);
         }
-        if (r.existing.mode === "new") {
+        if (existing.mode === "new") {
           // Authoritative inert marker: holds the run out of dispatch /
           // concurrency / sweep regardless of its derived status (a
           // non-terminal source run derives to queued/running but must never
@@ -383,9 +388,31 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
             now: a.createdAt,
           });
         }
-        result.push({ runId: d.runId, imported: r.existing.mode !== "identical" });
+        written.push({ runId: d.runId, imported: existing.mode !== "identical" });
       }
     });
+    return written;
+  };
+
+  // Classify outside the txn (it parses stored payloads — I1), then re-check
+  // each run's fence under the write lock. A concurrent import that landed in
+  // between trips the fence; re-classifying turns it into the idempotent
+  // no-op (or a fresh extension) instead of a UNIQUE / OCC failure.
+  let plan = classifyAll();
+  let result: { runId: string; imported: boolean }[] = [];
+
+  // Blob files before the txn (fs I/O); reap any orphan if the write fails.
+  try {
+    for (const b of blobs) ctx.blobs.put(b.sha256, b.data);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        result = writeAll(plan);
+        break;
+      } catch (err) {
+        if (!(err instanceof ImportRaceError) || attempt >= IMPORT_RACE_ATTEMPTS) throw err;
+      }
+      plan = classifyAll();
+    }
   } catch (err) {
     for (const b of blobs) {
       if (!blobRowExists(ctx.db, b.sha256)) ctx.blobs.delete(b.sha256);
@@ -408,7 +435,35 @@ export function importRunBundle(ctx: StoreCtx, bytes: Uint8Array): ImportBundleR
   return { runs: result, resumeCompatible };
 }
 
-type ExistingRun = { mode: "new" } | { mode: "identical" } | { mode: "extend"; expectedVersion: number };
+/** How many classify → write passes an import gets when concurrent imports
+ * of the same run keep moving it under the fence. */
+const IMPORT_RACE_ATTEMPTS = 3;
+
+class ImportRaceError extends Error {
+  constructor(runId: string) {
+    super(`importRunBundle: run ${runId} changed while importing (concurrent import); retry`);
+  }
+}
+
+/** The run_state fence a classification was made against: no row for `new`,
+ * otherwise the imported row at the `version` / `next_seq` it was read at. */
+type ExistingRun =
+  | { mode: "new" }
+  | { mode: "identical"; version: number; nextSeq: number }
+  | { mode: "extend"; version: number; nextSeq: number };
+
+/** Re-check, under the write lock, that `runId` is still in the state it was
+ * classified in. Pure SQL — the classification itself ran before the txn. */
+function assertImportFence(ctx: StoreCtx, runId: string, existing: ExistingRun): void {
+  const row = selectRunStateRow(ctx.db, runId);
+  if (existing.mode === "new") {
+    if (row != null) throw new ImportRaceError(runId);
+    return;
+  }
+  if (row == null || row.imported !== 1 || row.version !== existing.version || row.next_seq !== existing.nextSeq) {
+    throw new ImportRaceError(runId);
+  }
+}
 
 /** A bundle may only ever write into a run this store holds as an import, and
  * only by extending it: appending into a run this store executes would inject
@@ -445,9 +500,8 @@ function classifyExistingRun(
   const storedSeqs = new Set(stored.map((s) => s.seq));
   const gap = events.find((e) => e.seq <= storedMax && !storedSeqs.has(e.seq));
   if (gap != null) throw notPrefix(gap.seq);
-  return events.some((e) => e.seq > storedMax)
-    ? { mode: "extend", expectedVersion: state.version }
-    : { mode: "identical" };
+  const fence = { version: state.version, nextSeq: state.nextSeq };
+  return events.some((e) => e.seq > storedMax) ? { mode: "extend", ...fence } : { mode: "identical", ...fence };
 }
 
 /** The workflows table is shared with locally-authored runs and keyed by

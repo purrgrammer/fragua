@@ -16,6 +16,26 @@ export function freshStore(nowStart = 1_700_000_000_000): SqliteStore {
   });
 }
 
+/** `n` stores on one file-backed DB and one blob directory — `n` processes'
+ * view of the same store. */
+export function storesOnOneFile(
+  n: number,
+  nowStart = 1_700_000_000_000,
+): { stores: SqliteStore[]; dispose: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "fragua-shared-store-"));
+  const path = join(dir, "fragua.db");
+  let t = nowStart;
+  const now = () => t++;
+  const stores = Array.from({ length: n }, () => new SqliteStore({ path, now }));
+  return {
+    stores,
+    dispose: () => {
+      for (const s of stores) s.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 /** Two stores on one file-backed DB and one blob directory — two processes'
  * view of the same store (e.g. a CLI enqueue next to the harness's GC). */
 export function twoStoresOnOneFile(nowStart = 1_700_000_000_000): {
@@ -23,21 +43,8 @@ export function twoStoresOnOneFile(nowStart = 1_700_000_000_000): {
   b: SqliteStore;
   dispose: () => void;
 } {
-  const dir = mkdtempSync(join(tmpdir(), "fragua-two-stores-"));
-  const path = join(dir, "fragua.db");
-  let t = nowStart;
-  const now = () => t++;
-  const a = new SqliteStore({ path, now });
-  const b = new SqliteStore({ path, now });
-  return {
-    a,
-    b,
-    dispose: () => {
-      a.close();
-      b.close();
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+  const { stores, dispose } = storesOnOneFile(2, nowStart);
+  return { a: stores[0]!, b: stores[1]!, dispose };
 }
 
 export function nextId(prefix = "run"): string {

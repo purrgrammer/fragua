@@ -12,7 +12,7 @@ import { utimesSync } from "node:fs";
 import { join } from "node:path";
 import { insertBlobIfAbsent } from "../src/artifact-queries.ts";
 import type { BlobFS } from "../src/blob-fs.ts";
-import { newRunId, type SqliteStore } from "../src/index.ts";
+import { ArtifactCollisionError, newRunId, type SqliteStore } from "../src/index.ts";
 import { sha256Hex } from "../src/sha256.ts";
 import type { StoreCtx } from "../src/store-ctx.ts";
 import { freshStore, seedRun, seedWorkflow, twoStoresOnOneFile } from "./helpers.ts";
@@ -66,6 +66,58 @@ let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
   dispose = undefined;
+});
+
+describe("putArtifact racing a concurrent writer", () => {
+  test("two writers with different content at one scope: exactly one succeeds (C2)", async () => {
+    const rig = twoStoresOnOneFile(NOW);
+    dispose = rig.dispose;
+    const runId = await seedRun(rig.a);
+    const scope = { runId, nodeId: "work", iteration: 0, key: "report" };
+    const bContent = enc.encode("from b");
+
+    let bRef: ReturnType<SqliteStore["putArtifact"]> | undefined;
+    afterFirstPut(rig.a, () => {
+      bRef = rig.b.putArtifact(scope, bContent, "text/plain");
+    });
+
+    expect(() => rig.a.putArtifact(scope, enc.encode("from a"), "text/plain")).toThrow(ArtifactCollisionError);
+    expect(bRef?.sha256).toBe(sha256Hex(bContent));
+    expect(rig.a.getArtifactRef(scope)?.sha256).toBe(sha256Hex(bContent));
+  });
+
+  test("two writers with identical content at one scope both return the stored ref", async () => {
+    const rig = twoStoresOnOneFile(NOW);
+    dispose = rig.dispose;
+    const runId = await seedRun(rig.a);
+    const scope = { runId, nodeId: "work", iteration: 0, key: "report" };
+    const content = enc.encode("same bytes");
+
+    let bRef: ReturnType<SqliteStore["putArtifact"]> | undefined;
+    afterFirstPut(rig.a, () => {
+      bRef = rig.b.putArtifact(scope, content, "text/plain");
+    });
+
+    const aRef = rig.a.putArtifact(scope, content, "text/plain");
+    expect(aRef.sha256).toBe(sha256Hex(content));
+    expect(bRef?.sha256).toBe(aRef.sha256);
+    expect(rig.a.getArtifactRef(scope)?.sha256).toBe(aRef.sha256);
+  });
+
+  test("replace:true overwrites a row committed by a racing writer", async () => {
+    const rig = twoStoresOnOneFile(NOW);
+    dispose = rig.dispose;
+    const runId = await seedRun(rig.a);
+    const scope = { runId, nodeId: "work", iteration: 0, key: "report" };
+    const aContent = enc.encode("a replaces");
+
+    afterFirstPut(rig.a, () => {
+      rig.b.putArtifact(scope, enc.encode("b first"), "text/plain");
+    });
+
+    rig.a.putArtifact(scope, aContent, "text/plain", { replace: true });
+    expect(rig.a.getArtifactRef(scope)?.sha256).toBe(sha256Hex(aContent));
+  });
 });
 
 describe("gcBlobs racing a concurrent writer", () => {

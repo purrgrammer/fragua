@@ -14,6 +14,7 @@ import {
   type BundleManifest,
   buildExportRegistry,
   canonicalJson,
+  deriveRunState,
   extractMcpOAuthLiterals,
   type FactEvent,
   type IntentEvent,
@@ -251,6 +252,22 @@ describe("importRunBundle", () => {
     expect(new TextDecoder().decode(art)).toBe("artifact-bytes");
     // The credential did not travel.
     expect(dst.getProviderCredential("anthropic")).toBeNull();
+    dst.close();
+  });
+
+  test("imported run_state.title equals the replayed title (R2-C3)", async () => {
+    const src = freshStore();
+    const sha = await seedHashedWorkflow(src, "a");
+    const runId = newRunId();
+    src.enqueueRun({ runId, workflowSha: sha, cwd: "/home/dev/proj", title: "Fix the flaky retry test" });
+    const { bytes } = src.exportRunBundle(runId, { fraguaVersion: "0.0.0-test" });
+    src.close();
+
+    const dst = freshStore();
+    dst.importRunBundle(bytes);
+    const replayed = deriveRunState(runId, dst.getEvents(runId)).title;
+    expect(replayed).toBe("Fix the flaky retry test");
+    expect(dst.getState(runId)!.title).toBe(replayed);
     dst.close();
   });
 
