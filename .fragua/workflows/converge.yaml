@@ -3,7 +3,8 @@
 # A work/review job for a brief that is already scoped: no triage. The brief
 # is a full work order (problem, evidence, build list, constraints), passed as
 # a file. Review rejects retarget implement; CI failures retarget fix. The run
-# ends with green CI and an uncommitted tree for the operator to accept.
+# ends with green CI (and the landing gate GitHub applies: schema version free on
+# main, event-contract touch-gate) and an uncommitted tree for the operator to accept.
 #
 #   bun run fragua run converge --input brief=@.fragua/briefs/critical-path/01-origin-gate.txt
 
@@ -48,6 +49,7 @@ steps:
     allowed-tools: [read, write, edit, grep, find, ls, bash]
     prompt: |
       Realise the plan exactly, in its order. Follow AGENTS.md ground rules (no inline imports, no useless comments, handlers route I/O through ctx, pure write transactions, fold all contract versions).
+      A schema migration takes the number after `CURRENT_SCHEMA_VERSION` on `origin/main` right now (`git fetch origin main` first), and its test pins a floor (`toBeGreaterThanOrEqual`), never the exact current version — another run may land a migration first. A `reducers.ts` edit either bumps `EVENT_CONTRACT_VERSION` (real fold change) or carries a `// contract: no-bump — <reason>` line (rename, comment, helper extraction); never bump `MIN_COMPATIBLE_CONTRACT_VERSION`.
       Per modified package run its typecheck (`bun run --filter='<pkg>' typecheck`) and the tests you touched (`bun test ./packages/<pkg>/test/<file>`); cap fix cycles at 5, then `abort` with `blocked: <top error>`.
       Realise every test and doc change the plan promised. Do not commit.
       End with PLAN_REALISED: files / tests / docs / skipped (status each, one line each).
@@ -73,7 +75,26 @@ steps:
   format:
     type: tool
     run: bun run format
-    next: ci
+    next: landing_gate
+
+  landing_gate:                        # what GitHub will check that `bun run ci` does not: the branch against main as it is NOW
+    type: tool
+    timeout-minutes: 5
+    max-retries: 5
+    run: |
+      set -u
+      git fetch -q origin main || { echo "landing_gate: cannot fetch origin/main; skipping"; exit 0; }
+      base=$(git merge-base HEAD origin/main)
+      ver() { git show "$1:packages/store/src/pragmas.ts" 2>/dev/null | grep -oE 'CURRENT_SCHEMA_VERSION = [0-9]+' | grep -oE '[0-9]+$'; }
+      base_v=$(ver "$base"); main_v=$(ver origin/main); mine=$(grep -oE 'CURRENT_SCHEMA_VERSION = [0-9]+' packages/store/src/pragmas.ts | grep -oE '[0-9]+$')
+      if [ -n "$mine" ] && [ "$mine" != "$base_v" ] && [ "${main_v:-0}" -ge "$mine" ]; then
+        echo "landing_gate: schema version $mine is already taken on main (main is at $main_v): renumber this run's migration, its test and its docs to $((main_v + 1)), and pin the test to a floor" >&2
+        exit 1
+      fi
+      bash scripts/check-contract-bump.sh origin/main
+    on:
+      success: ci
+      fail: fix
 
   ci:
     type: tool
@@ -89,5 +110,5 @@ steps:
     model: claude-sonnet-5-5
     allowed-tools: [read, write, edit, grep, bash]
     prompt: |
-      CI failed. Re-run `bun run ci`, read the first failure, make the minimal fix, and stop. Never disable tests, weaken assertions, relax linters, or add allowlist entries to a discipline lint to make it pass.
-    next: ci
+      A gate failed. Read the failure in the previous tool step's output: for `landing_gate` it is a schema version taken on main (renumber the migration, its test and its docs as the message says) or the event-contract touch-gate (bump `EVENT_CONTRACT_VERSION` for a real fold change, else add the `// contract: no-bump — <reason>` line); for `bun run ci` re-run it, read the first failure, make the minimal fix, and stop. Never disable tests, weaken assertions, relax linters, or add allowlist entries to a discipline lint to make it pass.
+    next: landing_gate
