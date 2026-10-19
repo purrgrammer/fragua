@@ -20,13 +20,16 @@
 // and a write method pulled into a local binding — by object destructuring
 // (`const { enqueueRun } = store`, renamed or not) or by aliasing
 // (`const w = store.enqueueRun`, `= store.enqueueRun.bind(store)`) — is flagged
-// wherever that binding is called.
+// wherever that binding is called. Callees also go through the shared
+// `normalizeCallee`, so `.call` on a destructured binding, a comma-wrapped
+// callee (`(0, store.enqueueRun)(p)`) and an alias of an alias are caught too;
+// only a member reach counts (a bare same-named import is not a store write).
 // Shape mirrors packages/server/test/inline-import-discipline.test.ts.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { lineOf, literalKey, parseSource, walk } from "@fragua/test-utils";
+import { lineOf, literalKey, normalizeCallee, parseSource, walk } from "@fragua/test-utils";
 import ts from "typescript";
 
 // Store-write methods that must only be reached through the intent plane
@@ -140,12 +143,17 @@ function bindTarget(call: ts.CallExpression): string | undefined {
 }
 
 /** The write method a call reaches: directly, through `.call` / `.apply` /
- * `.bind`, or through a local binding that holds one. */
+ * `.bind`, through a local binding that holds one, or through any shape
+ * `normalizeCallee` resolves to a member reach ending in a write method. */
 function writeMethodOfCall(node: ts.CallExpression, bindings: Map<string, string>): string | undefined {
   const callee = skipParens(node.expression);
   const direct = writeAccessName(callee) ?? forwardedWriteName(callee);
   if (direct !== undefined) return direct;
-  return ts.isIdentifier(callee) ? bindings.get(callee.text) : undefined;
+  const bound = ts.isIdentifier(callee) ? bindings.get(callee.text) : undefined;
+  if (bound !== undefined) return bound;
+  const chain = normalizeCallee(callee)?.chain;
+  const tail = chain?.at(-1);
+  return chain !== undefined && chain.length >= 2 && tail !== undefined && WRITE_METHODS.has(tail) ? tail : undefined;
 }
 
 function scan(sf: ts.SourceFile): { method: string; line: number }[] {
@@ -212,6 +220,20 @@ describe("intent-plane discipline — store writes only inside the plane", () =>
     expect(scanString(`const { enqueueRun: e } = s;\ne(p);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
     expect(scanString(`const w = s.enqueueRun;\nw(p);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
     expect(scanString(`const w = s["saveWorkflow"];\nw(x);\n`).map((h) => h.method)).toEqual(["saveWorkflow"]);
+  });
+
+  test("flags .call on a destructured binding, a comma-wrapped callee, and an alias of an alias (R2-M4 re-probe)", () => {
+    expect(scanString(`const { enqueueRun } = store;\nenqueueRun.call(store, p);\n`).map((h) => h.method)).toEqual([
+      "enqueueRun",
+    ]);
+    expect(scanString(`(0, store.enqueueRun)(p);\n`).map((h) => h.method)).toEqual(["enqueueRun"]);
+    expect(scanString(`const a = store.enqueueRun;\nconst b = a;\nb(p);\n`).map((h) => h.method)).toEqual([
+      "enqueueRun",
+    ]);
+  });
+
+  test("does not flag a commit* reached through an alias (control)", () => {
+    expect(scanString(`const c = plane.commitEnqueue;\nc(x);\n`)).toEqual([]);
   });
 
   test("flags the *Audited schedule writers", () => {

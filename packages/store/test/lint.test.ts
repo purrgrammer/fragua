@@ -32,9 +32,12 @@
 // class method (`SqliteStore` / `BlobFS` / `Metrics`). `ctx.db.*` (bun:sqlite)
 // and the injected `ctx.now` clock have no in-repo body and are not followed.
 //
-// Callee text is normalised through literal-key element access, so
-// `JSON["stringify"](x)` / ``ctx[`validatePayload`]()`` match like their dotted
-// forms. A computed member access on `JSON`, `Value`, or a `StoreCtx` binding
+// Callees go through the shared `normalizeCallee`, so literal-key element access
+// (`JSON["stringify"](x)`, ``ctx[`validatePayload`]()``), a global receiver
+// (`globalThis.JSON.stringify`, `self.JSON.parse`), a local alias or
+// destructuring (`const J = JSON`, `const { stringify } = JSON`) and a
+// `.call` / `.apply` forwarder all match like the plain dotted form. A computed
+// member access on `JSON`, `Value`, the global object, or a `StoreCtx` binding
 // (or its `store` / `blobs` / `metrics` member) inside a txn scope can't be
 // resolved statically, so it is reported as an offender in its own right.
 
@@ -50,8 +53,8 @@ import {
   collectCalls,
   lineOf,
   literalKey,
+  normalizeCallee,
   parseSource,
-  propertyChain,
   resolveImportedFunctionBody,
   sameFileFunctionBodies,
   typedBindings,
@@ -167,7 +170,7 @@ function collectTxnScopeBodies(sf: ts.SourceFile): CallbackScope[] {
 /** A call on a `StoreCtx` binding: `ctx.m()` → `{ member: "", method: "m" }`,
  * `ctx.blobs.put()` → `{ member: "blobs", method: "put" }`. */
 function ctxCall(call: CallInfo, ctxNames: Set<string>): { member: string; method: string } | undefined {
-  const chain = propertyChain(call.node.expression);
+  const chain = normalizeCallee(call.node.expression)?.chain;
   if (chain === undefined || !ctxNames.has(chain[0] ?? "")) return undefined;
   if (chain.length === 2) return { member: "", method: chain[1]! };
   if (chain.length === 3) return { member: chain[1]!, method: chain[2]! };
@@ -175,10 +178,12 @@ function ctxCall(call: CallInfo, ctxNames: Set<string>): { member: string; metho
 }
 
 /** The guarded object a computed (non-literal-key) element access hangs off:
- * `JSON` / `Value`, a `StoreCtx` binding, or `<ctx>.store|blobs|metrics`. */
+ * `JSON` / `Value`, the global object, a `StoreCtx` binding, or
+ * `<ctx>.store|blobs|metrics`. */
 function guardedComputedObject(node: ts.ElementAccessExpression, ctxNames: Set<string>): string | undefined {
   if (literalKey(node) !== undefined) return undefined;
-  const chain = propertyChain(node.expression);
+  const chain = normalizeCallee(node.expression)?.chain;
+  if (chain?.length === 0) return "globalThis";
   const head = chain?.[0];
   if (chain === undefined || head === undefined) return undefined;
   if (chain.length === 1 && (GUARDED_GLOBALS.has(head) || ctxNames.has(head))) return head;
@@ -203,11 +208,15 @@ function scanBody(body: ts.Node, sf: ts.SourceFile, file: string, ctxNames: Set<
     true,
   );
   for (const call of collectCalls(body, sf, true)) {
+    const chain = normalizeCallee(call.node.expression)?.chain;
+    const text = chain?.join(".");
     const onCtx = ctxCall(call, ctxNames);
-    if (call.name === "fetch") offenders.push({ file, kind: "fetch", line: lineOf(sf, call.node) });
-    else if (BANNED_CALL_TEXT.has(call.text)) offenders.push({ file, kind: call.text, line: lineOf(sf, call.node) });
+    if (call.name === "fetch" || chain?.at(-1) === "fetch")
+      offenders.push({ file, kind: "fetch", line: lineOf(sf, call.node) });
+    else if (text !== undefined && BANNED_CALL_TEXT.has(text))
+      offenders.push({ file, kind: text, line: lineOf(sf, call.node) });
     else if (onCtx?.member === "" && BANNED_CTX_METHODS.has(onCtx.method))
-      offenders.push({ file, kind: call.text, line: lineOf(sf, call.node) });
+      offenders.push({ file, kind: text ?? call.text, line: lineOf(sf, call.node) });
   }
   return offenders;
 }
@@ -449,6 +458,51 @@ describe("I1 — no serialization / IO inside transaction bodies", () => {
   test('catches JSON["stringify"] inside a txn callback (R2-M1)', () => {
     const caller = join(__dirname, "fixtures", "txn-element-access", "json-bracket.ts");
     expect(scanFile(caller).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches globalThis.JSON.stringify inside a txn callback (R3-M2)", () => {
+    const caller = join(__dirname, "fixtures", "txn-global-receiver", "global-json.ts");
+    expect(scanFile(caller).map((o) => o.kind)).toContain("JSON.stringify");
+  });
+
+  test("catches JSON reached through an alias, a destructuring or self. in a txn body (R3-M2)", () => {
+    const src = `
+      const J = JSON;
+      const { parse } = JSON;
+      let S = globalThis.JSON;
+      this.writeTxn(() => { J.stringify(a); parse(b); self.JSON.stringify(c); S.parse(d); });
+    `;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual([
+      "JSON.stringify",
+      "JSON.parse",
+      "JSON.stringify",
+      "JSON.parse",
+    ]);
+  });
+
+  test('catches globalThis["JSON"]["stringify"] inside a txn callback (R2-M1 re-probe)', () => {
+    const src = `this.writeTxn(() => { globalThis["JSON"]["stringify"](a); });`;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual(["JSON.stringify"]);
+  });
+
+  test("catches JSON.stringify.call / .apply in a txn body", () => {
+    const src = `this.writeTxn(() => { JSON.stringify.call(null, a); JSON.stringify.apply(null, [b]); });`;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual(["JSON.stringify", "JSON.stringify"]);
+  });
+
+  test("flags a computed member access on globalThis.JSON in a txn body", () => {
+    const src = `function f(k: string) { this.writeTxn(() => { globalThis.JSON[k](x); }); }`;
+    expect(scanSynthetic(src).map((o) => o.kind)).toEqual([`${COMPUTED_ACCESS} JSON`]);
+  });
+
+  test("does not flag a locally bound self object or an alias used outside the txn (R3-M2 control)", () => {
+    const src = `
+      const self = { JSON: { stringify: (v) => String(v) } };
+      const J = JSON;
+      const s = J.stringify(p);
+      this.writeTxn(() => { self.JSON.stringify(x); insert(s); });
+    `;
+    expect(scanSynthetic(src)).toHaveLength(0);
   });
 
   test("catches template-literal and ctx element-access callees", () => {
