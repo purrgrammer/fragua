@@ -24,6 +24,13 @@ function startRun(store: SqliteStore, runId: string): void {
   );
 }
 
+function orphanIntent(idempotencyKey: string): FactEvent {
+  return {
+    type: "fact.side_effect_intent",
+    payload: { nodeId: "a", iteration: 0, toolName: "charge", argsHash: "h", attempt: 1, idempotencyKey },
+  };
+}
+
 async function readUntil(stream: ReadableStream<Uint8Array>, marker: string): Promise<void> {
   const reader = stream.getReader();
   const dec = new TextDecoder();
@@ -473,6 +480,36 @@ describe("startupSweep", () => {
     // The run may still be requeued (status=running), but it must NOT be quarantined.
     expect(result.quarantined).not.toContain(runId);
     expect(store.getState(runId)!.status).not.toBe("quarantined");
+    store.close();
+  });
+
+  test("C5: a completed run with an orphan intent is reported by neither of two sweeps", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    startRun(store, runId);
+    store.appendFact(runId, [orphanIntent("idem-c5")], store.getState(runId)!.version);
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_terminated", payload: { status: "completed", finalNode: "a" } }],
+      store.getState(runId)!.version,
+    );
+    expect(store.getState(runId)!.status).toBe("completed");
+
+    expect(store.startupSweep().quarantined).toEqual([]);
+    expect(store.startupSweep().quarantined).toEqual([]);
+    expect(store.getState(runId)!.status).toBe("completed");
+    store.close();
+  });
+
+  test("reports an already-quarantined run only on the sweep that quarantined it", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    startRun(store, runId);
+    store.appendFact(runId, [orphanIntent("idem-once")], store.getState(runId)!.version);
+
+    expect(store.startupSweep().quarantined).toEqual([runId]);
+    expect(store.getState(runId)!.status).toBe("quarantined");
+    expect(store.startupSweep().quarantined).toEqual([]);
     store.close();
   });
 });

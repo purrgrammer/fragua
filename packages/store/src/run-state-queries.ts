@@ -928,71 +928,77 @@ export interface StepAggregateRow {
   stopReason: string | null;
 }
 
-const STEP_AGGREGATES_SQL = `
-  WITH starts AS (
+// One pass over the run's step events (read through idx_events_type), sorted
+// once per window: each event is tagged with the seq of the latest opener for
+// its nodeId at or before it, which IS its window, then everything folds in a
+// single GROUP BY on that tag. Windows key on the opener, never on
+// `iteration` — cost/done events don't reliably carry the opener's iteration.
+// A null-nodeId opener matches nothing (SQL `=` never equals NULL), so it
+// owns only itself; events before their node's first opener tag NULL and drop.
+// INDEXED BY: without ANALYZE stats the planner prefers the clustered
+// (run_id, seq) primary key, which walks every streaming delta of the run.
+export const STEP_AGGREGATES_SQL = `
+  WITH ev AS (
     SELECT
       seq,
       ts,
       type,
-      json_extract(payload, '$.nodeId') AS node_id,
-      LEAD(seq) OVER (
-        PARTITION BY json_extract(payload, '$.nodeId')
-        ORDER BY seq
-      ) AS next_seq
-    FROM events
-    WHERE run_id = ?1 AND type IN ('llm.start', 'judge.requested')
+      payload,
+      json_extract(payload, '$.nodeId')              AS node_id,
+      type IN ('llm.start', 'judge.requested')       AS is_opener,
+      type IN ('llm.done', 'judge.answered')         AS is_done
+    FROM events INDEXED BY idx_events_type
+    WHERE run_id = ?1
+      AND type IN ('llm.start', 'judge.requested', 'cost.recorded', 'llm.done', 'judge.answered')
+  ),
+  tagged AS (
+    SELECT
+      ev.*,
+      CASE
+        WHEN node_id IS NULL THEN CASE WHEN is_opener THEN seq END
+        ELSE MAX(CASE WHEN is_opener THEN seq END) OVER (
+          PARTITION BY node_id ORDER BY seq ROWS UNBOUNDED PRECEDING
+        )
+      END AS start_seq
+    FROM ev
+  ),
+  win AS (
+    SELECT
+      t.*,
+      FIRST_VALUE(type) OVER (PARTITION BY start_seq ORDER BY seq)            AS opener_type,
+      ROW_NUMBER()      OVER (PARTITION BY start_seq, is_done ORDER BY seq DESC) AS rn_desc
+    FROM tagged t
+    WHERE start_seq IS NOT NULL
   ),
   -- A cost event is a judge TOOL call when it is marked kind='judge' inside an
   -- llm window (a judge step's own call is the step's cost, not a split).
-  costs AS (
+  classed AS (
     SELECT
-      s.seq AS start_seq,
-      c.payload,
-      (s.type = 'llm.start' AND json_extract(c.payload, '$.kind') = 'judge') AS is_judge
-    FROM starts s
-    JOIN events c
-      ON c.run_id = ?1
-     AND c.type   = 'cost.recorded'
-     AND json_extract(c.payload, '$.nodeId') = s.node_id
-     AND c.seq    > s.seq
-     AND (s.next_seq IS NULL OR c.seq < s.next_seq)
+      w.*,
+      type = 'cost.recorded' AS is_cost,
+      (type = 'cost.recorded' AND opener_type = 'llm.start'
+        AND json_extract(payload, '$.kind') = 'judge') AS is_judge
+    FROM win w
   )
   SELECT
-    s.seq                                                                         AS startSeq,
-    s.ts                                                                          AS startTs,
-    s.node_id                                                                     AS nodeId,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.cost_usd')           AS REAL))   , 0) AS costUsd,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.input_tokens')       AS INTEGER) END), 0) AS inputTokens,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER) END), 0) AS outputTokens,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER) END), 0) AS cacheReadTokens,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER) END), 0) AS cacheWriteTokens,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER) END), 0) AS billedTokens,
-    COUNT(c.payload)                                                              AS costEventCount,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.cost_usd')     AS REAL)    ELSE 0 END), 0) AS judgeCostUsd,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS judgeInputTokens,
-    COALESCE(SUM(CASE WHEN c.is_judge THEN 1 ELSE 0 END), 0)                                                          AS judgeCalls,
-    (
-      SELECT MAX(d.ts) FROM events d
-      WHERE d.run_id = ?1
-        AND d.type   IN ('llm.done', 'judge.answered')
-        AND json_extract(d.payload, '$.nodeId') = s.node_id
-        AND d.seq    > s.seq
-        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
-    )                                                                             AS endedAtMs,
-    (
-      SELECT json_extract(d.payload, '$.stop_reason') FROM events d
-      WHERE d.run_id = ?1
-        AND d.type   IN ('llm.done', 'judge.answered')
-        AND json_extract(d.payload, '$.nodeId') = s.node_id
-        AND d.seq    > s.seq
-        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
-      ORDER BY d.seq DESC
-      LIMIT 1
-    )                                                                             AS stopReason
-  FROM starts s
-  LEFT JOIN costs c ON c.start_seq = s.seq
-  GROUP BY s.seq, s.ts, s.node_id
-  ORDER BY s.seq
+    start_seq                                                                     AS startSeq,
+    MAX(CASE WHEN is_opener THEN ts END)                                          AS startTs,
+    MAX(CASE WHEN is_opener THEN node_id END)                                     AS nodeId,
+    COALESCE(SUM(CASE WHEN is_cost THEN CAST(json_extract(payload, '$.cost_usd') AS REAL) END), 0) AS costUsd,
+    COALESCE(SUM(CASE WHEN NOT is_cost THEN NULL WHEN is_judge THEN 0 ELSE CAST(json_extract(payload, '$.input_tokens')       AS INTEGER) END), 0) AS inputTokens,
+    COALESCE(SUM(CASE WHEN NOT is_cost THEN NULL WHEN is_judge THEN 0 ELSE CAST(json_extract(payload, '$.output_tokens')      AS INTEGER) END), 0) AS outputTokens,
+    COALESCE(SUM(CASE WHEN NOT is_cost THEN NULL WHEN is_judge THEN 0 ELSE CAST(json_extract(payload, '$.cache_read_tokens')  AS INTEGER) END), 0) AS cacheReadTokens,
+    COALESCE(SUM(CASE WHEN NOT is_cost THEN NULL WHEN is_judge THEN 0 ELSE CAST(json_extract(payload, '$.cache_write_tokens') AS INTEGER) END), 0) AS cacheWriteTokens,
+    COALESCE(SUM(CASE WHEN NOT is_cost THEN NULL WHEN is_judge THEN 0 ELSE CAST(json_extract(payload, '$.total_tokens')       AS INTEGER) END), 0) AS billedTokens,
+    SUM(is_cost)                                                                  AS costEventCount,
+    COALESCE(SUM(CASE WHEN is_judge THEN CAST(json_extract(payload, '$.cost_usd')     AS REAL)    ELSE 0 END), 0) AS judgeCostUsd,
+    COALESCE(SUM(CASE WHEN is_judge THEN CAST(json_extract(payload, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS judgeInputTokens,
+    COALESCE(SUM(CASE WHEN is_judge THEN 1 ELSE 0 END), 0)                                                          AS judgeCalls,
+    MAX(CASE WHEN is_done THEN ts END)                                            AS endedAtMs,
+    MAX(CASE WHEN is_done AND rn_desc = 1 THEN json_extract(payload, '$.stop_reason') END) AS stopReason
+  FROM classed
+  GROUP BY start_seq
+  ORDER BY start_seq
 `;
 
 export function getStepAggregates(db: Database, runId: string): StepAggregateRow[] {

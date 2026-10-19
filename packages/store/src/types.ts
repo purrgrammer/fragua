@@ -789,6 +789,7 @@ export interface GetMessagesOpts {
 
 export interface SweepResult {
   requeued: string[];
+  /** Runs whose `fact.run_quarantined` landed in this sweep. */
   quarantined: string[];
 }
 

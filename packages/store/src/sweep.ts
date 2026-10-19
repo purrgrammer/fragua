@@ -18,10 +18,13 @@ import type { SweepResult } from "./types.ts";
  *
  *  (a) Requeue: any run stuck in 'running' is moved back to 'queued' with
  *      ready_at = now and a fact.run_requeued_after_crash event appended.
- *  (b) Quarantine orphans: runs with fact.side_effect_intent lacking a
- *      matching fact.side_effect_done / fact.side_effect_failed (keyed by
- *      idempotencyKey) are transitioned to 'quarantined' with a
- *      fact.run_quarantined event.
+ *  (b) Quarantine orphans: non-settled, non-imported runs with
+ *      fact.side_effect_intent lacking a matching fact.side_effect_done /
+ *      fact.side_effect_failed (keyed by idempotencyKey) are transitioned to
+ *      'quarantined' with a fact.run_quarantined event.
+ *
+ * `SweepResult.quarantined` lists only the runs whose fact.run_quarantined
+ * landed in this sweep, mirroring `requeued`.
  *
  * paused, paused_human, and quarantined runs are not touched; they are
  * preserved exactly. (A paused_* run with an orphan
@@ -52,6 +55,7 @@ function isBusy(err: unknown): boolean {
 
 export function startupSweep(ctx: StoreCtx, opts?: StartupSweepOpts): SweepResult {
   const requeued: string[] = [];
+  const quarantinedRuns: string[] = [];
   const quarantined = new Map<string, number[]>();
 
   // Read-only scans first — outside the write txn — to gather work + pre-serialize payloads.
@@ -110,8 +114,10 @@ export function startupSweep(ctx: StoreCtx, opts?: StartupSweepOpts): SweepResul
   // non-quarantined state). Quarantine runs BEFORE requeue so it takes
   // precedence: a run flagged here is re-read as non-'running' below.
   for (const runId of quarantined.keys()) {
-    healRun(runId, () =>
+    let didQuarantine = false;
+    const healed = healRun(runId, () =>
       ctx.writeTxn(() => {
+        didQuarantine = false;
         const ts = ctx.now();
         const stateRow = selectRunStateRow(ctx.db, runId);
         if (stateRow == null) return;
@@ -138,8 +144,10 @@ export function startupSweep(ctx: StoreCtx, opts?: StartupSweepOpts): SweepResul
           now: ts,
           activeMsDelta: dispatchIntervalActiveMsDelta(stateRow.dispatch_started_at, ts),
         });
+        didQuarantine = true;
       }),
     );
+    if (healed && didQuarantine) quarantinedRuns.push(runId);
   }
 
   // Requeue runs still in 'running'. Re-read status here (per run)
@@ -168,10 +176,7 @@ export function startupSweep(ctx: StoreCtx, opts?: StartupSweepOpts): SweepResul
     if (healed && didRequeue) requeued.push(row.run_id);
   }
 
-  return {
-    requeued,
-    quarantined: Array.from(quarantined.keys()),
-  };
+  return { requeued, quarantined: quarantinedRuns };
 }
 
 /**

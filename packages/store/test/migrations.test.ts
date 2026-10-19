@@ -174,7 +174,7 @@ describe("v9 ↔ v10 — events.outputs_blob_sha", () => {
     const db = freshDb();
     db.exec("PRAGMA foreign_keys = OFF");
     migrate(db);
-    expect(CURRENT_SCHEMA_VERSION).toBe(10);
+    expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(10);
     expect(xcols(db)).toContain("outputs_blob_sha");
     expect(hasIndex(db)).toBe(true);
     expect(planMigration(10, 9).steps).toEqual([{ version: 10, class: "full" }]);
@@ -207,6 +207,28 @@ describe("v9 ↔ v10 — events.outputs_blob_sha", () => {
     expect(xcols(db)).not.toContain("outputs_blob_sha");
     expect(hasIndex(db)).toBe(false);
     expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE run_id = 'r'").get()?.n).toBe(2);
+    db.close();
+  });
+});
+
+describe("v10 ↔ v11 — idx_events_side_effect_key", () => {
+  const hasIndex = (db: Database): boolean =>
+    db
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_side_effect_key'",
+      )
+      .get() != null;
+
+  test("v10→v11 creates the side-effect key index and down drops it", () => {
+    const db = freshDb();
+    migrate(db);
+    expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(11);
+    expect(hasIndex(db)).toBe(true);
+    expect(planMigration(11, 10).steps).toEqual([{ version: 11, class: "full" }]);
+    migrateTo(db, 10);
+    expect(hasIndex(db)).toBe(false);
+    migrate(db);
+    expect(hasIndex(db)).toBe(true);
     db.close();
   });
 });

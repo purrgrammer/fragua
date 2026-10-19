@@ -409,39 +409,54 @@ export function selectFactSideEffectIntent(
 // Shared orphan-detection body: a `fact.side_effect_intent` whose
 // idempotencyKey has no matching `fact.side_effect_done`/`_failed`. Both
 // the single-run recovery read and the all-runs startup sweep interpolate
-// this so the LEFT JOIN and the done/failed enum are encoded exactly once.
+// this so the anti-join and the done/failed enum are encoded exactly once.
+// The ON terms repeat `idx_events_side_effect_key`'s partial-index WHERE and
+// key expression verbatim — SQLite only probes the index when they match, so
+// each intent costs one index lookup instead of a scan of the run's
+// done/failed rows.
 const ORPHAN_SIDE_EFFECTS_FROM_WHERE = `
     FROM events i
     LEFT JOIN events d
            ON d.run_id = i.run_id
-          AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
+          AND d.type IN ('fact.side_effect_done', 'fact.side_effect_failed')
           AND json_extract(d.payload, '$.idempotencyKey') =
               json_extract(i.payload, '$.idempotencyKey')
    WHERE i.type   = 'fact.side_effect_intent'
      AND d.seq IS NULL
 `;
 
-const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
+export const SELECT_ORPHAN_SIDE_EFFECTS_SQL = `
   SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotencyKey,
          json_extract(i.payload, '$.toolName')       AS toolName,
          json_extract(i.payload, '$.nodeId')         AS nodeId
   ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
      AND i.run_id = ?
+   ORDER BY i.seq
 `;
 
+/** Every orphan intent of one run, regardless of the run's status — the
+ *  executor's per-run recovery reads it on a run already quarantined. */
 export function selectOrphanSideEffects(db: Database, runId: string): OrphanSideEffectRow[] {
   return db.query<OrphanSideEffectRow, [string]>(SELECT_ORPHAN_SIDE_EFFECTS_SQL).all(runId);
 }
 
-const SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL = `
+export const SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL = `
   SELECT i.run_id AS run_id, i.seq AS seq
   ${ORPHAN_SIDE_EFFECTS_FROM_WHERE}
+     AND EXISTS (
+           SELECT 1 FROM run_state rs
+            WHERE rs.run_id = i.run_id
+              AND rs.status IN ('queued', 'running', 'paused', 'paused_human', 'paused_auto')
+         )
+     AND NOT EXISTS (SELECT 1 FROM imported_runs ir WHERE ir.run_id = i.run_id)
    ORDER BY i.run_id, i.seq
 `;
 
-/** Every orphan side-effect intent across ALL runs, oldest-first per run.
- *  The startup sweep quarantines each owning run; the single-run variant
- *  (`selectOrphanSideEffects`) backs the executor's per-run recovery. */
+/** Every orphan side-effect intent the startup sweep can act on, oldest-first
+ *  per run: only runs that are neither settled (terminal or already
+ *  quarantined) nor imported, so a sweep never re-reports a run it would skip.
+ *  The single-run variant (`selectOrphanSideEffects`) backs the executor's
+ *  per-run recovery. */
 export function selectAllOrphanSideEffects(db: Database): AllOrphanSideEffectRow[] {
   return db.query<AllOrphanSideEffectRow, []>(SELECT_ALL_ORPHAN_SIDE_EFFECTS_SQL).all();
 }

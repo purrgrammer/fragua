@@ -6,9 +6,11 @@
 // each fired AFTER its own llm.done) — these tests pin the new
 // SQL window aggregation against the cases the old reducer broke on.
 
+import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import type { ObservabilityEvent } from "../src/index.ts";
-import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
+import type { ObservabilityEvent, SqliteStore } from "../src/index.ts";
+import { STEP_AGGREGATES_SQL, type StepAggregateRow } from "../src/run-state-queries.ts";
+import { freshStore, medianMs, seedRun, seedWorkflow } from "./helpers.ts";
 
 const STUB_IR = JSON.stringify({ id: "t", directed: true, attrs: {}, nodes: {}, edges: [] });
 
@@ -796,4 +798,167 @@ describe("getStepAggregates — judge steps", () => {
     ]);
     store.close();
   });
+});
+
+// Today's-semantics oracle: the correlated-subquery form the set-based query replaced.
+const LEGACY_STEP_AGGREGATES_SQL = `
+  WITH starts AS (
+    SELECT
+      seq,
+      ts,
+      type,
+      json_extract(payload, '$.nodeId') AS node_id,
+      LEAD(seq) OVER (
+        PARTITION BY json_extract(payload, '$.nodeId')
+        ORDER BY seq
+      ) AS next_seq
+    FROM events
+    WHERE run_id = ?1 AND type IN ('llm.start', 'judge.requested')
+  ),
+  costs AS (
+    SELECT
+      s.seq AS start_seq,
+      c.payload,
+      (s.type = 'llm.start' AND json_extract(c.payload, '$.kind') = 'judge') AS is_judge
+    FROM starts s
+    JOIN events c
+      ON c.run_id = ?1
+     AND c.type   = 'cost.recorded'
+     AND json_extract(c.payload, '$.nodeId') = s.node_id
+     AND c.seq    > s.seq
+     AND (s.next_seq IS NULL OR c.seq < s.next_seq)
+  )
+  SELECT
+    s.seq                                                                         AS startSeq,
+    s.ts                                                                          AS startTs,
+    s.node_id                                                                     AS nodeId,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.cost_usd')           AS REAL))   , 0) AS costUsd,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.input_tokens')       AS INTEGER) END), 0) AS inputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER) END), 0) AS outputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER) END), 0) AS cacheReadTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER) END), 0) AS cacheWriteTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 0 ELSE CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER) END), 0) AS billedTokens,
+    COUNT(c.payload)                                                              AS costEventCount,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.cost_usd')     AS REAL)    ELSE 0 END), 0) AS judgeCostUsd,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN CAST(json_extract(c.payload, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS judgeInputTokens,
+    COALESCE(SUM(CASE WHEN c.is_judge THEN 1 ELSE 0 END), 0)                                                          AS judgeCalls,
+    (
+      SELECT MAX(d.ts) FROM events d
+      WHERE d.run_id = ?1
+        AND d.type   IN ('llm.done', 'judge.answered')
+        AND json_extract(d.payload, '$.nodeId') = s.node_id
+        AND d.seq    > s.seq
+        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
+    )                                                                             AS endedAtMs,
+    (
+      SELECT json_extract(d.payload, '$.stop_reason') FROM events d
+      WHERE d.run_id = ?1
+        AND d.type   IN ('llm.done', 'judge.answered')
+        AND json_extract(d.payload, '$.nodeId') = s.node_id
+        AND d.seq    > s.seq
+        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
+      ORDER BY d.seq DESC
+      LIMIT 1
+    )                                                                             AS stopReason
+  FROM starts s
+  LEFT JOIN costs c ON c.start_seq = s.seq
+  GROUP BY s.seq, s.ts, s.node_id
+  ORDER BY s.seq
+`;
+
+function dbOf(store: SqliteStore): Database {
+  return (store as unknown as { db: Database }).db;
+}
+
+/** `EXPLAIN QUERY PLAN` detail rows that full-scan the `events` table (bound
+ *  under any of `aliases`) or build an automatic index. */
+function badEventsPlanRows(db: Database, sql: string, params: string[], aliases: string[]): string[] {
+  const plan = db.query<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...params);
+  const scan = new RegExp(`^SCAN (${aliases.join("|")})\\b(?! USING)`);
+  return plan.map((r) => r.detail).filter((d) => scan.test(d) || d.includes("AUTOMATIC"));
+}
+
+describe("getStepAggregates — set-based", () => {
+  function judgeReq(nodeId: string): ObservabilityEvent {
+    return { type: "judge.requested", payload: { nodeId, iteration: 0, provider: "p", model: "m" } };
+  }
+  function judgeAns(nodeId: string): ObservabilityEvent {
+    return { type: "judge.answered", payload: { nodeId, iteration: 0, provider: "p", model: "m" } };
+  }
+
+  test("matches the legacy correlated-subquery semantics on a fixed fixture", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      costEv("A", { input_tokens: 99, cost_usd: 9 }),
+      startEv("A"),
+      startEv("B"),
+      costEv("A", { input_tokens: 1, output_tokens: 1, total_tokens: 2, cost_usd: 0.001 }),
+      costEv("B", { input_tokens: 2, output_tokens: 2, total_tokens: 4, cost_usd: 0.002, cache_read_tokens: 7 }),
+      doneEv("A", { stop_reason: "tool_use" }),
+      costEv("A", { input_tokens: 3, output_tokens: 3, total_tokens: 6, cost_usd: 0.003, cache_write_tokens: 5 }),
+      doneEv("A", { stop_reason: "end_turn" }),
+      doneEv("B", { stop_reason: "end_turn" }),
+      startEv("loop", { iteration: 1 }),
+      costEv("loop", { input_tokens: 10, output_tokens: 1, total_tokens: 11, cost_usd: 0.01 }),
+      doneEv("loop"),
+      startEv("loop", { iteration: 2 }),
+      costEv("loop", { input_tokens: 20, output_tokens: 2, total_tokens: 22, cost_usd: 0.02 }),
+      doneEv("loop", { stop_reason: "tool_use" }),
+      startEv("loop", { iteration: 3 }),
+      costEv("loop", { input_tokens: 30, output_tokens: 3, total_tokens: 33, cost_usd: 0.03 }),
+      startEv("cal"),
+      costEv("cal", { input_tokens: 30, output_tokens: 20, total_tokens: 50, cost_usd: 0.05 }),
+      costEv("cal", { kind: "judge", input_tokens: 1200, output_tokens: 40, total_tokens: 1240, cost_usd: 0.0005 }),
+      doneEv("cal", { stop_reason: "end_turn" }),
+      judgeReq("triage"),
+      costEv("triage", { kind: "judge", input_tokens: 500, output_tokens: 70, total_tokens: 570, cost_usd: 0.0002 }),
+      judgeAns("triage"),
+      { type: "llm.start", payload: { iteration: 0, prompt: "p" } } as unknown as ObservabilityEvent,
+      { type: "cost.recorded", payload: { iteration: 0, cost_usd: 1 } } as unknown as ObservabilityEvent,
+      costEv("__summary.title", { input_tokens: 100, output_tokens: 50, total_tokens: 150, cost_usd: 0.05 }),
+      startEv("A"),
+    ]);
+    const legacy = dbOf(store).query(LEGACY_STEP_AGGREGATES_SQL).all(runId);
+    expect(legacy).toHaveLength(9);
+    expect(store.getStepAggregates(runId)).toEqual(legacy as StepAggregateRow[]);
+    store.close();
+  });
+
+  test("query plan reads events only through an index", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(badEventsPlanRows(dbOf(store), STEP_AGGREGATES_SQL, [runId], ["events"])).toEqual([]);
+    const plan = dbOf(store)
+      .query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN ${STEP_AGGREGATES_SQL}`)
+      .all(runId)
+      .map((r) => r.detail);
+    expect(plan.some((d) => d.includes("idx_events_type"))).toBe(true);
+    store.close();
+  });
+
+  test("scales linearly: 2n steps costs < 2.5× n steps", async () => {
+    const timeFor = async (steps: number): Promise<number> => {
+      const store = freshStore();
+      const runId = await seedRun(store);
+      const evs: ObservabilityEvent[] = [];
+      for (let i = 0; i < steps; i++) {
+        const node = `n${i % 10}`;
+        evs.push(
+          startEv(node, { iteration: i }),
+          costEv(node, { input_tokens: 1, output_tokens: 1, total_tokens: 2, cost_usd: 0.001 }),
+          doneEv(node, { stop_reason: "end_turn" }),
+          costEv(node, { input_tokens: 1, output_tokens: 1, total_tokens: 2, cost_usd: 0.001 }),
+        );
+      }
+      for (let i = 0; i < evs.length; i += 500) store.appendObservabilityEvents(runId, evs.slice(i, i + 500));
+      expect(store.getStepAggregates(runId)).toHaveLength(steps);
+      const ms = medianMs(() => store.getStepAggregates(runId));
+      store.close();
+      return ms;
+    };
+    const n = await timeFor(1000);
+    const n2 = await timeFor(2000);
+    expect(n2 / n).toBeLessThan(2.5);
+  }, 60_000);
 });
