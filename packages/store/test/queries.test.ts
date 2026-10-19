@@ -937,7 +937,9 @@ describe("getStepAggregates — set-based", () => {
     store.close();
   });
 
-  test("scales linearly: 2n steps costs < 2.5× n steps", async () => {
+  // A 4× size spread puts linear (4×) and quadratic (16×) two-fold apart from
+  // the 8× bound on either side, so shared-runner noise cannot flip the verdict.
+  test("scales linearly: 4n steps costs < 8× n steps", async () => {
     const timeFor = async (steps: number): Promise<number> => {
       const store = freshStore();
       const runId = await seedRun(store);
@@ -953,12 +955,12 @@ describe("getStepAggregates — set-based", () => {
       }
       for (let i = 0; i < evs.length; i += 500) store.appendObservabilityEvents(runId, evs.slice(i, i + 500));
       expect(store.getStepAggregates(runId)).toHaveLength(steps);
-      const ms = medianMs(() => store.getStepAggregates(runId));
+      const ms = medianMs(() => store.getStepAggregates(runId), 5);
       store.close();
       return ms;
     };
-    const n = await timeFor(1000);
-    const n2 = await timeFor(2000);
-    expect(n2 / n).toBeLessThan(2.5);
+    const n = await timeFor(500);
+    const n4 = await timeFor(2000);
+    expect(n4 / n).toBeLessThan(8);
   }, 60_000);
 });
