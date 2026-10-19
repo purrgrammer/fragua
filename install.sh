@@ -80,16 +80,6 @@ else
   err "could not fetch SHA256SUMS to verify the download."
 fi
 
-# macOS refuses to run a binary whose code signature does not verify, and
-# releases up to v0.12.0 shipped darwin binaries with a stale ad-hoc
-# signature. Re-sign ad-hoc after the checksum check so every published tag
-# installs; the signature covers only this machine's copy.
-if [ "$os" = "darwin" ]; then
-  have codesign || err "codesign is required on macOS but not found on PATH."
-  codesign --force --sign - "$tmp/fragua" 2>/dev/null \
-    || err "could not sign $asset (codesign --force --sign - failed)."
-fi
-
 chmod +x "$tmp/fragua"
 mkdir -p "$INSTALL_DIR"
 mv "$tmp/fragua" "$INSTALL_DIR/fragua"

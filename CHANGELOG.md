@@ -39,7 +39,6 @@ guarantee.
 
 ### Fixed
 
-- **macOS binaries no longer die on launch.** Darwin release binaries carry a valid ad-hoc code signature, so macOS no longer kills them (`Killed: 9`). On macOS the install script, `fragua upgrade` and the `setup-fragua` action re-sign the download, so earlier releases install too.
 - **A step result lost to repeated write conflicts keeps its spend.** When a commit hits the `occ_exhausted` ceiling, or can't be re-planned against fresh state, the result's cost is still recorded on the run. Before, it went to zero and the handler was not re-run to recover it.
 - **Fan-out: every branch's spend counts when several branches stop the run.** Before, only the first halting or pausing branch's cost was recorded. Now each branch records its own spend, whichever outcome the run takes.
 - **Fan-out pause precedence.** When branches settle with different outcomes, a halt beats a `budget` pause, which beats other operator pauses, which beat automatic retries (`timeout_retry`, `handler_retry`, `provider_retry`). A budget overrun is no longer hidden behind a timeout retry that would wake on its own.
