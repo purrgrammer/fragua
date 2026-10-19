@@ -64,12 +64,12 @@ jobs:
         with:
           fetch-depth: 0 # full history so the review can diff against base
 
-      - uses: purrgrammer/fragua/.github/actions/setup-fragua@46f32d93d0ec0eb01925ebe4effbbbf827379431 # v0.12.0
+      - uses: purrgrammer/fragua/.github/actions/setup-fragua@b0832c5786e648168102ffaed0626a5494a50c25 # v0.13.0
         with:
           # The SHA pins the ACTION; this pins the BINARY. Without it the action
           # defaults to `version: latest` and resolves the newest release at run
           # time, so the "reproducible engine" above floats with every release.
-          version: v0.12.0
+          version: v0.13.0
 
       # `fragua ci` strips secret-named env (anything ending _TOKEN / _KEY / …) from
       # tool subprocesses, which removes GH_TOKEN from the `gh pr diff/view/review`
