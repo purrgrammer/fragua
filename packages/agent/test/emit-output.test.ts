@@ -254,6 +254,42 @@ describe("emit_output tool synthesis", () => {
     }
   });
 
+  test("a turn the provider killed gets no corrective re-prompt", async () => {
+    // The reminder is persisted on the node's thread; sent after a 429 it would
+    // tell the resumed dispatch to emit immediately and abandon its work.
+    const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-dead-turn-"));
+    try {
+      const prompts: string[] = [];
+      const { outcome } = await runWithOutputs({
+        scratch,
+        registry: coreRegistry(),
+        attrs: { outputs: PR_OUTPUTS_DECL },
+        responses: [
+          fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 rate limited" }),
+          // would only be consumed by the reminder turn
+          fauxAssistantMessage([fauxToolCall("emit_output", { pr_number: "5", loc: 9 }, { id: "tc1" })], {
+            stopReason: "toolUse",
+          }),
+        ],
+        onContext: (ctx) => {
+          const last = ctx.messages[ctx.messages.length - 1];
+          if (last?.role === "user") {
+            const text = Array.isArray(last.content)
+              ? last.content.map((b) => (b.type === "text" ? b.text : "")).join("")
+              : String(last.content);
+            prompts.push(text);
+          }
+        },
+      });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).not.toContain("emit_output");
+      expect(outcome.status).toBe("fail");
+      expect(outcome.failure_reason ?? "").not.toContain("emit_output");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   test("a persistent skip still fails (re-prompt is bounded to one retry)", async () => {
     const scratch = await mkdtemp(join(tmpdir(), "fragua-emit-missing-"));
     try {
