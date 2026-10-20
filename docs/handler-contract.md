@@ -55,6 +55,14 @@ Per-run shell + filesystem environment. Set by the executor when a `WorktreeProv
 
 Cumulative cost / tokens against configured ceilings, computed by the executor from `run_state.metrics` + the active graph + node attrs at dispatch time. Backends pass it through to surface "X of Y used" on `llm.start.budget`. Undefined when no ceiling is configured for this run.
 
+### `ctx.steering?: string`
+
+Steering text folded in before this node run: operator steers that arrived while the run was queued or paused, plus any pending steer stashed on `routing.internal.pending_steer`. See [`intent-fold.md`](./intent-fold.md) for how it is produced. Mid-flight steers do not come through here; they ride the agent's steering queue.
+
+### `ctx.judge?: JudgeClient`
+
+Pre-wired System One client for `type: judge` steps. Optional like `ctx.env`: absent when no judge provider is configured, and the judge handler then halts with a named error rather than falling back to `fetch`. The `judge` agent tool is offered only when this client is present.
+
 ```typescript
 interface BudgetSnapshotInput {
   cumulative_cost_usd: number;
@@ -286,7 +294,7 @@ This is acceptable under fragua's single-user local-tool threat model (SPEC §5)
 where the operator owns the machine, the credentials, and the reviewed workflow
 library — but do not mistake the worktree or the blocklist for a sandbox.
 
-Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent reads the SKILL.md `<location>` directly via `read` against the system-prompt catalog. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. `judge` (`packages/workspace/src/judge-tool.ts`) exposes the System One primitives — `choice` / `score` / `noul` over agent-gathered evidence, answers with probabilities — and is present in the default set only when the run carries a judge client (`ctx.judge`); the backend strips it otherwise. Its cost lands as `cost.recorded` on the calling node like any llm spend. The tools are deliberately powerful — streaming output,
+Less common operations (`git_read` / `apply_patch`) still go through `bash`; for skills, an agent calls the built-in `skill({ name, arguments? })` tool against the system-prompt catalog; the backend force-includes it regardless of `allowed-tools` / `denied-tools`. `web_fetch` is a distinct registered tool (`packages/workspace/src/web-fetch.ts`) that is **disabled by default** — opt in per node via `allowed-tools: [web_fetch]`; without the explicit opt-in the LLM will not see it. `judge` (`packages/workspace/src/judge-tool.ts`) exposes the System One primitives — `choice` / `score` / `noul` over agent-gathered evidence, answers with probabilities — and is present in the default set only when the run carries a judge client (`ctx.judge`); the backend strips it otherwise. Its cost lands as `cost.recorded` on the calling node like any llm spend. The tools are deliberately powerful — streaming output,
 image content, rich diffs, fuzzy edits, atomic writes, native walks —
 so an agent never has to pick between a dozen tools that all do
 variants of the same thing.
