@@ -62,7 +62,7 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 | **R2** | multiple cancels | first-seq cancel wins for the recorded `reason`; the others drop with `later_input_won` |
 | **R3** | pause + (steer OR human) on a dispatching run | **specific wins, pause defers.** Steer and/or human apply to this turn's handler dispatch; on success the executor commits `fact.run_paused{reason:"operator"}` instead of selecting the next edge. The pause IS effected (just on a different boundary), so it does NOT appear in `dropped` |
 | **R4** | pause-only (no specific intent) on a dispatching run | `shouldPause` this turn — executor commits `fact.run_paused{reason:"operator"}` immediately, skips dispatch |
-| **R5** | N steers (deduplicated within batch) | concat in seq-ascending order with `\n` separators; empty-text steers are a benign no-op (applied, not dropped) |
+| **R5** | N steers (no deduplication — identical texts are both kept) | concat in seq-ascending order with `\n` separators; empty-text steers are a benign no-op (applied, not dropped) |
 | **R6** | multiple `human_input` | last-seq's `input` wins; earlier inputs drop with `later_input_won` |
 | **R7** | multiple `priority_adjusted` | last-seq's `newPriority` wins; earlier drop with `later_input_won` |
 
