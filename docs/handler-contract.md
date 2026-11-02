@@ -148,7 +148,8 @@ return {
 // `"aborted_exit"`, `"occ_exhausted"`, `"timeout_exhausted"`, `"worktree_error"` (provision failure).
 // `"abort_loop"` and `"provider_exhausted"` are executor-only and convert to
 // `fact.run_paused` (not halts). `"max_loops"`, `"goal_gate_unsatisfied"`, and
-// `"max_retries_exceeded"` are handler-constructible but are likewise translated
+// `"max_retries_exceeded"` are handler-constructible (the executor itself no longer
+// constructs `"max_retries_exceeded"` — retry exhaustion pauses directly) but are likewise translated
 // by result-to-facts into `fact.run_paused{reason:"max_loops"|"goal_gate"|"max_retries"}`
 // respectively — they never produce a terminal `fact.run_terminated{status:"errored"}`. A version mismatch is likewise a
 // recoverable `fact.run_paused{reason:"engine_incompatible"}`, not a halt.
