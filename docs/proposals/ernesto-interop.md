@@ -77,9 +77,9 @@ And the divergences that matter:
 
 | Concept | fragua | Ernesto |
 |---|---|---|
-| Terminal facts | three (`fact.run_completed` / `_halted` / `_cancelled`) — **converging to one** | one `fact.run_terminated { status }` — the convergence target ([`fact-taxonomy.md`](fact-taxonomy.md) §3.1) |
+| Terminal facts | one `fact.run_terminated { status }`; the former `fact.run_completed` / `_halted` / `_cancelled` are legacy fold-only types, never emitted | one `fact.run_terminated { status }` — the convergence target ([`fact-taxonomy.md`](fact-taxonomy.md) §3.1) |
 | Streaming facts | `fact.message_appended` (whole messages); deltas are SSE-only, off-log | `fact.assistant_delta` / `tool_call` / `tool_result` / `thinking` / `usage` / `component` on-log |
-| Pause facts | `fact.run_paused { reason }` (auto/operator) + separate `fact.run_paused_human` — **converging to one** | `fact.run_paused_human` + `fact.run_paused_signal` — **converging to one** `fact.run_paused { reason }` ([`fact-taxonomy.md`](fact-taxonomy.md) §3.2) |
+| Pause facts | `fact.run_paused { reason }`, including `reason: "human"` for HITL; the former `fact.run_paused_human` is a legacy fold-only type, never emitted | `fact.run_paused_human` + `fact.run_paused_signal` — **converging to one** `fact.run_paused { reason }` ([`fact-taxonomy.md`](fact-taxonomy.md) §3.2) |
 | Statuses | `queued running paused paused_human paused_auto completed cancelled halted quarantined` | `running paused completed errored aborted` |
 | Cancel spelling | `cancelled` | store says `aborted`; harness layer says `canceled` |
 | Run outputs | none (thread + artifacts; per-step typed outputs in the structured-outputs MVP) | `WorkflowDeclaration.outputs:` — run-level typed output bindings |
