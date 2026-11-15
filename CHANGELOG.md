@@ -11,6 +11,7 @@ guarantee.
 ### Fixed
 
 - **A provider-killed turn no longer poisons the step's resume.** When a 429/5xx or an abort ended an `llm` step's turn, the step sent itself the "call `emit_output` now" reminder, which was saved on the step's thread; after the provider pause the resumed step obeyed it, emitted at once and discarded its work. The reminder is now sent only when the model itself ended a turn without emitting.
+- **OpenRouter calls from an `llm` step with no `thread:` work again.** Such a step's provider session id carried a NUL byte, which is not a legal HTTP header value, so every call failed before it was sent and the run paused `provider_exhausted`. The session id is now escaped to printable ASCII; a `thread:` name with non-Latin characters or a line break is covered too.
 
 ## [0.13.0] — 2026-10-19
 

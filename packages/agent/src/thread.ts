@@ -80,8 +80,18 @@ export function resolveSessionId(params: {
   summary: SummaryLevel | undefined;
 }): string | undefined {
   if (!params.threadId) return undefined;
-  if (params.summary === undefined) return params.threadId;
-  return `${params.threadId}:summary-${params.summary}`;
+  const threadId = headerSafe(params.threadId);
+  if (params.summary === undefined) return threadId;
+  return `${threadId}:summary-${params.summary}`;
+}
+
+/** Providers receive the session id as an HTTP header value (OpenRouter's
+ * `x-session-id`), and a thread id is not one: the synthetic prefix is a NUL
+ * and a YAML `thread:` scalar is arbitrary Unicode. Escaping per UTF-16 code
+ * unit at a fixed width, `%` included, keeps the mapping injective so two
+ * threads never share a cache bucket. */
+function headerSafe(threadId: string): string {
+  return threadId.replace(/[^\x21-\x24\x26-\x7e]/g, (c) => `%${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 export interface SummarySeed {
