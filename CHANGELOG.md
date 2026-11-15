@@ -8,6 +8,8 @@ guarantee.
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-11-15
+
 ### Fixed
 
 - **A provider-killed turn no longer poisons the step's resume.** When a 429/5xx or an abort ended an `llm` step's turn, the step sent itself the "call `emit_output` now" reminder, which was saved on the step's thread; after the provider pause the resumed step obeyed it, emitted at once and discarded its work. The reminder is now sent only when the model itself ended a turn without emitting.
