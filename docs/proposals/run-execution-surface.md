@@ -7,7 +7,7 @@ maturity: partial
 
 # Where a run executes — dirty-tree bases and existing checkouts
 
-> **Status: draft, panel did not converge.** The v1 cut below is what gets built;
+> **Status: in-progress — the v1 cut has landed (see below); the design panel did not converge.** The v1 cut below is what was built;
 > the flag is spelled `--checkout <path>` in the implementation, not `--worktree`.
 >
 > **Landed: deliverable 2 (`--dirty`, §3).** `captureTree`, `fragua run --dirty`,
